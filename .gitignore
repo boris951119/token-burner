@@ -1,0 +1,23 @@
+# 运行产物（不入库）
+projects/
+demo_projects/
+logs/
+data_store.json
+
+# 环境与密钥
+.env
+.venv/
+
+# 依赖（沙箱内本地安装目录）
+.vendor/
+
+# 日志与临时输出
+*.log
+*_out.txt
+git_init_out.txt
+verify_out.txt
+
+# Python 缓存
+__pycache__/
+*.pyc
+.pytest_cache/
