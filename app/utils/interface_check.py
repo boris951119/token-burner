@@ -27,6 +27,8 @@ class InterfaceIssue:
     kind: str      # missing / extra / signature_mismatch / dangling_import / ghost_module
     module: str
     detail: str
+    # 14.2 严重度表：自创接口（extra）/缺失实现（missing）阻断；签名不匹配警告
+    severity: str = "blocking"
 
 
 # public_api 签名形如 "login(user_id, password) -> bool" 或裸名 "session_data"
@@ -114,6 +116,7 @@ def check_implementation(
                     "signature_mismatch",
                     module,
                     f"{name} 签名不一致：契约 {declared_params} vs 代码 {defs[name]}",
+                    severity="warning",  # 14.2：签名不符为警告，不阻断门禁
                 )
             )
 

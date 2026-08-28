@@ -45,11 +45,15 @@ class GitManager:
         self._safe(root, "init")
 
     def commit_stage(self, project_root: Path, stage: str, detail: str) -> None:
-        """阶段性提交：git add -A + git commit -m "[<stage>] <detail>"。"""
+        """阶段性提交：git add -A + git commit -m "[<stage>] <detail>"。
+
+        --allow-empty：无文件变更的阶段（如集成时全部产物已随模块提交）
+        也保留里程碑提交，保障 14 章「三阶段语义可追溯」。
+        """
         root = str(project_root)
         self._safe(root, "add", "-A")
         message = f"[{stage}] {detail}"
-        self._safe(root, "commit", "-m", message)
+        self._safe(root, "commit", "--allow-empty", "-m", message)
 
     # ------------------------------------------------------------------
 

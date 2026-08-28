@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>token-burner · 文档消耗器</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e;
+    --accent: #f0883e; --accent2: #f778ba;
+    --ok: #3fb950; --warn: #d29922; --bad: #f85149;
+    --radius: 10px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg); color: var(--text);
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  header {
+    padding: 12px 20px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 12px; flex-shrink: 0;
+    background: linear-gradient(90deg, rgba(240,136,62,.08), transparent 40%);
+  }
+  header .logo { font-size: 19px; font-weight: 700; }
+  header .logo span { color: var(--accent); }
+  header .tag { font-size: 12px; color: var(--muted); }
+  header .conn { margin-left: auto; font-size: 12px; padding: 4px 10px;
+    border: 1px solid var(--border); border-radius: 999px; }
+  .conn.demo { color: var(--warn); border-color: var(--warn); }
+  .conn.live { color: var(--ok); border-color: var(--ok); }
+
+  /* ===== 主布局：左需求 / 右（上工作台 + 下 API 配置） ===== */
+  main {
+    flex: 1; display: grid; grid-template-columns: 400px 1fr;
+    gap: 14px; padding: 14px 16px 16px; min-height: 0;
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 16px; min-height: 0;
+    display: flex; flex-direction: column;
+  }
+  .card h3 { font-size: 13px; color: var(--muted); margin-bottom: 10px;
+    text-transform: uppercase; letter-spacing: .5px; display: flex; align-items: center; gap: 10px; }
+
+  /* 左栏 */
+  .left textarea {
+    flex: 1; width: 100%; background: var(--bg); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 12px; font-size: 14px; font-family: inherit; resize: none; line-height: 1.7;
+  }
+  .left textarea:focus { outline: none; border-color: var(--accent); }
+  .left-actions { margin-top: 12px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .hint { font-size: 12px; color: var(--muted); line-height: 1.6; }
+
+  /* 右栏 */
+  .right { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+  .viz { flex: 1; }
+  .viz-scroll { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding-right: 4px; }
+  .sub {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; padding: 14px; flex-shrink: 0;
+  }
+  .sub h4 { font-size: 12px; color: var(--muted); margin-bottom: 10px;
+    text-transform: uppercase; letter-spacing: .5px; }
+  .hidden { display: none !important; }
+
+  textarea.mini, input[type=text], select {
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; font-size: 13px; font-family: inherit; width: 100%;
+  }
+  textarea.mini { min-height: 56px; resize: vertical; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .row > * { flex: 1; min-width: 150px; }
+  label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 5px; }
+  button {
+    background: var(--accent); color: #1b1005; border: none; border-radius: 8px;
+    padding: 9px 20px; font-size: 13px; font-weight: 600; cursor: pointer;
+    transition: filter .15s; flex-shrink: 0;
+  }
+  button:hover { filter: brightness(1.1); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+  button.small { padding: 5px 12px; font-size: 12px; }
+  button.danger { background: transparent; color: var(--bad); border: 1px solid var(--bad); }
+
+  /* 评估指标 */
+  .metrics { display: flex; gap: 10px; flex-wrap: wrap; }
+  .metric { flex: 1; min-width: 110px; background: var(--panel);
+    border: 1px solid var(--border); border-radius: 8px; padding: 10px; text-align: center; }
+  .metric .v { font-size: 19px; font-weight: 700; color: var(--accent); }
+  .metric .k { font-size: 11px; color: var(--muted); margin-top: 3px; }
+
+  /* 时间线 */
+  .timeline { position: relative; padding-left: 22px; }
+  .timeline::before { content: ""; position: absolute; left: 6px; top: 6px; bottom: 6px;
+    width: 2px; background: var(--border); }
+  .step { position: relative; padding: 4px 0 12px; }
+  .step::before { content: ""; position: absolute; left: -22px; top: 8px;
+    width: 10px; height: 10px; border-radius: 50%;
+    background: var(--panel); border: 2px solid var(--border); }
+  .step.active::before { border-color: var(--accent); background: var(--accent);
+    box-shadow: 0 0 8px var(--accent); }
+  .step.done::before { border-color: var(--ok); background: var(--ok); }
+  .step .t { font-size: 13px; }
+  .step .d { font-size: 12px; color: var(--muted); margin-top: 2px; white-space: pre-wrap; }
+  .step.done .t { color: var(--muted); }
+
+  /* 模块 */
+  .mods { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+  .mod { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px; }
+  .mod .name { font-weight: 600; margin-bottom: 5px; font-size: 13px; }
+  .badge { display: inline-block; font-size: 10px; padding: 2px 9px;
+    border-radius: 999px; border: 1px solid; }
+  .badge.success { color: var(--ok); border-color: var(--ok); }
+  .badge.awaiting { color: var(--warn); border-color: var(--warn); }
+  .badge.frozen { color: var(--bad); border-color: var(--bad); }
+  .badge.running { color: var(--accent); border-color: var(--accent); }
+  .mod .fix { font-size: 11px; color: var(--muted); margin-top: 6px; }
+
+  /* 看板 */
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; white-space: nowrap; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .bar { height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden;
+    border: 1px solid var(--border); }
+  .bar > div { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); }
+
+  /* 对话 */
+  .chat { max-height: 240px; overflow-y: auto; margin-bottom: 10px; }
+  .msg { padding: 9px 13px; border-radius: 10px; margin-bottom: 7px;
+    font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+  .msg.user { background: rgba(240,136,62,.12); border: 1px solid rgba(240,136,62,.35);
+    margin-left: 50px; }
+  .msg.bot { background: var(--panel); border: 1px solid var(--border); margin-right: 50px; }
+  pre.plain { font-size: 13px; white-space: pre-wrap; line-height: 1.7;
+    font-family: inherit; max-height: 220px; overflow-y: auto; }
+  .spin { display: inline-block; animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* API 配置（右下） */
+  .apiconf { flex-shrink: 0; max-height: 260px; }
+  .apiconf h3 button { margin-left: auto; }
+  .apiconf .tbl-wrap { flex: 1; overflow-y: auto; min-height: 0; }
+  .apiconf td .mono { font-family: Consolas, monospace; font-size: 11px; }
+
+  /* 弹窗 */
+  .overlay {
+    position: fixed; inset: 0; background: rgba(0,0,0,.6);
+    display: flex; align-items: center; justify-content: center; z-index: 100;
+  }
+  .modal {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 20px; width: 420px; max-width: 92vw;
+    box-shadow: 0 12px 40px rgba(0,0,0,.5);
+  }
+  .modal h3 { margin-bottom: 14px; font-size: 15px; color: var(--text); }
+  .modal .field { margin-bottom: 12px; }
+  .modal-actions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px; }
+
+  footer { padding: 8px 20px; border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--muted); text-align: center; flex-shrink: 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">token<span>-</span>burner</div>
+  <div class="tag">文档消耗器 · AI 多智能体项目团队系统 · 规格 v0.3.1</div>
+  <div class="conn demo" id="conn">● 演示模式</div>
+</header>
+
+<main>
+
+  <!-- 左：需求描述 + 点火 -->
+  <section class="card left">
+    <h3>需求描述</h3>
+    <textarea id="requirement" placeholder="例如：做一个双因素认证的用户管理系统，包含用户注册、登录、权限校验…"></textarea>
+    <div class="left-actions">
+      <button id="btn-start">🔥 点火</button>
+      <span class="hint" id="resume-hint" style="display:none;"></span>
+      <button class="ghost small hidden" id="btn-resume">恢复续跑</button>
+    </div>
+  </section>
+
+  <!-- 右 -->
+  <div class="right">
+
+    <!-- 右上：LLM 工作台 -->
+    <section class="card viz">
+      <h3>LLM 工作台</h3>
+      <div class="viz-scroll">
+
+        <!-- 评估 + 组队 -->
+        <div class="sub hidden" id="sec-route">
+          <h4>需求评估（评估主 LLM）</h4>
+          <div class="metrics">
+            <div class="metric"><div class="v" id="m-diff">-</div><div class="k">难度分</div></div>
+            <div class="metric"><div class="v" id="m-level">-</div><div class="k">难度等级</div></div>
+            <div class="metric"><div class="v" id="m-type">-</div><div class="k">任务类型</div></div>
+            <div class="metric"><div class="v" id="m-files">-</div><div class="k">预估文件数</div></div>
+          </div>
+          <p class="hint" id="m-reason" style="margin-top:8px;"></p>
+          <div style="margin-top:12px;">
+            <div class="row">
+              <div><label>主 LLM（评估/方案）</label>
+                <select id="model-main"><option>gpt-4o</option><option>deepseek-chat</option><option>claude-3-5-sonnet</option><option>gemini-1.5-pro</option></select></div>
+              <div><label>开发副 LLM</label>
+                <select id="model-dev"><option>deepseek-chat</option><option>gpt-4o</option><option>claude-3-5-sonnet</option><option>gemini-1.5-pro</option></select></div>
+              <div><label>测试副 LLM</label>
+                <select id="model-test"><option>claude-3-5-sonnet</option><option>gpt-4o</option><option>deepseek-chat</option><option>gemini-1.5-pro</option></select></div>
+            </div>
+            <div class="row" style="margin-top:10px;">
+              <div><label>执行模式</label>
+                <select id="mode">
+                  <option value="safe">安全模式（默认 · 不执行生成代码）</option>
+                  <option value="auto">自动验证模式（真实执行，预算 ×2.5）</option>
+                </select></div>
+              <div style="display:flex; align-items:flex-end;">
+                <button id="btn-confirm">确认组队，开始讨论</button>
+              </div>
+            </div>
+            <p class="hint" id="mode-warn" style="display:none; margin-top:8px;">
+              ⚠ 自动验证模式将在本机真实执行 LLM 生成代码（危险操作预扫描 + 超时熔断），预算按 200,000 × 2.5 计。
+            </p>
+          </div>
+        </div>
+
+        <!-- 执行进度 -->
+        <div class="sub hidden" id="sec-run">
+          <h4>执行进度</h4>
+          <div class="timeline" id="timeline"></div>
+        </div>
+
+        <!-- 模块 -->
+        <div class="sub hidden" id="mod-area">
+          <h4>模块</h4>
+          <div class="mods" id="mods"></div>
+        </div>
+
+        <!-- spec 确认 -->
+        <div class="sub hidden" id="sec-spec">
+          <h4>最终 spec（方案讨论收敛）</h4>
+          <pre class="plain" id="spec-md" style="background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:12px;"></pre>
+          <div style="margin-top:10px; display:flex; gap:8px;">
+            <button id="btn-spec-ok">确认 spec</button>
+            <button class="ghost" id="btn-spec-edit">要求修改（第 <span id="spec-round">1</span>/3 轮）</button>
+          </div>
+        </div>
+
+        <!-- 反馈闭环 -->
+        <div class="sub hidden" id="sec-feedback">
+          <h4>反馈闭环（安全模式）</h4>
+          <div class="chat" id="fb-chat"></div>
+          <textarea class="mini" id="fb-input" placeholder="输入「成功」确认交付 / 粘贴报错日志触发修复 / 输入 exit 手动停止"></textarea>
+          <div style="margin-top:8px;"><button id="btn-fb">提交反馈</button></div>
+        </div>
+
+        <!-- 成本看板 -->
+        <div class="sub hidden" id="sec-cost">
+          <h4>成本看板（session 级）</h4>
+          <div style="display:flex; align-items:center; gap:12px; margin-bottom:12px;">
+            <div style="flex:1;">
+              <div style="display:flex; justify-content:space-between; font-size:12px; margin-bottom:5px;">
+                <span>预算消耗 <b id="c-used">0</b> / <span id="c-budget">200,000</span> token</span>
+                <span id="c-ratio">0%</span>
+              </div>
+              <div class="bar"><div id="c-bar" style="width:0%"></div></div>
+            </div>
+          </div>
+          <table>
+            <thead><tr><th>模型</th><th>环节</th><th style="text-align:right">输入</th><th style="text-align:right">输出</th><th style="text-align:right">合计</th></tr></thead>
+            <tbody id="c-rows"></tbody>
+          </table>
+        </div>
+
+        <!-- 交付汇总 -->
+        <div class="sub hidden" id="sec-done">
+          <h4>交付汇总</h4>
+          <pre class="plain" id="done-md"></pre>
+          <div style="margin-top:12px;"><button class="ghost" id="btn-again">🔥 再烧一个</button></div>
+        </div>
+
+        <div class="hint" id="viz-placeholder">点火后，LLM 团队的评估、讨论、开发与交付过程将在此可视化呈现。</div>
+
+      </div>
+    </section>
+
+    <!-- 右下：API 接口配置 -->
+    <section class="card apiconf">
+      <h3>API 接口配置 <button class="small" id="btn-add-api">＋ 添加</button></h3>
+      <div class="tbl-wrap">
+        <table>
+          <thead><tr><th>名称</th><th>Base URL</th><th>模型</th><th>API Key</th><th style="width:60px;">操作</th></tr></thead>
+          <tbody id="api-rows"></tbody>
+        </table>
+      </div>
+      <p class="hint" style="margin-top:8px;">配置保存在浏览器本地（localStorage）；主 LLM 调用仍经后端环境变量鉴权。</p>
+    </section>
+
+  </div>
+</main>
+
+<!-- 添加 API 弹窗 -->
+<div class="overlay hidden" id="api-modal">
+  <div class="modal">
+    <h3>添加 API 接口</h3>
+    <div class="field"><label>名称 *</label>
+      <input type="text" id="api-name" placeholder="如：DeepSeek / 智谱 / Moonshot"></div>
+    <div class="field"><label>API Key *</label>
+      <input type="text" id="api-key" placeholder="sk-..."></div>
+    <div class="field"><label>Base URL（OpenAI 兼容端点）</label>
+      <input type="text" id="api-base" placeholder="如：https://api.deepseek.com/v1（留空用官方默认）"></div>
+    <div class="field"><label>模型（逗号分隔）</label>
+      <input type="text" id="api-models" placeholder="如：deepseek-chat, deepseek-reasoner"></div>
+    <div class="modal-actions">
+      <button class="ghost" id="btn-api-cancel">取消</button>
+      <button id="btn-api-confirm">确认添加</button>
+    </div>
+  </div>
+</div>
+
+<footer>Set your tokens on fire! — 演示模式为界面原型；python -m app.server 后访问本页即连接真实管线</footer>
+
+<script>
+/* =====================================================================
+ * API 对接层（双模式）
+ *   GET  /api/health / /api/resumable / /api/project/:id/dashboard
+ *   POST /api/route  /api/run  /api/resume  /api/project/:id/feedback
+ *
+ * 模式 A（浏览器）：fetch 同源 HTTP（python -m app.server 调试用）
+ * 模式 B（桌面客户端）：window.pywebview.api.request 进程内桥接
+ *   —— 桌面版不监听任何端口（安全软件拦截未签名 exe 的本地网络，
+ *      回环/监听连接会被丢弃，故 UI ↔ Python 全走 js_api 零 socket）
+ * ===================================================================== */
+// "" = 同源 live 模式（浏览器）；null = 纯演示模式（双击直接打开文件）
+const API_BASE = "";
+let LIVE = API_BASE !== null;
+let currentProject = null;   // live 模式：当前项目 id（反馈/看板用）
+
+/* ---- pywebview 桥（桌面模式）---- */
+let PY_READY = false;
+window.addEventListener("pywebviewready", () => { PY_READY = true; });
+const inDesktop = () => PY_READY && !!(window.pywebview && window.pywebview.api);
+
+async function apiCall(method, path, body) {
+  if (inDesktop()) {
+    const r = await window.pywebview.api.request(
+      method, path, body === undefined ? null : JSON.stringify(body));
+    if (r.status >= 400) throw new Error(`HTTP ${r.status}: ${r.body}`);
+    return r.body === "" || r.body === null ? null : JSON.parse(r.body);
+  }
+  const opts = { method };
+  if (body !== undefined) {
+    opts.headers = { "Content-Type": "application/json" };
+    opts.body = JSON.stringify(body);
+  }
+  const resp = await fetch(API_BASE + path, opts);
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+  return resp.json();
+}
+
+async function api(path, body) { return apiCall("POST", path, body); }
+async function apiGet(path) { return apiCall("GET", path); }
+
+const $ = (id) => document.getElementById(id);
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+/* =====================================================================
+ * API 接口配置（右下面板）：localStorage 持久化 + 弹窗添加
+ * ===================================================================== */
+const LS_KEY = "tb_api_configs";
+const DEFAULT_CONFIGS = [{
+  name: "OpenAI（示例）", key: "", base: "https://api.openai.com/v1",
+  models: ["gpt-4o", "gpt-4o-mini"],
+}];
+
+function loadConfigs() {
+  try {
+    const raw = localStorage.getItem(LS_KEY);
+    if (raw) return JSON.parse(raw);
+  } catch (e) { /* 损坏则回落默认 */ }
+  return JSON.parse(JSON.stringify(DEFAULT_CONFIGS));
+}
+function saveConfigs() { localStorage.setItem(LS_KEY, JSON.stringify(API_CONFIGS)); }
+
+function maskKey(key) {
+  if (!key) return '<span style="color:var(--bad)">未填写</span>';
+  if (key.length <= 8) return key.slice(0, 2) + "****";
+  return key.slice(0, 6) + "****" + key.slice(-4);
+}
+
+function renderConfigs() {
+  $("api-rows").innerHTML = API_CONFIGS.map((c, i) => `
+    <tr>
+      <td><b>${escapeHtml(c.name)}</b></td>
+      <td class="mono">${escapeHtml(c.base || "（官方默认）")}</td>
+      <td class="mono">${escapeHtml((c.models || []).join(", ") || "—")}</td>
+      <td class="mono">${maskKey(c.key)}</td>
+      <td><button class="danger small" data-del="${i}">删除</button></td>
+    </tr>`).join("");
+  $("api-rows").querySelectorAll("[data-del]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      API_CONFIGS.splice(Number(btn.dataset.del), 1);
+      saveConfigs(); renderConfigs();
+    });
+  });
+}
+
+function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c =>
+  ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
+
+let API_CONFIGS = loadConfigs();
+renderConfigs();
+
+/* 弹窗 */
+$("btn-add-api").addEventListener("click", () => {
+  ["api-name", "api-key", "api-base", "api-models"].forEach(id => $(id).value = "");
+  $("api-modal").classList.remove("hidden");
+  $("api-name").focus();
+});
+$("btn-api-cancel").addEventListener("click", () => $("api-modal").classList.add("hidden"));
+$("api-modal").addEventListener("click", (e) => {
+  if (e.target === $("api-modal")) $("api-modal").classList.add("hidden");
+});
+$("btn-api-confirm").addEventListener("click", () => {
+  const name = $("api-name").value.trim();
+  const key = $("api-key").value.trim();
+  if (!name) { $("api-name").focus(); return; }
+  if (!key) { $("api-key").focus(); return; }
+  API_CONFIGS.push({
+    name, key,
+    base: $("api-base").value.trim(),
+    models: $("api-models").value.split(/[,,]/).map(s => s.trim()).filter(Boolean),
+  });
+  saveConfigs(); renderConfigs();
+  $("api-modal").classList.add("hidden");
+});
+
+/* =====================================================================
+ * 演示剧本
+ * ===================================================================== */
+const DEMO = {
+  route: { difficulty_score: 5, difficulty_level: "中", task_type: "编程",
+           estimated_files: 6,
+           reason: "含持久化与排序逻辑，预估 6 个源文件，达到模块化阈值（≥5 或文件≥6）" },
+  stages: [
+    ["需求评估", "三分类路由：编程任务 · 难度 5（中）· 触发组队流程"],
+    ["方案讨论", "PM 初始方案 → 双评审（可行性 9 / 安全 8 / 可维护 9）→ 修订 → 收敛"],
+    ["模块拆分", "拆分 2 模块：storage（JSON 持久化）→ core（增删改查/排序）"],
+    ["接口契约", "interfaces.json 落盘：storage.exports=[load,save]"],
+    ["模块开发", "storage → core 依拓扑序开发（写码 → 测试 → 静态验证 → 接口门禁）"],
+    ["_shared 回归", "无公共层变更，零回归开销"],
+    ["交付", "交付物汇总 + 成本看板落盘 logs/cost_report.json"],
+  ],
+  spec: `# 待办事项 CLI 应用 — 最终 spec v1
+
+## 功能
+- 增删改查：add / list / done / delete 子命令
+- 本地 JSON 持久化（~/.todos.json）
+- 按优先级排序展示（高/中/低）
+
+## 模块
+1. storage — JSON 读写与数据校验
+2. core — 命令解析、业务逻辑、排序输出
+
+## 验收
+- pytest 全绿；python -m core.core add "买菜" --priority 高 可运行`,
+  modules: [
+    { name: "storage", status: "success", fix: "修复 0 次 · 测试 5 项通过" },
+    { name: "core",   status: "awaiting", fix: "修复 1 次（JSON 路径边界）· 等待用户反馈" },
+  ],
+  cost: {
+    budget: 200000, used: 46352,
+    rows: [
+      ["gpt-4o", "评估", 3120, 890], ["gpt-4o", "方案讨论", 18940, 5210],
+      ["deepseek-chat", "拆分接口", 4210, 1120], ["deepseek-chat", "开发", 8340, 5760],
+      ["claude-3-5-sonnet", "测试", 3980, 2140], ["deepseek-chat", "开发", 3120, 980],
+    ],
+  },
+  deliver: `项目已交付：projects/todo-cli-20260828/
+
+模块状态
+  ✅ storage — 完成（测试 5/5 通过）
+  ⏳ core — 待用户反馈（安全模式：请本地运行后反馈）
+
+运行方式
+  cd code && python -m core.core add "买菜" --priority 高
+  python -m pytest tests/ -v
+
+文档
+  modules/storage.md · modules/core.md · changelog/fix_history.md
+  logs/cost_report.json（成本审计）`,
+};
+
+/* =====================================================================
+ * 工具与连接
+ * ===================================================================== */
+function show(id) { $(id).classList.remove("hidden"); $("viz-placeholder").classList.add("hidden"); }
+function hide(id) { $(id).classList.add("hidden"); }
+function badge(status) {
+  const map = { success: ["success", "完成"], awaiting: ["awaiting", "待反馈"],
+                frozen: ["frozen", "冻结"], running: ["running", "开发中"] };
+  const [cls, text] = map[status] || ["running", status];
+  return `<span class="badge ${cls}">${text}</span>`;
+}
+
+(async function detect() {
+  if (API_BASE === null) return;
+  // 桌面模式：pywebview 注入完成前 window.pywebview 不存在——
+  // 无条件短暂等待（最多 2s；浏览器模式仅多 2s 探活延迟）
+  for (let i = 0; i < 40 && !inDesktop(); i++) await sleep(50);
+  try {
+    if (inDesktop()) {
+      const el = $("conn"); el.textContent = "● 桌面模式（已连接）"; el.className = "conn live";
+      const list = await apiGet("/api/resumable");
+      if (list.length) {
+        $("resume-hint").style.display = "inline";
+        $("resume-hint").textContent =
+          `检测到可恢复项目：${list[0].project_id}${list[0].interrupted ? " · 已中断" : ""}`;
+        $("btn-resume").classList.remove("hidden");
+      }
+      return;
+    }
+    const r = await fetch(API_BASE + "/api/health");
+    if (r.ok) {
+      const el = $("conn"); el.textContent = "● 已连接"; el.className = "conn live";
+      const list = await apiGet("/api/resumable");
+      if (list.length) {
+        $("resume-hint").style.display = "inline";
+        $("resume-hint").textContent =
+          `检测到可恢复项目：${list[0].project_id}${list[0].interrupted ? " · 已中断" : ""}`;
+        $("btn-resume").classList.remove("hidden");
+      }
+      return;
+    }
+    throw new Error("health 非 200");
+  } catch (e) {
+    LIVE = false;
+    $("conn").textContent = "● 演示模式（未连接后端）";
+  }
+  if (!LIVE && Math.random() < 0.5) {
+    $("resume-hint").style.display = "inline";
+    $("resume-hint").textContent = "检测到中断项目：todo-cli-20260828（2 模块，auth 未完成）";
+    $("btn-resume").classList.remove("hidden");
+  }
+})();
+
+/* =====================================================================
+ * 流程
+ * ===================================================================== */
+let specRound = 1;
+
+$("btn-start").addEventListener("click", async () => {
+  const req = $("requirement").value.trim();
+  if (!req) { $("requirement").focus(); return; }
+  $("btn-start").disabled = true;
+
+  if (LIVE) {
+    try {
+      const r = await api("/api/route", { requirement: req });
+      window._route = r;
+      fillRoute(r);
+      show("sec-route");
+    } catch (e) { alert("评估失败：" + e.message); }
+    $("btn-start").disabled = false;
+    return;
+  }
+
+  await sleep(600);
+  fillRoute(DEMO.route);
+  show("sec-route");
+  $("btn-start").disabled = false;
+});
+
+function fillRoute(r) {
+  $("m-diff").textContent = r.difficulty_score;
+  $("m-level").textContent = r.difficulty_level;
+  $("m-type").textContent = r.task_type;
+  $("m-files").textContent = r.estimated_files;
+  $("m-reason").textContent = "评估理由：" + r.reason;
+}
+
+$("mode").addEventListener("change", (e) => {
+  $("mode-warn").style.display = e.target.value === "auto" ? "block" : "none";
+});
+
+$("btn-confirm").addEventListener("click", async () => {
+  const m = [$("model-main").value, $("model-dev").value, $("model-test").value];
+  if (new Set(m).size < 3) {
+    $("m-reason").innerHTML = '<span style="color:var(--bad)">⚠ 三个模型必须互异（规格 3.3），请调整选择</span>';
+    return;
+  }
+  hide("sec-route");
+
+  if (LIVE) {
+    const btn = $("btn-confirm");
+    btn.disabled = true; btn.textContent = "⏳ 执行中（真实任务可能数分钟）…";
+    try {
+      const data = await api("/api/run", {
+        requirement: $("requirement").value.trim(),
+        models: m,
+        mode: $("mode").value,
+        spec_confirm: "确认",
+        confirmed_as_coding: true,
+        route: window._route || null,
+      });
+      renderLiveResult(data);
+    } catch (e) { alert("执行失败：" + e.message); }
+    btn.disabled = false; btn.textContent = "确认组队，开始讨论";
+    return;
+  }
+
+  show("sec-run");
+  await runStages();
+  $("spec-md").textContent = DEMO.spec;
+  show("sec-spec");
+});
+
+async function runStages() {
+  const tl = $("timeline");
+  tl.innerHTML = "";
+  for (const [title, desc] of DEMO.stages) {
+    const el = document.createElement("div");
+    el.className = "step active";
+    el.innerHTML = `<div class="t">${title} <span class="spin">◌</span></div><div class="d">${desc}</div>`;
+    tl.appendChild(el);
+    await sleep(700 + Math.random() * 500);
+    el.className = "step done";
+    el.querySelector(".t").textContent = title;
+    if (title === "模块开发") { renderModules(); show("mod-area"); }
+  }
+}
+
+function renderModules() {
+  $("mods").innerHTML = DEMO.modules.map(m => `
+    <div class="mod">
+      <div class="name">${m.name} ${badge(m.status)}</div>
+      <div class="fix">${m.fix}</div>
+    </div>`).join("");
+}
+
+/* live 结果渲染 */
+function renderLiveResult(data) {
+  currentProject = data.project_id || null;
+  $("timeline").innerHTML = `<div class="step done"><div class="t">执行完成</div>
+    <div class="d">kind: ${data.kind}${(data.frozen_modules || []).length ? " · 冻结模块: " + data.frozen_modules.join(", ") : ""}</div></div>`;
+  show("sec-run");
+  $("done-md").textContent = data.deliverable_summary || data.answer || "（无汇总）";
+  show("sec-done");
+  if (data.dashboard) {
+    $("c-budget").textContent = data.dashboard.budget_tokens.toLocaleString();
+    $("c-used").textContent = data.dashboard.total_tokens.toLocaleString();
+    const ratio = Math.round(data.dashboard.total_tokens / data.dashboard.budget_tokens * 100);
+    $("c-ratio").textContent = ratio + "%";
+    $("c-bar").style.width = Math.min(100, ratio) + "%";
+    $("c-rows").innerHTML = Object.entries(data.dashboard.by_model || {}).map(([mo, tok]) =>
+      `<tr><td>${mo}</td><td>—</td><td class="num">—</td><td class="num">—</td><td class="num"><b>${tok.toLocaleString()}</b></td></tr>`).join("");
+    show("sec-cost");
+  }
+  if (data.kind === "team_flow" && currentProject) {
+    show("sec-feedback");
+    $("fb-chat").innerHTML = `<div class="msg bot">任务完成（kind=${data.kind}）。安全模式模块待反馈：
+输入「成功」确认 · 粘贴报错日志触发修复（上限 5 轮）</div>`;
+  }
+}
+
+$("btn-spec-ok").addEventListener("click", () => {
+  hide("sec-spec");
+  finishDelivery();
+});
+
+$("btn-spec-edit").addEventListener("click", () => {
+  if (specRound >= 3) {
+    $("spec-md").textContent += `\n\n（已达 3 轮确认上限，按规格 11.5 强制合并收敛 — 此为最终 spec）`;
+    $("btn-spec-edit").disabled = true;
+    return;
+  }
+  specRound++;
+  $("spec-round").textContent = specRound;
+  $("spec-md").textContent = DEMO.spec.replace("v1", `v${specRound}`) +
+    "\n\n（已按用户反馈修订：输出格式对齐 table 风格）";
+});
+
+function finishDelivery() {
+  show("sec-feedback");
+  $("fb-chat").innerHTML += `<div class="msg bot">交付完成（安全模式）。请本地运行模块并反馈结果：
+输入「成功」确认交付 · 粘贴报错日志触发修复（上限 5 轮）· 输入 exit 手动停止</div>`;
+  renderCost();
+  show("sec-cost");
+}
+
+$("btn-fb").addEventListener("click", async () => {
+  const v = $("fb-input").value.trim();
+  if (!v) return;
+  const chat = $("fb-chat");
+  chat.innerHTML += `<div class="msg user">${escapeHtml(v)}</div>`;
+  $("fb-input").value = "";
+
+  if (LIVE && currentProject) {
+    const btn = $("btn-fb");
+    btn.disabled = true;
+    try {
+      const data = await api(`/api/project/${currentProject}/feedback`, { message: v });
+      chat.innerHTML += `<div class="msg bot">已处理（kind=${data.kind}）。
+${escapeHtml(data.deliverable_summary || "")}</div>`;
+      if (data.kind === "team_flow" && /完成|SUCCESS/.test(data.deliverable_summary || "")) {
+        $("done-md").textContent = data.deliverable_summary;
+      }
+    } catch (e) {
+      chat.innerHTML += `<div class="msg bot">反馈失败：${escapeHtml(e.message)}</div>`;
+    }
+    btn.disabled = false;
+    chat.scrollTop = chat.scrollHeight;
+    return;
+  }
+
+  let reply;
+  if (/^(成功|成功！?|ok|OK)$/.test(v)) {
+    reply = "收到成功确认 — core 模块标记完成，任务闭环。🎉";
+    DEMO.modules[1].status = "success";
+    DEMO.modules[1].fix = "用户确认成功 · 交付完成";
+    renderModules();
+    setTimeout(() => {
+      $("done-md").textContent = DEMO.deliver.replace("⏳ core — 待用户反馈（安全模式：请本地运行后反馈）", "✅ core — 完成（用户确认）");
+      show("sec-done");
+    }, 400);
+  } else if (/^exit$/i.test(v)) {
+    reply = "手动停止 — 模块保持待反馈状态，可随时恢复（sessions/pipeline_state.json 已落盘）。";
+  } else {
+    reply = "检测到报错反馈 → 进入修复循环（第 2/5 轮）…\n（演示模式不真实调用；实际实现为 POST /api/run 携带 feedback）";
+  }
+  chat.innerHTML += `<div class="msg bot">${escapeHtml(reply)}</div>`;
+  chat.scrollTop = chat.scrollHeight;
+});
+
+function renderCost() {
+  const c = DEMO.cost;
+  $("c-budget").textContent = c.budget.toLocaleString();
+  $("c-used").textContent = c.used.toLocaleString();
+  const ratio = Math.round(c.used / c.budget * 100);
+  $("c-ratio").textContent = ratio + "%";
+  $("c-bar").style.width = Math.min(100, ratio) + "%";
+  $("c-rows").innerHTML = c.rows.map(([m, s, i, o]) => `
+    <tr><td>${m}</td><td>${s}</td><td class="num">${i.toLocaleString()}</td>
+    <td class="num">${o.toLocaleString()}</td><td class="num"><b>${(i + o).toLocaleString()}</b></td></tr>`).join("");
+}
+
+$("btn-again").addEventListener("click", () => {
+  ["sec-route", "sec-run", "mod-area", "sec-spec", "sec-feedback", "sec-cost", "sec-done"].forEach(hide);
+  $("timeline").innerHTML = "";
+  $("fb-chat").innerHTML = "";
+  $("viz-placeholder").classList.remove("hidden");
+  $("requirement").focus();
+});
+
+/* 中断恢复 */
+$("btn-resume").addEventListener("click", async () => {
+  if (!LIVE) {
+    alert("恢复续跑：已完成模块自动跳过（POST /api/resume）。\n演示模式下此入口仅展示交互形态。");
+    return;
+  }
+  try {
+    const list = await apiGet("/api/resumable");
+    if (!list.length) { alert("无可恢复项目"); return; }
+    const data = await api("/api/resume", { project_id: list[0].project_id });
+    renderLiveResult(data);
+  } catch (e) { alert("恢复失败：" + e.message); }
+});
+</script>
+</body>
+</html>

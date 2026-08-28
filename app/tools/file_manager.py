@@ -22,6 +22,18 @@ _TIMESTAMP_FORMAT = "%Y%m%d_%H%M%S"
 # 合法模块名：字母数字下划线连字符（禁止路径分隔符与穿越符）
 _SAFE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_\-]+$")
 
+# 交付物可运行性基础设施（产品审计问题 1）：
+# pytest 从项目根目录运行时经 conftest 把 code/ 插入 sys.path，
+# 使 tests/<module>/ 下的 `from <module> import <符号>` 可解析。
+_CONFTEST_CONTENT = '''"""pytest 路径引导：把 code/ 加入 sys.path，使测试可导入项目模块。"""
+import sys
+from pathlib import Path
+
+_CODE_DIR = Path(__file__).resolve().parent / "code"
+if _CODE_DIR.is_dir() and str(_CODE_DIR) not in sys.path:
+    sys.path.insert(0, str(_CODE_DIR))
+'''
+
 
 class ProjectHandle:
     """已创建项目的运行时句柄。"""
@@ -69,6 +81,8 @@ class FileManager:
         _write_text(root / "code" / "README.md",
                     "# 运行说明\n\n（开发副 LLM 生成代码后补充安装依赖与运行方式）\n")
         _write_text(root / "code" / ".env.example", "# 环境变量模板（默认值留空）\n")
+        # 交付物可运行性：pytest 路径引导（项目根 conftest.py）
+        _write_text(root / "conftest.py", _CONFTEST_CONTENT)
         # 6.3 节：原始需求保存到 sessions/requirements.md
         _write_text(root / "sessions" / "requirements.md", raw_requirement + "\n")
 
@@ -127,6 +141,13 @@ class FileManager:
         path = handle.root / "code" / module / filename
         path.parent.mkdir(parents=True, exist_ok=True)
         _write_text(path, content)
+        # 交付物可运行性：约定文件名（<module>.py）时生成包级重导出 init，
+        # 使 `from <module> import <符号>` 与 python -m <module>.<module> 可用
+        if filename == f"{module}.py":
+            _write_text(
+                path.parent / "__init__.py",
+                f"from {module}.{module} import *  # noqa: F401,F403  包级重导出\n",
+            )
         self._log(handle, "写入代码文件", path.relative_to(handle.root).as_posix())
         return path
 
@@ -141,6 +162,38 @@ class FileManager:
         _write_text(path, content)
         self._log(handle, "写入测试文件", path.relative_to(handle.root).as_posix())
         return path
+
+    def write_shared_file(
+        self, project_id: str, filename: str, content: str
+    ) -> Path:
+        """写入公共层文件 code/_shared/<filename>（12.7：公共依赖集中归口）。
+
+        内容相同则不重写（mtime 稳定，变更检测以内容为准）。
+        """
+        handle = self._require_project(project_id)
+        self._check_filename(filename)
+        path = handle.root / "code" / "_shared" / filename
+        if not (path.is_file() and path.read_text(encoding="utf-8") == content):
+            _write_text(path, content)
+        # 交付物可运行性：_shared 包标记（from _shared.<file> import <符号>）
+        _write_text(path.parent / "__init__.py", "")
+        self._log(handle, "写入公共层文件", path.relative_to(handle.root).as_posix())
+        return path
+
+    def shared_signature(self, project_id: str) -> str:
+        """_shared/ 目录内容签名（14.4 变更检测基线，确定性 hash）。"""
+        import hashlib
+
+        handle = self._require_project(project_id)
+        shared_dir = handle.root / "code" / "_shared"
+        digest = hashlib.sha256()
+        if shared_dir.is_dir():
+            for py in sorted(shared_dir.rglob("*")):
+                if py.is_file():
+                    digest.update(py.relative_to(shared_dir).as_posix().encode("utf-8"))
+                    digest.update(py.read_bytes())
+                    digest.update(b"\x00")
+        return digest.hexdigest()
 
     def append_fix_history(self, project_id: str, module: str, entry: str) -> Path:
         handle = self._require_project(project_id)
