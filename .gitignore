@@ -29,6 +29,9 @@ tree_debug.txt
 git_init_out.txt
 verify_out.txt
 
+# 推送断点续传缓存
+api_blob_cache.json
+
 # Python 缓存
 __pycache__/
 *.pyc
