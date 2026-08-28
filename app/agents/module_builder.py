@@ -34,6 +34,21 @@ class SplitError(ValueError):
     """spec 拆分失败（校验不过 / 解析失败需用户介入）。"""
 
 
+def should_modularize(
+    difficulty_score: int, estimated_files: int, settings: Settings
+) -> bool:
+    """12.2 模块化启用条件（程序确定性阈值判定）。
+
+    难度 ≥ modular_difficulty_threshold（默认 5）或
+    预估文件数 ≥ modular_file_count_threshold（默认 6）→ 启用拆分；
+    否则单份 spec 直出（难度/文件数由大模型评估，阈值判定归程序）。
+    """
+    return (
+        difficulty_score >= settings.modular_difficulty_threshold
+        or estimated_files >= settings.modular_file_count_threshold
+    )
+
+
 @dataclass
 class ModulePlan:
     """单个模块的拆分结果（3.5 节）。"""
@@ -204,6 +219,30 @@ class ModuleBuilder:
         return ordered
 
     # ------------------------------------------------------------------
+
+    def single_module_plan(
+        self, spec_md: str, project_id: str | None = None
+    ) -> ModulePlan:
+        """12.2 非模块化路径：单份 spec 直出为单一模块（跳过拆分与接口契约）。
+
+        模块名固定 main（确定性程序决策，无 LLM 调用）；spec 全文作为
+        职责传入开发循环，modules/main.md 落盘以维持目录结构一致。
+        """
+        plan = ModulePlan(
+            name="main",
+            responsibility=spec_md,
+            dependencies=[],
+            priority=1,
+        )
+        if project_id:
+            self._persist_module_plans(project_id, [plan])
+            # 单模块无接口契约：移除项目脚手架预生成的空 interfaces.json
+            handle = self.file_manager.get_project(project_id)
+            if handle is not None:
+                iface_path = handle.root / "interfaces.json"
+                if iface_path.exists():
+                    iface_path.unlink()
+        return plan
 
     def _persist_module_plans(self, project_id: str, plans: list[ModulePlan]) -> None:
         handle = self.file_manager.get_project(project_id)

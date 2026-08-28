@@ -78,6 +78,8 @@ class LoopDetector:
         # 论点指纹 → {count: 重复次数, vec: 向量缓存}
         self._history: dict[str, dict] = {}
         self._frozen = False
+        # 11.0：省 token 模式（预算 ≥90%）→ 跳过第二道 embedding 比对
+        self.throttling: bool = False
 
     # ------------------------------------------------------------------
 
@@ -97,7 +99,7 @@ class LoopDetector:
 
         counts: dict[str, int] = {}
         for argument in self._split_arguments(message):
-            fingerprint, repeated = self._match_history(argument)
+            fingerprint, repeated, vec = self._match_history(argument)
             if repeated is not None:
                 self._history[fingerprint]["count"] += 1
                 counts[fingerprint] = self._history[fingerprint]["count"]
@@ -113,11 +115,11 @@ class LoopDetector:
                         repeat_counts=counts,
                     )
             else:
-                # 新论点入库（缓存向量，11.3 缓存与增量）
+                # 新论点入库（缓存向量，11.3 缓存与增量；比对时已算出的向量直接复用）
                 self._history[fingerprint] = {
                     "count": 0,
                     "text": argument,
-                    "vec": self._embed(argument),
+                    "vec": vec if vec is not None else self._embed(argument),
                 }
         return LoopVerdict(frozen=False, repeat_counts=counts)
 
@@ -138,12 +140,12 @@ class LoopDetector:
         return [a for a in (p.strip("：: ,，") for p in raw)
                 if len(a) >= _MIN_ARGUMENT_CHARS and not _NOISE.match(a)]
 
-    def _match_history(self, argument: str) -> tuple[str, str | None]:
+    def _match_history(self, argument: str) -> tuple[str, str | None, list[float] | None]:
         """比对历史论点库。
 
         Returns:
-            (指纹, 命中的历史论点指纹或 None)。
-            未命中时指纹为该论点自身键。
+            (指纹, 命中的历史论点指纹或 None, 本轮计算的向量或 None)。
+            未命中时指纹为该论点自身键；向量供入库复用（11.3 缓存）。
         """
         tokens = _tokenize(argument)
         # 第一道：Jaccard 字面重复（先廉）
@@ -152,20 +154,21 @@ class LoopDetector:
             if tokens and historical:
                 overlap = len(tokens & historical) / len(tokens | historical)
                 if overlap > self.settings.jaccard_threshold:
-                    return fp, fp
+                    return fp, fp, None
 
-        # 第二道：embedding 语义重复（后贵，仅注入时启用）
-        if self._embedder is not None:
+        # 第二道：embedding 语义重复（后贵，仅注入且未节流时启用）
+        if self._embedder is not None and not self.throttling:
             vec = self._embed(argument)
             for fp, record in self._history.items():
                 cached = record["vec"]
                 if cached is not None and _cosine(vec, cached) > self.settings.similarity_threshold:
-                    return fp, fp
+                    return fp, fp, None
+            return argument, None, vec  # 向量回传入库复用（避免二次 embed）
 
-        return argument, None
+        return argument, None, None
 
     def _embed(self, text: str) -> list[float] | None:
-        if self._embedder is None:
+        if self._embedder is None or self.throttling:
             return None
         return self._embedder.embed(text)
 

@@ -22,14 +22,21 @@ from app.utils.model_client import LLMResponse
 
 
 class ScriptedLLM:
-    """按序返回内容的多面手桩：记录调用（model, 首句类别）。"""
+    """按序返回内容的多面手桩：记录调用（model, 首句类别）。
+
+    与 ModelClient 对齐：支持 budget_guard 挂接（11.0 总闸）——
+    调用前拦截超限、调用后累计用量。
+    """
 
     def __init__(self, scripts: list[str]):
         self.scripts = list(scripts)
         self.calls: list[dict] = []
         self.call_log: list[dict] = []  # 与 ModelClient 对齐（8.5 仪表盘数据源）
+        self.budget_guard = None        # 与 ModelClient 对齐（11.0 总闸）
 
     def chat(self, model, messages, json_mode=False):
+        if self.budget_guard is not None:
+            self.budget_guard.ensure_allowed()
         self.calls.append({"model": model, "json_mode": json_mode, "role": messages[0]["content"][:12]})
         content = self.scripts.pop(0) if self.scripts else "默认"
         self.call_log.append(
@@ -37,7 +44,10 @@ class ScriptedLLM:
              "output_tokens": 5, "content_chars": len(content),
              "system_hint": messages[0]["content"] if messages else ""}
         )
-        return LLMResponse(model=model, content=content, input_tokens=10, output_tokens=5)
+        response = LLMResponse(model=model, content=content, input_tokens=10, output_tokens=5)
+        if self.budget_guard is not None:
+            self.budget_guard.record(response.total_tokens)
+        return response
 
     @property
     def remaining(self) -> int:
@@ -48,7 +58,7 @@ class FakeExecutor:
     def __init__(self, statuses: list[str]):
         self.statuses = list(statuses)
 
-    def run(self, code, tests, timeout, expected_output=""):
+    def run(self, code, tests, timeout, expected_output="", module=""):
         from app.execution.executor import ExecutionResult, ExecutionStatus
         status = self.statuses.pop(0) if self.statuses else "SUCCESS"
         return ExecutionResult(status=ExecutionStatus(status))

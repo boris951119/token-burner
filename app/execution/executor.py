@@ -52,6 +52,7 @@ class Executor(ABC):
         tests: str,
         timeout: int,
         expected_output: str = "",
+        module: str = "",
     ) -> ExecutionResult:
         """执行（或提示执行）给定代码与测试。
 
@@ -60,6 +61,8 @@ class Executor(ABC):
             tests: 可独立运行的测试文件内容（可为空）。
             timeout: 超时秒数（安全模式不实际使用，保持接口一致）。
             expected_output: 预期输出（安全模式下附于运行指令，降低手动验证成本）。
+            module: 模块名（LocalExecutor 用于命名文件与依赖解析；
+                SafeExecutor 忽略，接口向后兼容）。
 
         Returns:
             统一的 ExecutionResult。

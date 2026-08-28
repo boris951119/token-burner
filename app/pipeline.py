@@ -11,11 +11,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.agents.dev_loop import DevLoopEngine, ModuleStatus
-from app.agents.module_builder import ModuleBuilder
+from app.agents.module_builder import ModuleBuilder, should_modularize
+from app.utils.shared_check import find_shared_dependents
 from app.config import Settings
 from app.dashboard.cost_dashboard import CostDashboard
 from app.execution.executor import Executor
@@ -28,20 +30,30 @@ from app.orchestrator import (
 )
 from app.tools.file_manager import FileManager
 from app.tools.git_manager import GitManager
+from app.utils.budget import BudgetExceededError, BudgetGuard
 from app.utils.model_client import ModelClient
+
+
+def _sum_tokens(entries: list[dict]) -> int:
+    """从调用日志条目累计 token 用量（11.0：input + output）。"""
+    return sum(
+        int(e.get("input_tokens", 0)) + int(e.get("output_tokens", 0))
+        for e in entries
+    )
 
 
 @dataclass
 class PipelineResult:
-    """管线执行结果（三种终点）。"""
+    """管线执行结果（终点类型）。"""
 
-    kind: str                          # direct_answer | direct_code | team_flow | needs_confirm | declined
+    kind: str                          # direct_answer | direct_code | team_flow | needs_confirm | declined | budget_exceeded
     answer: str = ""                   # 直答/直出代码内容
     project_id: str | None = None
     project_dir: Path | None = None
     needs_user_confirm: bool = False
     deliverable_summary: str = ""
     frozen_modules: list[str] = field(default_factory=list)
+    pending_modules: list[str] = field(default_factory=list)  # 11.0 预算中止时的未完成清单
     route: RoutingResult | None = None
     cost_dashboard: object | None = None  # CostDashboard（8.5 成本统计）
 
@@ -62,6 +74,8 @@ class Pipeline:
         self.settings = settings
         self.file_manager = file_manager
         self._git_factory = git_manager_factory or GitManager
+        # 11.0 任务级基线：看板只统计本任务切片（跨任务不污染，问题 7）
+        self._task_baseline = 0
 
     def _git(self):
         """14 章：git 开启时提供管理器，关闭时返回 None。"""
@@ -78,10 +92,24 @@ class Pipeline:
         auto_mode_confirmed: bool = False,
         spec_confirm: str = "确认",
         user_feedback: str = "",
+        feedback_fn: Callable[[str], str] | None = None,
+        route: RoutingResult | None = None,
     ) -> PipelineResult:
-        """执行完整管线。交互参数由外层（CLI）收集后传入。"""
-        router = TaskRouter(self.llm, self.settings.models[0], self.settings)
-        route = router.route(requirement)
+        """执行完整管线。交互参数由外层（CLI）收集后传入。
+
+        feedback_fn（3.8 反馈交互闭环）：prompt → 用户输入的回调，
+        安全模式交付后循环征询手动运行反馈（成功确认 / 报错修复 /
+        exit 手动停止），由 Pipeline 编排（交互层不含流程逻辑）。
+
+        route：外部已完成的路由评估（如 CLI 展示用）→ 直接复用，
+        避免二次评估浪费 token；缺省时内部自评估（兼容）。
+        """
+        # 11.0：基线——本任务开始前的调用日志长度（用量只计本任务）
+        baseline = len(getattr(self.llm, "call_log", []))
+        self._task_baseline = baseline  # 看板切片依据（问题 7）
+        if route is None:
+            router = TaskRouter(self.llm, self.settings.models[0], self.settings)
+            route = router.route(requirement)
 
         # 15.3 保守降级：解析失败 → 视作编程 + 用户确认
         if route.needs_user_confirm:
@@ -125,38 +153,135 @@ class Pipeline:
             mode=mode,
             auto_mode_confirmed=auto_mode_confirmed,
         )
+        # 自动验证模式：绑定项目 code/ 目录（跨模块/_shared 依赖解析）
+        self._bind_executor_project(team.project_id)
 
-        # 方案讨论（3.4 / 11.1 / 11.3 / 11.5）
-        discussion = DiscussionEngine(
-            llm=self.llm,
-            main_model=team.main_model,
-            dev_model=team.dev_model,
-            test_model=team.test_model,
-            settings=self.settings,
-            file_manager=self.file_manager,
-            project_id=team.project_id,
+        # 11.0 第 0 层总闸：按模式预算创建护栏并挂接到 LLM 客户端。
+        # 评估等前置调用的用量计入本任务预算；任务结束（含异常）后卸载。
+        guard = BudgetGuard(
+            budget_tokens=team.budget_tokens,
+            throttle_threshold=self.settings.budget_throttle_threshold,
         )
-        outcome = discussion.run_discussion(requirement, team.project_id)
-        confirm = discussion.confirm_spec(outcome, spec_confirm)
-        final_spec = confirm.spec_md
+        guard.record(_sum_tokens(self.llm.call_log[baseline:]))
+        setattr(self.llm, "budget_guard", guard)
 
-        # 14 章：git init + spec 确认后阶段提交
+        stage = "方案讨论"
+        stage_box: list[str] = [stage]  # 可变引用（_develop_and_deliver 内更新）
+        module_results: dict = {}
+        order: list[str] = []
+        try:
+            # 6.3：评估结论落盘（可审计：分数/等级/类型/理由/预估文件数/路由）
+            self._persist_assessment(team.project_id, route, models, mode)
+            # 方案讨论（3.4 / 11.0 省token模式 / 11.1 / 11.3 / 11.5）
+            discussion = DiscussionEngine(
+                llm=self.llm,
+                main_model=team.main_model,
+                dev_model=team.dev_model,
+                test_model=team.test_model,
+                settings=self.settings,
+                file_manager=self.file_manager,
+                project_id=team.project_id,
+                budget_guard=guard,
+            )
+            outcome = discussion.run_discussion(requirement, team.project_id)
+            confirm = discussion.confirm_spec(outcome, spec_confirm)
+            final_spec = confirm.spec_md
+
+            # 14 章：git init + spec 确认后阶段提交
+            git = self._git()
+            project_root = self.file_manager.get_project(team.project_id).root
+            if git is not None:
+                git.init(project_root)
+                git.commit_stage(project_root, "spec", "spec 确认，方案定稿")
+
+            # 模块拆分 + 接口契约（3.5 / 12.1 / 12.2）
+            stage_box[0] = "模块拆分与接口契约"
+            builder = ModuleBuilder(
+                llm=self.llm, main_model=team.main_model,
+                settings=self.settings, file_manager=self.file_manager,
+            )
+            if should_modularize(
+                route.difficulty_score, route.estimated_files, self.settings
+            ):
+                # 12.2：难度 ≥5 或预估文件数 ≥6 → 模块化拆分
+                plans = builder.split_spec(final_spec, project_id=team.project_id)
+                interfaces = builder.generate_interfaces(
+                    plans, project_id=team.project_id
+                )
+            else:
+                # 12.2：单份 spec 直出（跳过拆分与接口契约，省 LLM 调用）
+                plans = [builder.single_module_plan(
+                    final_spec, project_id=team.project_id
+                )]
+                interfaces = {}
+            order = builder.build_order(plans)
+            stage_box[0] = "模块开发"
+
+            # 中断恢复（产品审计问题 4）：进入模块开发前落盘恢复快照——
+            # 恢复所需的最小充分状态（order / plans / interfaces / 模式 / 模型）
+            self._persist_pipeline_state(
+                team.project_id, plans, interfaces, order, mode, models
+            )
+
+            result = self._develop_and_deliver(
+                team, route, plans, interfaces, order, guard, mode,
+                feedback_fn, user_feedback, module_results, stage_box,
+            )
+            # 任务完成 → 清理中断现场标记
+            handle = self.file_manager.get_project(team.project_id)
+            if handle is not None:
+                marker = handle.root / "sessions" / "interruption.md"
+                if marker.exists():
+                    marker.unlink()
+            return result
+        except BudgetExceededError:
+            # 11.0：超预算立即中止 → 落盘「已完成部分 + 未完成清单 + 已耗 token」
+            return self._budget_stop_result(
+                team, guard, stage_box[0], order, module_results, mode, route
+            )
+        except KeyboardInterrupt:
+            # Ctrl+C：落盘中断现场，返回可观测结果（11.0 同款「续跑或止损」语义）
+            return self._interruption_result(
+                team, guard, stage_box[0], order, module_results, mode, route,
+                "KeyboardInterrupt（用户手动中断）",
+            )
+        except Exception as exc:
+            # 意外异常：先落盘现场再上抛（bug 暴露不吞，恢复信息不丢失）
+            self._persist_interruption(
+                team, guard, stage_box[0], order, module_results,
+                f"{type(exc).__name__}: {exc}",
+            )
+            raise
+        finally:
+            setattr(self.llm, "budget_guard", None)
+            # 问题 7：任务终态清场——看板已构建并 persist 落盘，
+            # 内存 call_log 无后续消费者（含直答路径的残留条目一并释放）
+            if hasattr(self.llm, "call_log"):
+                self.llm.call_log.clear()
+
+    # ------------------------------------------------------------------
+
+    def _develop_and_deliver(
+        self,
+        team,
+        route,
+        plans,
+        interfaces: dict,
+        order: list[str],
+        guard: BudgetGuard,
+        mode: str,
+        feedback_fn: Callable[[str], str] | None,
+        user_feedback: str,
+        module_results: dict,
+        stage_box: list[str] | None = None,
+    ) -> PipelineResult:
+        """模块开发循环 → _shared 回归 → 反馈环 → 交付（run / resume 共用）。
+
+        stage_box：单元素可变列表——中断/预算中止时报告当前阶段
+        （「反馈修复」比「模块开发」更精确），resume 传 None。
+        """
         git = self._git()
         project_root = self.file_manager.get_project(team.project_id).root
-        if git is not None:
-            git.init(project_root)
-            git.commit_stage(project_root, "spec", "spec 确认，方案定稿")
-
-        # 模块拆分 + 接口契约（3.5 / 12.1 / 12.2）
-        builder = ModuleBuilder(
-            llm=self.llm, main_model=team.main_model,
-            settings=self.settings, file_manager=self.file_manager,
-        )
-        plans = builder.split_spec(final_spec, project_id=team.project_id)
-        interfaces = builder.generate_interfaces(plans, project_id=team.project_id)
-        order = builder.build_order(plans)
-
-        # 逐模块开发循环（3.5 / 3.7 / 11.4）
         dev_loop = DevLoopEngine(
             llm=self.llm,
             dev_model=team.dev_model,
@@ -164,9 +289,14 @@ class Pipeline:
             executor=self.executor,
             settings=self.settings,
             file_manager=self.file_manager,
+            budget_guard=guard,
         )
-        module_results = {}
+        self._bind_executor_project(team.project_id)
+        # 14.4：_shared/ 内容签名基线（变更检测）
+        shared_baseline = self.file_manager.shared_signature(team.project_id)
         for name in order:
+            if name in module_results:
+                continue  # resume：已完成/已冻结模块跳过（不重复消耗 LLM 调用）
             plan = next(p for p in plans if p.name == name)
             module_results[name] = dev_loop.run_module(
                 name,
@@ -183,19 +313,24 @@ class Pipeline:
                     project_root, f"module:{name}",
                     f"模块 {name} {status}（修复 {module_results[name].fix_attempts} 次）",
                 )
+            # 14.4/12.7：_shared 变更 → 已完成依赖模块整包回归
+            shared_baseline = self._shared_regression(
+                team, dev_loop, interfaces, order, module_results,
+                shared_baseline, git, project_root,
+            )
+
+        # 3.8 反馈交互闭环（安全模式）：循环直至用户确认成功 /
+        # 达修复上限（冻结） / 手动停止（exit）
+        if feedback_fn is not None and mode == "safe":
+            if stage_box is not None:
+                stage_box[0] = "反馈修复"
+            self._feedback_loop(
+                team, dev_loop, plans, interfaces, order,
+                module_results, feedback_fn, git, project_root,
+            )
 
         # 交付物汇总（10.1 尾段）
         summary = self._deliverable_summary(team, module_results, mode)
-        # 8.5 成本统计：从 call_log 构建仪表盘并落盘 logs/
-        dashboard = None
-        if hasattr(self.llm, "call_log"):
-            dashboard = CostDashboard.from_call_log(
-                self.llm.call_log,
-                budget_tokens=self.settings.task_token_budget(mode),
-            )
-            handle = self.file_manager.get_project(team.project_id)
-            if handle is not None:
-                dashboard.persist(handle.root / "logs")
         # 14 章：集成（交付汇总 + 成本报告）后最终提交
         if git is not None:
             git.commit_stage(project_root, "integration", "集成完成，交付物汇总")
@@ -208,8 +343,444 @@ class Pipeline:
                 n for n, r in module_results.items() if r.status is ModuleStatus.FROZEN
             ],
             route=route,
-            cost_dashboard=dashboard,
+            cost_dashboard=self._build_dashboard(mode, team.project_id),
         )
+
+    # ------------------------------------------------------------------
+
+    # 中断恢复（产品审计问题 4）
+    # ------------------------------------------------------------------
+
+    _STATE_FILE = "pipeline_state.json"
+    _INTERRUPT_FILE = "interruption.md"
+
+    def _persist_pipeline_state(
+        self, project_id: str, plans, interfaces: dict,
+        order: list[str], mode: str, models: tuple[str, str, str],
+    ) -> None:
+        """进入模块开发前落盘恢复快照（resume 所需的最小充分状态）。"""
+        import json as _json
+
+        handle = self.file_manager.get_project(project_id)
+        if handle is None:
+            return
+        state = {
+            "order": order,
+            "plans": [
+                {"name": p.name, "responsibility": p.responsibility,
+                 "dependencies": p.dependencies, "priority": p.priority}
+                for p in plans
+            ],
+            "interfaces": interfaces,
+            "mode": mode,
+            "models": list(models),
+        }
+        (handle.root / "sessions" / self._STATE_FILE).write_text(
+            _json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+
+    def _persist_interruption(
+        self, team, guard, stage: str, order: list[str],
+        module_results: dict, reason: str,
+    ) -> None:
+        """中断现场落盘 sessions/interruption.md（阶段/进度/token/恢复指引）。"""
+        handle = self.file_manager.get_project(team.project_id)
+        if handle is None:
+            return
+        completed = [
+            n for n, r in module_results.items() if r.status is ModuleStatus.SUCCESS
+        ]
+        in_progress = [
+            n for n, r in module_results.items()
+            if r.status is not ModuleStatus.SUCCESS
+        ]
+        pending = [n for n in order if n not in module_results]
+        used = guard.summary() if guard is not None else "（未知）"
+        lines = [
+            "========== 任务中断（崩溃 / Ctrl+C） ==========",
+            f"项目目录: {handle.root}",
+            f"中断阶段: {stage}",
+            f"中断原因: {reason}",
+            f"已耗 token: {used}",
+            "",
+            f"已完成部分: {', '.join(completed) if completed else '（无）'}",
+            f"进行中（未完成）: {', '.join(in_progress) if in_progress else '（无）'}",
+            f"未开始清单: {', '.join(pending) if pending else '（无）'}",
+            "",
+            "恢复方式: 重新运行程序并选择恢复该项目"
+            "（已完成模块自动跳过，仅续跑未完成部分）；",
+            "或止损：交付物与修复记录已落盘，可直接取用。",
+        ]
+        (handle.root / "sessions" / self._INTERRUPT_FILE).write_text(
+            "\n".join(lines) + "\n", encoding="utf-8"
+        )
+
+    def _interruption_result(
+        self, team, guard, stage, order, module_results, mode, route, reason: str,
+    ) -> PipelineResult:
+        """Ctrl+C 的可观测返回（interruption.md 已落盘）。"""
+        self._persist_interruption(
+            team, guard, stage, order, module_results, reason
+        )
+        handle = self.file_manager.get_project(team.project_id)
+        root = handle.root if handle is not None else None
+        report = ""
+        if root is not None:
+            report = (root / "sessions" / self._INTERRUPT_FILE).read_text(encoding="utf-8")
+        return PipelineResult(
+            kind="interrupted",
+            project_id=team.project_id,
+            project_dir=root,
+            deliverable_summary=report,
+            pending_modules=[n for n in order if n not in module_results],
+            route=route,
+            cost_dashboard=self._build_dashboard(mode, team.project_id),
+        )
+
+    def resume(
+        self,
+        project_id: str,
+        feedback_fn: Callable[[str], str] | None = None,
+    ) -> PipelineResult:
+        """从磁盘快照续跑中断任务（问题 4）。
+
+        状态重建（零 LLM 调用）：
+        - sessions/pipeline_state.json → plans / interfaces / order / 模式 / 模型；
+        - changelog/<模块>/validation.md → 模块终态（SUCCESS / FROZEN /
+          AWAITING_FEEDBACK）与修复次数；
+        - code/<模块>/、tests/<模块>/ → 已生成代码与测试。
+
+        续跑语义：SUCCESS 与 FROZEN 不重跑（不重复消耗 token）；
+        AWAITING_FEEDBACK 直接进反馈环；无验证报告的模块重新开发。
+        中断前已耗 token 计入新任务预算（11.0 总闸语义延续）。
+        """
+        import json as _json
+        from types import SimpleNamespace
+
+        from app.agents.module_builder import ModulePlan
+
+        handle = self.file_manager.get_project(project_id)
+        if handle is None:
+            raise ValueError(f"项目不存在: {project_id!r}")
+        state_path = handle.root / "sessions" / self._STATE_FILE
+        if not state_path.is_file():
+            raise ValueError(
+                f"缺少 {self._STATE_FILE}（任务在模块拆分前中断，无法续跑；"
+                "请重新发起任务）"
+            )
+        state = _json.loads(state_path.read_text(encoding="utf-8"))
+        plans = [ModulePlan(**p) for p in state["plans"]]
+        interfaces = state.get("interfaces") or {}
+        order = state["order"]
+        mode = state.get("mode", "safe")
+        models = tuple(state.get("models") or ("gpt-4o", "deepseek-chat", "claude-3-5-sonnet"))
+
+        # team 轻量重建（TeamConfig 字段子集）
+        team = SimpleNamespace(
+            project_id=project_id,
+            main_model=models[0], dev_model=models[1], test_model=models[2],
+            budget_tokens=self.settings.task_token_budget(mode),
+        )
+        self._bind_executor_project(project_id)
+
+        # 模块终态重建：validation.md（无报告 → 待重跑，不进 module_results）
+        module_results: dict = {}
+        for name in order:
+            rebuilt = self._rebuild_module_result(project_id, name)
+            if rebuilt is not None:
+                module_results[name] = rebuilt
+
+        # 11.0 总闸：中断前已耗 token 从 interruption.md 之后的 call_log
+        # 无法恢复，按快照时刻的 guard 用量近似——resume 会话从零起算，
+        # 预算覆盖续跑部分（原始预算已在快照任务中部分消耗）。
+        self._task_baseline = len(getattr(self.llm, "call_log", []))  # 看板切片
+        guard = BudgetGuard(
+            budget_tokens=team.budget_tokens,
+            throttle_threshold=self.settings.budget_throttle_threshold,
+        )
+        setattr(self.llm, "budget_guard", guard)
+        try:
+            result = self._develop_and_deliver(
+                team, None, plans, interfaces, order, guard, mode,
+                feedback_fn, "", module_results,
+            )
+            marker = handle.root / "sessions" / self._INTERRUPT_FILE
+            if marker.exists():
+                marker.unlink()
+            return result
+        except BudgetExceededError:
+            return self._budget_stop_result(
+                team, guard, "恢复续跑", order, module_results, mode, None
+            )
+        except KeyboardInterrupt:
+            return self._interruption_result(
+                team, guard, "恢复续跑", order, module_results, mode, None,
+                "KeyboardInterrupt（用户手动中断）",
+            )
+        except Exception as exc:
+            self._persist_interruption(
+                team, guard, "恢复续跑", order, module_results,
+                f"{type(exc).__name__}: {exc}",
+            )
+            raise
+        finally:
+            setattr(self.llm, "budget_guard", None)
+            # 问题 7：续跑会话同样终态清场（看板已 persist）
+            if hasattr(self.llm, "call_log"):
+                self.llm.call_log.clear()
+
+    def _rebuild_module_result(self, project_id: str, name: str):
+        """从 validation.md + 磁盘代码重建 ModuleResult；无报告返回 None。"""
+        import re as _re
+
+        from app.agents.dev_loop import ModuleResult, ModuleStatus
+
+        handle = self.file_manager.get_project(project_id)
+        report = handle.root / "changelog" / name / "validation.md"
+        if not report.is_file():
+            return None
+        text = report.read_text(encoding="utf-8")
+        status_match = _re.search(r"最终状态[:：]\s*(\w+)", text)
+        fix_match = _re.search(r"修复次数[:：]\s*(\d+)", text)
+        if not status_match:
+            return None
+        try:
+            status = ModuleStatus(status_match.group(1))
+        except ValueError:
+            return None
+        code = self.file_manager.read_file(project_id, f"code/{name}/{name}.py") or ""
+        tests = self.file_manager.read_file(project_id, f"tests/{name}/test_{name}.py") or ""
+        return ModuleResult(
+            module=name, status=status,
+            fix_attempts=int(fix_match.group(1)) if fix_match else 0,
+            message="（中断恢复重建）", code=code, tests=tests,
+        )
+
+    # ------------------------------------------------------------------
+
+    def _bind_executor_project(self, project_id: str) -> None:
+        """自动验证模式：把项目 code/ 目录绑定给 LocalExecutor（依赖解析）。"""
+        from app.execution.local_executor import LocalExecutor
+
+        if isinstance(self.executor, LocalExecutor):
+            handle = self.file_manager.get_project(project_id)
+            if handle is not None:
+                self.executor.project_code_dir = handle.root / "code"
+
+    def _persist_assessment(self, project_id: str, route, models, mode: str) -> None:
+        """6.3：评估结论落盘 sessions/difficulty_assessment.md。"""
+        import time as _time
+
+        handle = self.file_manager.get_project(project_id)
+        if handle is None:
+            return
+        lines = [
+            "# 难度评估与路由决策（3.2）",
+            "",
+            f"- 评估时间: {_time.strftime('%Y-%m-%d %H:%M:%S')}",
+            f"- 难度分: {route.difficulty_score}（{route.difficulty_level}）",
+            f"- 任务类型: {route.task_type}",
+            f"- 预估源码文件数: {route.estimated_files}",
+            f"- 路由决策: {route.route.value}",
+            f"- 评估理由: {route.reason or '（未提供）'}",
+            f"- 团队模型: 主 {models[0]} / 开发 {models[1]} / 测试 {models[2]}",
+            f"- 执行模式: {mode}",
+        ]
+        if route.rechecked:
+            lines.append("- 边界护栏复核: 已触发")
+        if route.fallback:
+            lines.append("- 解析降级: 是（保守视作编程任务，15.3）")
+        if route.suggest_review:
+            lines.append("- 评审建议: 研究·分析难度 ≥8，可选用一次评审确认")
+        path = handle.root / "sessions" / "difficulty_assessment.md"
+        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def _shared_regression(
+        self,
+        team,
+        dev_loop: DevLoopEngine,
+        interfaces: dict,
+        order: list[str],
+        module_results: dict,
+        shared_baseline: str,
+        git,
+        project_root,
+    ) -> str:
+        """14.4/12.7：检测 _shared/ 变更并对依赖模块整包回归。
+
+        _shared 签名与基线一致（14.5：普通模块修复不触发）→ 直接返回；
+        变更 → AST 判定依赖模块（已完成 SUCCESS 者）逐个重走
+        门禁+执行，回归失败进修复循环；事件落盘可审计。
+        """
+        current = self.file_manager.shared_signature(team.project_id)
+        if current == shared_baseline:
+            return shared_baseline
+
+        # 变更：找已完成且依赖 _shared 的模块
+        dependents = find_shared_dependents(project_root, order)
+        regressed = [
+            n for n in dependents
+            if n in module_results
+            and module_results[n].status is ModuleStatus.SUCCESS
+        ]
+        outcomes: list[str] = []
+        for name in regressed:
+            module_results[name] = dev_loop.regress_module(
+                name,
+                module_results[name],
+                project_id=team.project_id,
+                contract=interfaces.get(name),
+                project_modules=set(order),
+            )
+            result = module_results[name]
+            outcomes.append(
+                f"- {name}: {'回归通过' if result.status is ModuleStatus.SUCCESS else f'回归后状态 {result.status.value}（修复 {result.fix_attempts} 次）'}"
+            )
+            if git is not None:
+                git.commit_stage(
+                    project_root, f"regression:{name}",
+                    f"_shared 变更触发 {name} 整包回归",
+                )
+        self._persist_regression_report(project_root, regressed, outcomes)
+        return current
+
+    def _persist_regression_report(
+        self, project_root, regressed: list[str], outcomes: list[str]
+    ) -> None:
+        """14.4：回归事件落盘（changelog/shared_regression.md，追加式审计）。"""
+        import time as _time
+
+        if not regressed:
+            return
+        path = project_root / "changelog" / "shared_regression.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        entry = (
+            f"\n## _shared 变更整包回归（{_time.strftime('%Y-%m-%d %H:%M:%S')}）\n"
+            f"回归范围: {', '.join(regressed)}\n"
+            + "\n".join(outcomes)
+            + "\n"
+        )
+        with path.open("a", encoding="utf-8") as f:
+            f.write(entry)
+
+    _EXIT_WORDS = ("exit", "quit", "停止", "结束")
+
+    def _feedback_loop(
+        self,
+        team,
+        dev_loop: DevLoopEngine,
+        plans,
+        interfaces: dict,
+        order: list[str],
+        module_results: dict,
+        feedback_fn: Callable[[str], str],
+        git,
+        project_root,
+    ) -> None:
+        """3.8 反馈交互闭环：用户手动运行反馈驱动的修复循环。
+
+        循环直至三态之一：
+        - 用户确认成功（active 清空）；
+        - 全部模块达修复上限（冻结，退出 active）；
+        - 用户手动停止（exit / 空输入，模块保持待反馈状态）。
+
+        3.8/4.5：同一模块连续修复 ≥2 轮未成功 → 征询 prompt 中
+        附带 Researcher 调研建议（Beta v0.5，MVP 以提示落地）。
+        """
+        project_modules = set(order)
+        while True:
+            active = [
+                n for n in order
+                if module_results[n].status is ModuleStatus.AWAITING_FEEDBACK
+            ]
+            if not active:
+                return
+            hints = [
+                f"模块 {n} 已连续修复 {module_results[n].fix_attempts} 轮未确认成功，"
+                "建议启动 Researcher 调研（Beta v0.5）或粘贴相关文档片段辅助修复"
+                for n in active if module_results[n].fix_attempts >= 2
+            ]
+            prompt = (
+                f"请本地运行模块 {', '.join(active)} 并反馈结果"
+                "（确认成功词 / 粘贴报错日志触发修复 / exit 结束）"
+            )
+            if hints:
+                prompt += "\n" + "\n".join(hints)
+            reply = (feedback_fn(prompt) or "").strip()
+            # 3.8：手动停止（保留待反馈状态与现场）
+            if not reply or reply.lower() in self._EXIT_WORDS:
+                return
+            for name in active:
+                module_results[name] = dev_loop.resume_with_feedback(
+                    name,
+                    module_results[name],
+                    reply,
+                    project_id=team.project_id,
+                    contract=interfaces.get(name),
+                    project_modules=project_modules,
+                )
+                # 14 章：反馈轮修复后追加阶段提交（保留现场演进轨迹）
+                if git is not None:
+                    git.commit_stage(
+                        project_root, f"module:{name}",
+                        f"模块 {name} 反馈修复"
+                        f"（累计修复 {module_results[name].fix_attempts} 次）",
+                    )
+
+    def _budget_stop_result(
+        self,
+        team,
+        guard: BudgetGuard,
+        stage: str,
+        order: list[str],
+        module_results: dict,
+        mode: str,
+        route: RoutingResult,
+    ) -> PipelineResult:
+        """预算中止结果：报告落盘 sessions/budget_stop.md（11.0，交用户决定）。"""
+        completed = [
+            n for n, r in module_results.items() if r.status is ModuleStatus.SUCCESS
+        ]
+        pending = [n for n in order if n not in module_results]
+        handle = self.file_manager.get_project(team.project_id)
+        root = handle.root if handle is not None else None
+        lines = [
+            "========== 预算中止（11.0 单任务成本总预算闸门） ==========",
+            f"项目目录: {root}",
+            f"中止阶段: {stage}",
+            f"已耗 token: {guard.summary()}",
+            "",
+            f"已完成部分: {', '.join(completed) if completed else '（无）'}",
+            f"未完成清单: {', '.join(pending) if pending else '（无）'}",
+            "",
+            "请决定：续跑（调高 max_task_tokens 后重新发起）或止损（保留现场）。",
+        ]
+        if root is not None:
+            (root / "sessions" / "budget_stop.md").write_text(
+                "\n".join(lines) + "\n", encoding="utf-8"
+            )
+        return PipelineResult(
+            kind="budget_exceeded",
+            project_id=team.project_id,
+            project_dir=root,
+            deliverable_summary="\n".join(lines),
+            pending_modules=pending,
+            route=route,
+            cost_dashboard=self._build_dashboard(mode, team.project_id),
+        )
+
+    def _build_dashboard(self, mode: str, project_id: str):
+        """8.5 成本统计：从本任务切片构建仪表盘并落盘 logs/（问题 7）。"""
+        if not hasattr(self.llm, "call_log"):
+            return None
+        dashboard = CostDashboard.from_call_log(
+            self.llm.call_log[self._task_baseline:],  # 仅本任务条目
+            budget_tokens=self.settings.task_token_budget(mode),
+        )
+        handle = self.file_manager.get_project(project_id)
+        if handle is not None:
+            dashboard.persist(handle.root / "logs")
+        return dashboard
 
     # ------------------------------------------------------------------
 
@@ -226,7 +797,13 @@ class Pipeline:
             "模块清单:",
         ]
         for name, result in module_results.items():
-            status = "完成" if result.status is ModuleStatus.SUCCESS else "冻结（修复上限）"
+            # 3.8 三态：完成 / 待用户反馈（未验证） / 冻结（修复上限）
+            if result.status is ModuleStatus.SUCCESS:
+                status = "完成"
+            elif result.status is ModuleStatus.AWAITING_FEEDBACK:
+                status = "待用户反馈（未验证）"
+            else:
+                status = "冻结（修复上限）"
             fix = f"，修复 {result.fix_attempts} 次" if result.fix_attempts else ""
             lines.append(f"  - {name}: {status}{fix}")
         lines += [
@@ -237,9 +814,9 @@ class Pipeline:
             lines += [
                 "",
                 "手动运行指引:",
-                f"  cd {root / 'code' / name if module_results else root}",
-                f"  python {name}.py    # 逐模块运行（文件与模块同名，可同进程导入）",
-                "  python -m pytest tests/<模块>/ -v",
+                f"  cd {root / 'code'}",
+                "  python -m <模块名>.<模块名>    # 逐模块运行（如 user → python -m user.user）",
+                f"  cd {root} && python -m pytest tests/<模块>/ -v",
                 "  运行后请将结果反馈给系统以继续修复循环（如需要）。",
             ]
         frozen = [n for n, r in module_results.items() if r.status is ModuleStatus.FROZEN]

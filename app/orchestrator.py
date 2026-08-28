@@ -44,6 +44,13 @@ if TYPE_CHECKING:
 
 VALID_TASK_TYPES = ("基础", "研究/分析", "编程")
 
+
+def _sanitize_files(value: Any) -> int:
+    """estimated_files 净化：非负整数，缺省/非法归零（不影响评估整体有效性）。"""
+    if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+        return value
+    return 0
+
 # D.1 边界护栏：非编程判定 + 需求含执行类信号 → 触发复核
 _EXECUTION_SIGNAL_PATTERN = re.compile(
     r"运行|执行|\.py\b|脚本|API|api|部署|跑一下|跑通"
@@ -67,6 +74,8 @@ class RoutingResult:
     difficulty_score: int
     difficulty_level: str
     reason: str
+    # 12.2：预估源码文件数（大模型评估输出，程序净化；缺省/非法归零）
+    estimated_files: int = 0
     rechecked: bool = False        # 是否触发过边界护栏复核
     fallback: bool = False         # 15.3 保守降级（解析失败）
     needs_user_confirm: bool = False  # 降级 / 高难度研究任务需用户确认
@@ -129,6 +138,7 @@ class TaskRouter:
             difficulty_score=score,
             difficulty_level=assessment.get("difficulty_level", "未知"),
             reason=assessment.get("reason", ""),
+            estimated_files=_sanitize_files(assessment.get("estimated_files")),
             rechecked=rechecked,
         )
 
@@ -204,6 +214,7 @@ class TaskRouter:
             "task_type": original_type,
             "difficulty_score": 0,
             "difficulty_level": "未知",
+            "estimated_files": 0,
             "reason": "复核输出解析失败，维持原判定",
         }
 
@@ -370,6 +381,7 @@ class DiscussionEngine:
     """方案讨论编排（3.4 节）：初始方案 → 双评审 → 汇总修订 → 收敛 spec。
 
     护栏落地：
+    - 11.0 总预算：占用 ≥90% → 省 token 模式，压缩讨论轮数提前收敛；
     - 11.1 轮数上限：达上限后主 LLM 直接产出收敛 spec；
     - 11.3 循环检测：论点重复达上限 → 冻结副 LLM 发言，主 LLM 收权裁决；
     - 11.5 确认收敛：spec 确认修改 ≤3 次，第 3 次后主动合并意见。
@@ -384,6 +396,7 @@ class DiscussionEngine:
         settings: Settings,
         file_manager: FileManager | None = None,
         project_id: str | None = None,
+        budget_guard: Any = None,
     ):
         self.llm = llm
         self.main_model = main_model
@@ -392,10 +405,28 @@ class DiscussionEngine:
         self.settings = settings
         self.file_manager = file_manager
         self.project_id = project_id
+        self.budget_guard = budget_guard  # 11.0 总闸（省 token 模式判定）
         self._detector = LoopDetector(settings)
+        self._wire_embedder()  # 11.3：第二道 embedding 检测接线
         # 11.5 确认环节状态
         self._confirm_feedbacks: list[str] = []
         self._final_spec: str | None = None  # 强制收敛后的最终 spec（不再修改）
+
+    def _wire_embedder(self) -> None:
+        """11.3/6.1：llm 具备 embed 能力且开关开启 → 注入第二道检测。
+
+        经 ModelClientEmbedder 适配（统一走 model_client 封装，
+        token 计入预算与审计日志）；llm 无 embed（桩/降级环境）
+        则保持仅 Jaccard 首道。
+        """
+        if not self.settings.enable_embedding_check:
+            return
+        if callable(getattr(self.llm, "embed", None)):
+            from app.utils.model_client import ModelClientEmbedder
+
+            self._detector.set_embedder(
+                ModelClientEmbedder(self.llm, self.settings.embedding_model)
+            )
 
     # ------------------------------------------------------------------
 
@@ -426,6 +457,14 @@ class DiscussionEngine:
                 )
                 break
 
+            # 11.0 省 token 模式：预算 ≥90% → 跳过本轮测试评审与后续轮
+            if self.budget_guard is not None and self.budget_guard.throttling:
+                summaries.append(
+                    f"第 {rounds} 轮：\n- 开发评审：{dev_review}\n"
+                    "（预算占用 ≥90%，省 token 模式：跳过测试评审与后续轮，直接收敛）"
+                )
+                break
+
             test_review = self._get_review(requirement, proposal, self.test_model, "测试工程师", "可测试性、边界条件覆盖、验收标准明确性")
             if self._detector.check(test_review).frozen:
                 frozen = True
@@ -435,6 +474,11 @@ class DiscussionEngine:
                 break
 
             summaries.append(f"第 {rounds} 轮：\n- 开发评审：{dev_review}\n- 测试评审：{test_review}")
+
+            # 11.0 省 token 模式：预算 ≥90% → 不再修订，直接进入收敛裁决
+            if self.budget_guard is not None and self.budget_guard.throttling:
+                summaries.append("（预算占用 ≥90%，省 token 模式：跳过修订与后续轮，直接收敛）")
+                break
 
             # 无新弱点与风险 → 提前收敛（省 token）
             if _no_issues(dev_review) and _no_issues(test_review):

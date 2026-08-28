@@ -59,11 +59,17 @@ class Settings:
 
     # ---- 第 11 章 六层成本护栏（11.6 默认值）----
     max_task_tokens: int = 200_000            # 第 0 层：单任务 token 总预算（总闸）
+    budget_throttle_threshold: float = 0.9     # 11.0：≥90% 进入省 token 模式
     auto_mode_budget_multiplier: float = 2.5   # 11.0/3.6.3：自动模式预算倍数（×2~3）
     max_discussion_rounds: int = 3             # 第 1 层：讨论轮数上限
     max_response_tokens: int = 8_000           # 第 2 层：单轮对话输出上限
+    # 11.2：截断（finish_reason=length）分块续写次数上限；耗尽仍截断则标记 truncated
+    max_output_continuations: int = 2
     similarity_threshold: float = 0.85         # 第 3 层：embedding 语义相似度阈值
     jaccard_threshold: float = 0.9             # 第 3 层：文本相似度首道拦截阈值
+    # 11.3/9 章：embedding 第二道检测（经 model_client 封装；关闭则仅 Jaccard 首道）
+    enable_embedding_check: bool = True
+    embedding_model: str = "text-embedding-3-small"
     loop_repeat_limit: int = 3                 # 第 3 层：同一论点重复次数上限 N
     max_fix_rounds: int = 5                    # 第 4 层：修复循环上限
     max_spec_confirm_rounds: int = 3           # 第 5 层：spec 确认收敛上限
@@ -76,6 +82,11 @@ class Settings:
     # ---- 3.6 节 双模执行 ----
     default_execution_mode: str = "safe"       # MVP 默认安全审阅模式
     sandbox_timeout_seconds: int = 30          # 3.6.3：沙箱 30s 超时熔断（Alpha v0.4）
+
+    # ---- 9 章 LLM 调用韧性（超时与瞬态错误重试）----
+    llm_timeout_seconds: int = 120             # 单次调用超时（litellm timeout 参数）
+    llm_max_retries: int = 3                   # 瞬态错误（超时/429/连接/5xx）重试上限
+    retry_backoff_base: float = 1.0            # 指数退避基数：sleep = base * 2**attempt（秒）
 
     # ---- 15.5 节 JSON 解析容错 ----
     max_parse_retries: int = 3                 # 单次调用最大重试次数
@@ -115,16 +126,27 @@ class Settings:
             "modular_file_count_threshold",
             "sandbox_timeout_seconds",
             "research_budget_tokens",
+            "llm_timeout_seconds",
+            "llm_max_retries",
         )
         for name in positive_ints:
             value = getattr(self, name)
             if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
                 raise ValueError(f"{name} 必须为正整数，当前值: {value!r}")
 
-        for name in ("similarity_threshold", "jaccard_threshold"):
+        for name in (
+            "similarity_threshold",
+            "jaccard_threshold",
+            "budget_throttle_threshold",
+        ):
             value = getattr(self, name)
             if not 0.0 < value <= 1.0:
                 raise ValueError(f"{name} 必须落在 (0, 1] 区间，当前值: {value!r}")
+
+        if self.retry_backoff_base < 0:
+            raise ValueError(
+                f"retry_backoff_base 必须非负，当前值: {self.retry_backoff_base!r}"
+            )
 
         if not 2.0 <= self.auto_mode_budget_multiplier <= 3.0:
             raise ValueError(

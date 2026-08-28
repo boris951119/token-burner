@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 
 from app.config import Settings
+from app.execution.local_executor import LocalExecutor
 from app.execution.safe_executor import SafeExecutor
 from app.pipeline import Pipeline
 from app.tools.file_manager import FileManager
@@ -22,9 +23,32 @@ from app.utils.model_client import ModelClient
 BANNER = """
 ========================================
   Token 消耗器 · AI 多智能体项目团队系统
-  （MVP：安全审阅模式）
+  （安全审阅 / 自动验证双模式）
 ========================================
 """
+
+
+def _build_executor(mode: str) -> SafeExecutor | LocalExecutor:
+    """3.6：按执行模式构造执行器（auto = 危险预扫描 + 本地真实执行）。"""
+    if mode == "auto":
+        return LocalExecutor()
+    return SafeExecutor()
+
+
+def _find_resumable_project(file_manager: FileManager) -> str | None:
+    """中断恢复（问题 4）：查找含恢复快照的中断项目（最新优先）。"""
+    root = file_manager.projects_root
+    if not root.is_dir():
+        return None
+    candidates = [
+        p for p in root.iterdir()
+        if (p / "sessions" / "pipeline_state.json").is_file()
+        and (p / "sessions" / "interruption.md").is_file()
+    ]
+    if not candidates:
+        return None
+    latest = max(candidates, key=lambda p: p.stat().st_mtime)
+    return latest.name
 
 
 def main() -> None:
@@ -34,11 +58,38 @@ def main() -> None:
     projects_root = Path.cwd() / "projects"
     file_manager = FileManager(projects_root=projects_root)
     llm = ModelClient(settings)
-    executor = SafeExecutor()
 
-    pipeline = Pipeline(
-        llm=llm, executor=executor, settings=settings, file_manager=file_manager
-    )
+    # 中断恢复：存在带快照的中断项目时优先征询（已完成模块自动跳过）
+    resumable = _find_resumable_project(file_manager)
+    if resumable is not None:
+        print(f"\n检测到中断项目: {resumable}")
+        reply = input("恢复续跑（仅未完成模块）？(y/n)\n> ").strip().lower()
+        if reply in ("y", "yes", "是", "确认"):
+            # 按快照中的执行模式恢复（auto 中断 → 续跑仍走自动验证）
+            import json as _json
+
+            state_path = (
+                projects_root / resumable / "sessions" / "pipeline_state.json"
+            )
+            try:
+                mode = _json.loads(
+                    state_path.read_text(encoding="utf-8")
+                ).get("mode", "safe")
+            except (OSError, ValueError):
+                mode = "safe"
+            pipeline = Pipeline(
+                llm=llm, executor=_build_executor(mode),
+                settings=settings, file_manager=file_manager,
+            )
+            try:
+                result = pipeline.resume(
+                    resumable, feedback_fn=_cli_feedback,
+                )
+            except ValueError as exc:
+                print(f"恢复失败: {exc}")
+                return
+            _print_result(result)
+            return
 
     requirement = input("你好，我是 Jarvis，请描述你的需求：\n> ").strip()
     if not requirement:
@@ -75,8 +126,8 @@ def main() -> None:
         mode = _select_mode()
         auto_confirmed = False
         if mode == "auto":
-            print("\n[警示] 自动验证模式预算为标准预算 ×"
-                  f"{settings.auto_mode_budget_multiplier}，"
+            print("\n[警示] 自动验证模式将真实执行 LLM 生成代码（危险操作预扫描 + "
+                  f"超时熔断），预算为标准 ×{settings.auto_mode_budget_multiplier}，"
                   f"当前任务预算 {settings.task_token_budget('auto')} token。")
             reply = input("确认使用自动模式？(y/n)\n> ").strip().lower()
             auto_confirmed = reply in ("y", "yes", "是", "确认")
@@ -87,7 +138,11 @@ def main() -> None:
             "\n方案讨论与 spec 生成后将请求确认。预设回复（直接回车=确认）:\n> "
         ).strip() or "确认"
 
-        print("\n开始团队流程（讨论 → spec → 拆分 → 开发循环）...\n")
+        pipeline = Pipeline(
+            llm=llm, executor=_build_executor(mode),
+            settings=settings, file_manager=file_manager,
+        )
+        print("\n开始团队流程（讨论 → spec → 拆分 → 开发循环 → 反馈闭环）...\n")
         result = pipeline.run(
             requirement,
             confirmed_as_coding=confirmed,
@@ -95,11 +150,25 @@ def main() -> None:
             mode=mode,
             auto_mode_confirmed=auto_confirmed,
             spec_confirm=spec_confirm,
+            # 3.8：安全模式反馈交互闭环（成功确认 / 报错修复 / exit 停止）
+            feedback_fn=(_cli_feedback if mode == "safe" else None),
+            # 复用已展示的路由评估（避免二次评估浪费 token）
+            route=route,
         )
     else:
-        result = pipeline.run(requirement, confirmed_as_coding=confirmed)
+        pipeline = Pipeline(
+            llm=llm, executor=_build_executor("safe"),
+            settings=settings, file_manager=file_manager,
+        )
+        result = pipeline.run(requirement, confirmed_as_coding=confirmed, route=route)
 
     _print_result(result)
+
+
+def _cli_feedback(prompt: str) -> str:
+    """3.8 反馈交互闭环的 CLI 回调：展示征询语并读取用户反馈。"""
+    print("\n" + prompt)
+    return input("> ")
 
 
 def _select_models(settings: Settings) -> tuple[str, str, str]:
@@ -142,6 +211,16 @@ def _print_result(result) -> None:
         print("任务未按编程处理（用户否认），流程结束。")
     elif result.kind == "needs_confirm":
         print("评估不确定，等待用户确认（本次会话未继续）。")
+    elif result.kind == "budget_exceeded":
+        # 11.0：超预算中止，落盘交用户决定续跑或止损
+        print(result.deliverable_summary)
+        if result.cost_dashboard is not None:
+            print()
+            print(result.cost_dashboard.text_summary())
+    elif result.kind == "interrupted":
+        # 中断现场已落盘（sessions/interruption.md），重跑程序可恢复
+        print(result.deliverable_summary)
+        print("\n重新运行程序即可恢复续跑（已完成模块自动跳过）。")
     elif result.kind == "team_flow":
         print(result.deliverable_summary)
         if result.cost_dashboard is not None:

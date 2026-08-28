@@ -41,7 +41,7 @@ class FakeExecutor:
         self.statuses = list(statuses)
         self.runs: list[dict] = []
 
-    def run(self, code, tests, timeout, expected_output=""):
+    def run(self, code, tests, timeout, expected_output="", module=""):
         from app.execution.executor import ExecutionResult, ExecutionStatus
         status = self.statuses.pop(0) if self.statuses else "SUCCESS"
         self.runs.append({"code": code, "tests": tests, "status": status})

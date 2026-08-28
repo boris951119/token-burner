@@ -4,9 +4,21 @@ demo_projects/
 logs/
 data_store.json
 
+# 打包发布物（经 GitHub Release 分发，不入库）
+release/
+
+# 文档生成产物
+_docgen/
+
+# 调试转储
+dump_head.json
+dump_ours.json
+tree_debug.txt
+
 # 环境与密钥
 .env
 .venv/
+.venv-build/
 
 # 依赖（沙箱内本地安装目录）
 .vendor/

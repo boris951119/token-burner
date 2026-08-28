@@ -27,6 +27,10 @@ from typing import Any
 # 提取最外层 { } 或 [ ] 块（考虑字符串内的括号转义与嵌套）
 _BLOCK_START = {"{", "["}
 
+# markdown 围栏：```json / ```JSON / ``` 等语言标记变体（行首）
+_FENCE_OPEN = re.compile(r"^[ \t]*```[ \t]*[A-Za-z0-9]*[ \t]*\n?", re.MULTILINE)
+_FENCE_CLOSE = re.compile(r"^[ \t]*```[ \t]*$", re.MULTILINE)
+
 
 @dataclass
 class ParseDetail:
@@ -61,23 +65,24 @@ def parse_json(
     if value is not _FAILED:
         return value, ParseDetail("native", True, None, location)
 
-    # 第 2 级：提取 JSON 块
-    block = _extract_outermost_block(text)
+    # 第 2 级：剥离 markdown 围栏后提取 JSON 块（产品审计问题 6）
+    unfenced = _strip_fences(text)
+    block = _extract_outermost_block(unfenced)
     if block is not None:
         value = _try_loads(block)
         if value is not _FAILED:
             return value, ParseDetail("extract_block", True, None, location)
 
-    # 第 3 级：程序容错修复（对提取块或原文修复后重试）
+    # 第 3 级：程序容错修复（对提取块或净化文本修复后重试）
     if programmatic_repair:
-        candidate = block if block is not None else text
+        candidate = block if block is not None else unfenced
         repaired = _repair_common_damage(candidate)
         value = _try_loads(repaired)
         if value is not _FAILED:
             return value, ParseDetail("repair", True, None, location)
         # 提取块修复失败时，再试一次原文修复（块提取可能截断）
         if block is not None:
-            repaired_raw = _repair_common_damage(text)
+            repaired_raw = _repair_common_damage(unfenced)
             value = _try_loads(repaired_raw)
             if value is not _FAILED:
                 return value, ParseDetail("repair", True, None, location)
@@ -104,6 +109,48 @@ def _try_loads(text: str) -> Any:
         return json.loads(text)
     except (json.JSONDecodeError, ValueError):
         return _FAILED
+
+
+def _strip_fences(text: str) -> str:
+    """剥离 markdown 围栏（第 2 级前置净化，产品审计问题 6）。
+
+    处理模式：
+    - 围栏对（```json ... ```）：去掉开闭标记；
+    - 只有开启围栏：去掉开启标记（尾部内容保留，多为 JSON 本体）；
+    - 围栏内 JSON 截断 + 围栏闭合后续写文字：闭围栏后的文字截掉
+      （残缺块交第 3 级补括号修复）；
+    - 多个围栏块：保留含 {/[ 的块（说明性围栏丢弃）。
+
+    无围栏时原样返回（零开销路径）。
+    """
+    if "```" not in text:
+        return text
+
+    opens = list(_FENCE_OPEN.finditer(text))
+    if not opens:
+        # 围栏标记非行首（罕见）：不处理，走原逻辑
+        return text
+
+    # 按围栏切段：open 之后到下一个 open（或闭围栏/文末）为一段内容
+    segments: list[str] = []
+    for idx, match in enumerate(opens):
+        content_start = match.end()
+        # 段终点 = 下一个开启围栏位置
+        content_end = (
+            opens[idx + 1].start() if idx + 1 < len(opens) else len(text)
+        )
+        content = text[content_start:content_end]
+        # 去掉本段内容末尾的闭围栏行（可能带后续换行前的空白）
+        close = _FENCE_CLOSE.search(content)
+        if close:
+            content = content[: close.start()]
+        segments.append(content.rstrip("\n"))
+
+    # 取含 JSON 起始字符的段；否则取最长段（可能 JSON 里没有 {}？保守）
+    json_segments = [s for s in segments if "{" in s or "[" in s]
+    if json_segments:
+        return "\n".join(json_segments)
+    return max(segments, key=len) if segments else text
 
 
 def _extract_outermost_block(text: str) -> str | None:

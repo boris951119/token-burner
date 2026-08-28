@@ -26,12 +26,17 @@ class SafeExecutor(Executor):
         tests: str,
         timeout: int,
         expected_output: str = "",
+        module: str = "",
     ) -> ExecutionResult:
         instructions = [_RUN_HEADER]
-        instructions.append("1. 进入项目代码目录：cd projects/<项目目录>/code/<模块名>")
-        instructions.append("2. 运行模块程序：python <模块名>.py（文件与模块同名）")
+        instructions.append("1. 进入项目代码目录：cd projects/<项目目录>/code")
+        instructions.append(
+            "2. 运行模块程序：python -m <模块名>.<模块名>（如模块 user → python -m user.user）"
+        )
         if tests.strip():
-            instructions.append("3. 运行测试：pytest <模块> -v")
+            instructions.append(
+                "3. 回到项目根目录运行测试：python -m pytest tests/<模块名>/ -v"
+            )
         if expected_output:
             instructions.append(f"预期输出：{expected_output}")
 

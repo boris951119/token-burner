@@ -6,7 +6,7 @@
   3. POST /git/trees  (base_tree)    → 远端树 + 本地文件 = 合并树
   4. POST /git/commits (单亲=远端)   → 新提交（不覆盖远端历史）
   5. PATCH /git/refs/heads/main      → 快进更新引用
-  6. 本地：重建同元数据提交，若 sha 与 API 一致则同步本地 main
+  6. 本地：复用 sync_local 链式重建提交（含签名提交），同步本地 main
 
 用法（沙箱外）：
     $env:GITHUB_TOKEN = "<PAT>"
@@ -116,7 +116,7 @@ def main() -> int:
     new_commit = api_call(
         "POST", f"/repos/{owner_repo}/git/commits", token,
         {
-            "message": "feat: Token 消耗器 MVP 全量代码（278 测试全绿）",
+            "message": "feat: v0.4 桌面版与 API server（budget/local_executor、17 个新测试、投资人交付物）",
             "tree": tree["sha"],
             "parents": [remote_sha],
             "author": author,
@@ -134,82 +134,12 @@ def main() -> int:
     log(f"main 已更新: {new_sha[:12]}（快进，未覆盖历史）")
     print(f"推送完成: https://github.com/{owner_repo}/commit/{new_sha[:12]}")
 
-    # 7. 本地同步：按 API 树清单完整重建（含新增脚本文件与远端 README）
+    # 7. 本地同步：复用 sync_local 的链式重建（含签名提交/时区候选）
     try:
-        from dulwich.objects import Blob, Commit, Tree
-        from dulwich.repo import Repo
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from sync_local import sync  # noqa: E402
 
-        repo = Repo(str(ROOT))
-        listing = api_call(
-            "GET", f"/repos/{owner_repo}/git/trees/{tree['sha']}", token,
-        )
-        entries = [
-            (e["path"], e["mode"], e["sha"], e["type"])
-            for e in listing.get("tree", [])
-        ]
-        blobs: dict[str, bytes] = {}
-        for path, mode, sha, typ in entries:
-            if typ != "blob":
-                continue
-            if sha.encode() in repo.object_store:
-                continue
-            if (ROOT / path).is_file():
-                raw = (ROOT / path).read_bytes()
-            else:  # 远端独有文件（如 README）：下载 blob
-                b = api_call("GET", f"/repos/{owner_repo}/git/blobs/{sha}", token)
-                raw = base64.b64decode(b["content"])
-            blobs[path] = raw
-
-        def build_tree(prefix: str) -> Tree:
-            """自底向上构建子树（git 排序规则：目录名按追加 '/' 比较）。"""
-            t = Tree()
-            children_files = [(p, m, s) for p, m, s, _ty in entries
-                              if _ty == "blob" and p.startswith(prefix)
-                              and "/" not in p[len(prefix):]]
-            children_dirs = sorted({
-                p[len(prefix):].split("/")[0] for p, _m, _s, _ty in entries
-                if p.startswith(prefix) and "/" in p[len(prefix):]
-            })
-            child_names = {p[len(prefix):] for p, _m, _s, _ty in children_files}
-            for rel, mode, sha in children_files:
-                t.add(rel.encode(), int(mode, 8), sha.encode())
-            for d in children_dirs:
-                if d in child_names:
-                    raise RuntimeError(f"文件与目录同名: {prefix}{d}")
-                sub = build_tree(f"{prefix}{d}/")
-                t.add(d.encode(), 0o040000, sub.id)
-            for path, raw in blobs.items():
-                if path.startswith(prefix) and "/" not in path[len(prefix):]:
-                    b = Blob()
-                    b.data = raw
-                    repo.object_store.add_object(b)
-            # 排序规则：目录视作 name + '/'
-            t._entries = sorted(  # noqa: SLF001
-                t._entries,  # noqa: SLF001
-                key=lambda e: e[0] + (b"/" if e[1] == 0o040000 else b""),
-            )
-            repo.object_store.add_object(t)
-            return t
-
-        new_tree = build_tree("")
-        c = Commit()
-        c.tree = new_tree.id
-        c.parents = [remote_sha.encode()]
-        epoch = int(time.time())
-        c.author = b"token-burner <jarvis@local>"
-        c.committer = b"token-burner <jarvis@local>"
-        c.author_time = epoch
-        c.commit_time = epoch
-        c.author_timezone = 8 * 3600
-        c.commit_timezone = 8 * 3600
-        c.message = "feat: Token 消耗器 MVP 全量代码（278 测试全绿）".encode("utf-8")
-        repo.object_store.add_object(c)
-        repo.refs[b"refs/heads/main"] = c.id
-        if c.id == new_sha.encode():
-            log(f"本地 main 已同步: {c.id.decode()[:12]}（与远端一致）")
-        else:
-            log(f"本地重建提交 {c.id.decode()[:12]}（远端 {new_sha[:12]}，"
-                f"内容一致元数据微差），本地 main 已指向本地重建提交")
+        sync(owner_repo, token)
     except Exception as e:
         log(f"本地同步失败（不影响推送结果）: {e}")
     return 0
