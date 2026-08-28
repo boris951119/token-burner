@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import os
 import sys
@@ -87,11 +88,39 @@ def main() -> int:
     files = [p for p in ROOT.rglob("*") if p.is_file() and not is_ignored(p, rules)]
     log(f"待上传文件: {len(files)} 个")
 
-    # 3. 逐文件建 blob
-    entries = []
+    # 2.5 远端现有 blob 清单（内容未变的文件由 base_tree 继承，跳过上传）
+    base_listing = api_call(
+        "GET", f"/repos/{owner_repo}/git/trees/{base_tree}?recursive=1", token,
+    )
+    remote_sha_by_path = {
+        e["path"]: e["sha"] for e in base_listing.get("tree", [])
+        if e["type"] == "blob"
+    }
+
+    # 3. 逐文件建 blob（断点续传：api_blob_cache.json 记录已上传的 blob）
+    cache_path = ROOT / "api_blob_cache.json"
+    try:
+        cache: dict[str, str] = json.loads(cache_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        cache = {}
+    entries: list[dict] = []
+    pending: list[tuple[str, bytes, str]] = []
     for p in files:
         raw = p.read_bytes()
         rel = p.relative_to(ROOT).as_posix()
+        sha = hashlib.sha1(b"blob %d\0" % len(raw) + raw).hexdigest()
+        if remote_sha_by_path.get(rel) == sha:
+            continue  # 远端已有同内容 blob：base_tree 继承
+        if cache.get(rel) == sha:
+            entries.append({"path": rel, "mode": "100644", "type": "blob",
+                            "sha": sha})
+            continue  # 此前运行已上传：直接引用
+        pending.append((rel, raw, sha))
+    log(f"需上传: {len(pending)}  缓存命中: "
+        f"{sum(1 for e in entries if e['sha'] == cache.get(e['path']))}"
+        f"  远端已存在: {len(files) - len(pending) - len(entries)}")
+
+    for i, (rel, raw, sha) in enumerate(pending, 1):
         try:
             text = raw.decode("utf-8")
             body = {"content": text, "encoding": "utf-8"}
@@ -99,9 +128,15 @@ def main() -> int:
             body = {"content": base64.b64encode(raw).decode("ascii"),
                     "encoding": "base64"}
         blob = api_call("POST", f"/repos/{owner_repo}/git/blobs", token, body)
+        if blob["sha"] != sha:
+            raise RuntimeError(f"blob sha 不匹配: {rel}")
+        cache[rel] = sha
+        cache_path.write_text(json.dumps(cache), encoding="utf-8")
         entries.append({"path": rel, "mode": "100644", "type": "blob",
                         "sha": blob["sha"]})
-    log(f"blob 上传完成: {len(entries)} 个")
+        if i % 10 == 0 or i == len(pending):
+            log(f"  blob 进度: {i}/{len(pending)}")
+    log(f"blob 上传完成: {len(pending)} 个")
 
     # 4. 合并树（base_tree 保留远端 README 等独有文件）
     tree = api_call(
