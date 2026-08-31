@@ -58,7 +58,11 @@ def main() -> None:
     print(BANNER)
     settings = load_settings()
 
-    projects_root = Path.cwd() / "projects"
+    # 产出目录：config.json 的 projects_root 优先（空 = 启动目录/projects）
+    projects_root = (
+        Path(settings.projects_root)
+        if settings.projects_root else Path.cwd() / "projects"
+    )
     file_manager = FileManager(projects_root=projects_root)
     llm = ModelClient(settings, rate_limiter=_build_rate_limiter(settings))
 

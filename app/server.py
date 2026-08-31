@@ -169,8 +169,16 @@ def create_app(
     app.state.settings = settings or load_settings()
     app.state.llm = llm  # 测试注入（共享模式）；生产为 None
     app.state.llm_factory = llm_factory or ModelClientFactory(app.state.settings)
+    # 产出目录三层优先：显式注入（测试）> config.projects_root > cwd/projects
     app.state.file_manager = FileManager(
-        projects_root=projects_root or (Path.cwd() / "projects")
+        projects_root=(
+            projects_root
+            or (
+                Path(app.state.settings.projects_root)
+                if app.state.settings.projects_root else None
+            )
+            or (Path.cwd() / "projects")
+        )
     )
     app.state.executor = executor            # 测试注入；缺省按 mode 构造
     app.state.lock_manager = ProjectLockManager()  # M8-2 项目级锁
@@ -235,6 +243,7 @@ def create_app(
             "budget_tokens": s.task_token_budget("safe"),
             "auto_budget_tokens": s.task_token_budget("auto"),
             "auto_budget_multiplier": s.auto_mode_budget_multiplier,
+            "projects_root": str(app.state.file_manager.projects_root),
         }
 
     @app.get("/", include_in_schema=False)
