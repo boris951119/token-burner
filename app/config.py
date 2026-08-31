@@ -155,8 +155,14 @@ class Settings:
     programmatic_json_repair: bool = True      # 第 3 级程序容错修复（零 token）
     llm_json_repair: bool = False              # 15.2 LLM 辅助修复（默认关闭）
 
-    # ---- 4.4 Researcher（Beta v0.5，仅预留配置）----
+    # ---- M10 Researcher（规格第 4 章，v0.5 Beta；缺省关闭）----
+    # 4.4：独立预算（独立于任务总预算之外，经 call_log 计入全局消耗日志）；
+    # 4.6 降级版：用户粘贴资料 → 结构化摘要注入；联网调研独立开关后续灰度
+    researcher_enabled: bool = False
     research_budget_tokens: int = 20_000
+    research_cache_enabled: bool = True        # 三元组+资料哈希键，SQLite 单文件
+    research_cache_path: str = ".research_cache.db"
+    research_cache_ttl_days: int = 7
 
     # ---- 14 章 生成项目本地 git 版本管理 ----
     enable_git: bool = True                      # 阶段性本地提交（免推送）
