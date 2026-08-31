@@ -27,6 +27,8 @@ from app.orchestrator import (
     RoutingResult,
     TaskRouter,
     TeamBuilder,
+    assessment_model,
+    route_models,
 )
 from app.tools.file_manager import FileManager
 from app.tools.git_manager import GitManager
@@ -56,6 +58,20 @@ class PipelineResult:
     pending_modules: list[str] = field(default_factory=list)  # 11.0 预算中止时的未完成清单
     route: RoutingResult | None = None
     cost_dashboard: object | None = None  # CostDashboard（8.5 成本统计）
+    declined_reply: str = ""  # M9-3：快判拒答的友好文案（仅闲聊/无意义出口填充）
+
+
+# M9-3：declined 友好文案（确定性程序职责，不调 LLM——拒答本身就是为了省
+# token）。按快判 intent 取文案；未知类型走默认兜底。固定文案不拼需求原文，
+# 规避不可信文本进入 UI 的转义问题。
+DECLINED_REPLIES = {
+    "闲聊": "这里是 Token 消耗器——把软件需求变成可运行代码的多智能体开发系统。"
+            "闲聊模式暂不开放～想开发一个软件、写个小工具或分析一份资料，"
+            "直接告诉我你的需求即可。",
+    "无意义": "未能识别出有效的软件需求。请描述你想开发的内容"
+              "（例如：写一个记账脚本、做一个数据看板），我会为你组建智能体团队完成它。",
+}
+_DECLINED_DEFAULT_REPLY = "该输入未进入开发流程。请描述明确的软件需求。"
 
 
 class Pipeline:
@@ -63,19 +79,79 @@ class Pipeline:
 
     def __init__(
         self,
-        llm: ModelClient,
+        llm: ModelClient | None,
         executor: Executor,
         settings: Settings,
         file_manager: FileManager,
         git_manager_factory=None,
+        llm_factory=None,
+        on_event: Callable[[str, dict], None] | None = None,
     ):
+        # M8-1：llm 与 llm_factory 二选一——
+        # - 直传 llm：单任务模式（CLI / 测试注入），原样使用；
+        # - llm_factory：每任务经 create() 新建实例（budget_guard /
+        #   call_log 天然隔离），run/resume 开始时解析（见 _resolve_llm）。
+        if llm is None and llm_factory is None:
+            raise ValueError("llm 与 llm_factory 至少提供一个（M8-1）")
         self.llm = llm
+        self._llm_factory = llm_factory
+        # M8-4：任务进度事件回调（kind, data）——异步任务的进度源，
+        # 未挂接零开销；回调失败不影响任务本身
+        self._on_event = on_event
         self.executor = executor
         self.settings = settings
         self.file_manager = file_manager
         self._git_factory = git_manager_factory or GitManager
         # 11.0 任务级基线：看板只统计本任务切片（跨任务不污染，问题 7）
         self._task_baseline = 0
+
+    def _emit(self, event_type: str, **data) -> None:
+        """M8-4：发进度事件（轻量钩子，不改编排逻辑）。"""
+        if self._on_event is None:
+            return
+        try:
+            self._on_event(event_type, data)
+        except Exception:
+            pass  # 进度回调失败不影响任务
+
+    def _resolve_models(
+        self, route: RoutingResult, models: tuple[str, str, str] | None
+    ) -> tuple[str, str, str]:
+        """三模型解析（M3-2 评估后动态选模）。
+
+        优先级：用户显式选择 > 智能路由（按难度分选档）> v0.3.1 缺省。
+        路由关闭时行为与 v0.3.1 完全一致（回归保证）。
+        """
+        if models is not None:
+            return models
+        if self.settings.model_routing_enabled:
+            return route_models(route.difficulty_score, self.settings)
+        return ("gpt-4o", "deepseek-chat", "claude-3-5-sonnet")
+
+    def _resolve_llm(self) -> ModelClient:
+        """M8-1：任务开始时解析本任务的 ModelClient。
+
+        约束：一个 Pipeline 实例同一时间只承载一个任务（server 每请求
+        新建 Pipeline）；factory 存在则覆写 self.llm，后续编排代码
+        （self.llm.*）零改动——只换「谁持有客户端」，不动管线逻辑。
+        """
+        if self._llm_factory is not None:
+            self.llm = self._llm_factory.create()
+        assert self.llm is not None
+        # M8-4：每次 LLM 调用后回报 token 用量（经 on_call 钩子）
+        if self._on_event is not None:
+            def _on_call(entry: dict) -> None:
+                self._emit(
+                    "tokens",
+                    tokens=int(entry.get("input_tokens", 0))
+                    + int(entry.get("output_tokens", 0)),
+                    model=entry.get("model", ""),
+                )
+            try:
+                self.llm.on_call = _on_call
+            except AttributeError:
+                pass  # 测试桩无此属性时静默跳过
+        return self.llm
 
     def _git(self):
         """14 章：git 开启时提供管理器，关闭时返回 None。"""
@@ -105,10 +181,14 @@ class Pipeline:
         避免二次评估浪费 token；缺省时内部自评估（兼容）。
         """
         # 11.0：基线——本任务开始前的调用日志长度（用量只计本任务）
+        self._resolve_llm()  # M8-1：factory 模式下每任务新建客户端
         baseline = len(getattr(self.llm, "call_log", []))
         self._task_baseline = baseline  # 看板切片依据（问题 7）
         if route is None:
-            router = TaskRouter(self.llm, self.settings.models[0], self.settings)
+            # M9-5：评估/复核固定降档主力档（确定性选模，见 assessment_model）
+            router = TaskRouter(
+                self.llm, assessment_model(self.settings), self.settings
+            )
             route = router.route(requirement)
 
         # 15.3 保守降级：解析失败 → 视作编程 + 用户确认
@@ -119,6 +199,16 @@ class Pipeline:
                 )
             if not confirmed_as_coding:
                 return PipelineResult(kind="declined", route=route)
+
+        # M9-3：快判高置信闲聊/无意义 → declined 真实意图出口（附友好文案）
+        if route.route is Route.DECLINED:
+            return PipelineResult(
+                kind="declined",
+                route=route,
+                declined_reply=DECLINED_REPLIES.get(
+                    route.task_type, _DECLINED_DEFAULT_REPLY
+                ),
+            )
 
         # 3.2 路由分发
         if route.route is Route.DIRECT_OUTPUT:
@@ -143,8 +233,7 @@ class Pipeline:
             return PipelineResult(kind="direct_code", answer=answer, route=route)
 
         # TEAM_FLOW：组队（3.3 / 11.0）
-        if models is None:
-            models = ("gpt-4o", "deepseek-chat", "claude-3-5-sonnet")
+        models = self._resolve_models(route, models)
         team = TeamBuilder(self.file_manager, self.settings).build(
             requirement=requirement,
             main_model=models[0],
@@ -155,6 +244,12 @@ class Pipeline:
         )
         # 自动验证模式：绑定项目 code/ 目录（跨模块/_shared 依赖解析）
         self._bind_executor_project(team.project_id)
+        # M8-4：项目目录就绪事件（异步任务据此落盘 task_state.json）
+        _handle = self.file_manager.get_project(team.project_id)
+        self._emit(
+            "project", project_id=team.project_id,
+            project_dir=str(_handle.root) if _handle is not None else "",
+        )
 
         # 11.0 第 0 层总闸：按模式预算创建护栏并挂接到 LLM 客户端。
         # 评估等前置调用的用量计入本任务预算；任务结束（含异常）后卸载。
@@ -167,6 +262,7 @@ class Pipeline:
 
         stage = "方案讨论"
         stage_box: list[str] = [stage]  # 可变引用（_develop_and_deliver 内更新）
+        self._emit("stage", stage=stage)  # M8-4
         module_results: dict = {}
         order: list[str] = []
         try:
@@ -196,6 +292,7 @@ class Pipeline:
 
             # 模块拆分 + 接口契约（3.5 / 12.1 / 12.2）
             stage_box[0] = "模块拆分与接口契约"
+            self._emit("stage", stage=stage_box[0])  # M8-4
             builder = ModuleBuilder(
                 llm=self.llm, main_model=team.main_model,
                 settings=self.settings, file_manager=self.file_manager,
@@ -216,6 +313,7 @@ class Pipeline:
                 interfaces = {}
             order = builder.build_order(plans)
             stage_box[0] = "模块开发"
+            self._emit("stage", stage=stage_box[0])  # M8-4
 
             # 中断恢复（产品审计问题 4）：进入模块开发前落盘恢复快照——
             # 恢复所需的最小充分状态（order / plans / interfaces / 模式 / 模型）
@@ -306,6 +404,12 @@ class Pipeline:
                 project_modules=set(order),
                 user_feedback=user_feedback,
             )
+            # M8-4：单模块完成事件（插件逐模块进度）
+            self._emit(
+                "module_done", module=name,
+                status=module_results[name].status.value,
+                fix_attempts=module_results[name].fix_attempts,
+            )
             # 14 章：每模块完成后阶段提交（含冻结模块——保留现场）
             if git is not None:
                 status = "完成" if module_results[name].status is ModuleStatus.SUCCESS else "冻结"
@@ -324,6 +428,7 @@ class Pipeline:
         if feedback_fn is not None and mode == "safe":
             if stage_box is not None:
                 stage_box[0] = "反馈修复"
+                self._emit("stage", stage=stage_box[0])  # M8-4
             self._feedback_loop(
                 team, dev_loop, plans, interfaces, order,
                 module_results, feedback_fn, git, project_root,
@@ -493,6 +598,8 @@ class Pipeline:
         # 11.0 总闸：中断前已耗 token 从 interruption.md 之后的 call_log
         # 无法恢复，按快照时刻的 guard 用量近似——resume 会话从零起算，
         # 预算覆盖续跑部分（原始预算已在快照任务中部分消耗）。
+        self._resolve_llm()  # M8-1：factory 模式下续跑同样每任务新建
+        self._emit("stage", stage="恢复续跑")  # M8-4
         self._task_baseline = len(getattr(self.llm, "call_log", []))  # 看板切片
         guard = BudgetGuard(
             budget_tokens=team.budget_tokens,
@@ -559,13 +666,17 @@ class Pipeline:
     # ------------------------------------------------------------------
 
     def _bind_executor_project(self, project_id: str) -> None:
-        """自动验证模式：把项目 code/ 目录绑定给 LocalExecutor（依赖解析）。"""
-        from app.execution.local_executor import LocalExecutor
+        """自动验证模式：把项目 code/ 目录绑定给执行器（依赖解析）。
 
-        if isinstance(self.executor, LocalExecutor):
-            handle = self.file_manager.get_project(project_id)
-            if handle is not None:
-                self.executor.project_code_dir = handle.root / "code"
+        M2：LocalExecutor / DockerExecutor 经基类 bind_project_code_dir
+        接收绑定；测试注入的鸭子类型桩无此方法，跳过即可。
+        """
+        bind = getattr(self.executor, "bind_project_code_dir", None)
+        if bind is None:
+            return
+        handle = self.file_manager.get_project(project_id)
+        if handle is not None:
+            bind(handle.root / "code")
 
     def _persist_assessment(self, project_id: str, route, models, mode: str) -> None:
         """6.3：评估结论落盘 sessions/difficulty_assessment.md。"""

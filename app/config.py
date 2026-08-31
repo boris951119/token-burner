@@ -83,6 +83,62 @@ class Settings:
     default_execution_mode: str = "safe"       # MVP 默认安全审阅模式
     sandbox_timeout_seconds: int = 30          # 3.6.3：沙箱 30s 超时熔断（Alpha v0.4）
 
+    # ---- M2 Docker 沙箱（auto 模式可选容器级隔离）----
+    # 缺省 False：auto 模式沿用进程级 LocalExecutor（行为与 v0.3.1 一致）
+    docker_executor_enabled: bool = False
+    docker_image: str = "python:3.11-slim"     # 单 Python 基础镜像（多语言属 M2-5）
+    docker_network_enabled: bool = False       # 缺省无网络（M2-3 安全策略）
+
+    # ---- M2-4 资源配额（容器 CPU/内存/磁盘/进程数）----
+    # 超限由内核直接终止（OOM kill / pids 限制），exit 137 → FAILED 语义；
+    # 配额缺省开启（安全姿态宁严勿松），工厂构造容器执行器时透传
+    docker_mem_limit: str = "512m"             # --memory（--memory-swap 同值禁 swap）
+    docker_cpus: float = 1.0                   # --cpus
+    docker_pids_limit: int = 128               # --pids-limit（防 fork 炸弹）
+    docker_tmpfs_size: str = "64m"             # /tmp 可写上限（唯一可写目录=磁盘配额）
+    docker_node_image: str = "node:20-slim"    # M2-5：Node.js 镜像（TS 支持预热）
+
+    # ---- M3 智能模型路由（三档分层，缺省关闭）----
+    # 路由规则（v0.4.md M3-1）：难度 1-3 全轻量、4-6 主力+轻量混合、7-10 全旗舰；
+    # 档位为空时向上回退（轻量→主力→旗舰）。开启时三档必须都是
+    # models 的子集（确定性校验，尽早失败）。
+    model_routing_enabled: bool = False
+    model_tier_flagship: list[str] = field(
+        default_factory=lambda: ["gpt-4o", "gemini-1.5-pro"]
+    )
+    model_tier_main: list[str] = field(
+        default_factory=lambda: ["claude-3-5-sonnet", "deepseek-chat"]
+    )
+    model_tier_light: list[str] = field(default_factory=list)
+
+    # ---- M4 上下文缓存（M4-1 Embedding 缓存，缺省关闭）----
+    embedding_cache_enabled: bool = False
+    embedding_cache_path: str = ".embedding_cache.db"
+    embedding_cache_ttl_days: int = 7          # 按时间过期（默认 7 天）
+
+    # ---- M4-2 论点库持久化（缺省关闭）----
+    # 跨任务复用论点指纹与向量：新任务遇到历史论点零 embed 成本入库。
+    # 语义决策（评审定版）：**冻结计数不跨任务累计**——预载论点在本任务
+    # 首次复现视为首次入库（计数归零），冻结行为与不预载完全一致，
+    # 规避「跨项目相似论点误冻结」风险；加速只体现在第二道 embedding
+    # 比对（向量直接命中）。隐私注意：库文件含讨论论点文本（opt-in）。
+    loop_library_enabled: bool = False
+    loop_library_path: str = ".loop_arguments.json"
+    loop_library_max_entries: int = 500        # 上限（保留最新）
+
+    # ---- M8-5 全局 LLM 限流器（令牌桶按供应商，缺省关闭）----
+    # 关闭时零行为变化；开启后超限排队而非报错，
+    # 429 退避仍走 9 章重试（两层互补：排队控节奏，重试救失败）
+    llm_rate_limit_enabled: bool = False
+    llm_rate_limit_rps: float = 1.0            # 每供应商令牌回填速率（枚/秒）
+    llm_rate_limit_burst: int = 3              # 桶容量（允许的瞬时并发）
+
+    # ---- M9 双模式意图识别（System-1 快判 / System-2 全量评估）----
+    # 缺省关闭：关闭时路由行为与 v0.3.1 完全一致（M9-2 回归保证）
+    fast_triage_enabled: bool = False
+    fast_triage_model: str = "deepseek-chat"   # 预设列表中的轻量档（与 M3-1 分层对齐）
+    fast_triage_confidence_threshold: float = 0.8  # 低于阈值升级 System-2（宁升勿误）
+
     # ---- 9 章 LLM 调用韧性（超时与瞬态错误重试）----
     llm_timeout_seconds: int = 120             # 单次调用超时（litellm timeout 参数）
     llm_max_retries: int = 3                   # 瞬态错误（超时/429/连接/5xx）重试上限
@@ -128,6 +184,7 @@ class Settings:
             "research_budget_tokens",
             "llm_timeout_seconds",
             "llm_max_retries",
+            "embedding_cache_ttl_days",
         )
         for name in positive_ints:
             value = getattr(self, name)
@@ -138,14 +195,69 @@ class Settings:
             "similarity_threshold",
             "jaccard_threshold",
             "budget_throttle_threshold",
+            "fast_triage_confidence_threshold",
         ):
             value = getattr(self, name)
             if not 0.0 < value <= 1.0:
                 raise ValueError(f"{name} 必须落在 (0, 1] 区间，当前值: {value!r}")
 
+        # M9：快判开启时模型必须在预设列表（调用前确定性校验，尽早失败）
+        if self.fast_triage_enabled and self.fast_triage_model not in self.models:
+            raise ValueError(
+                f"fast_triage_model「{self.fast_triage_model}」不在预设模型列表中: "
+                f"{self.models}"
+            )
+
+        # M3：路由开启时三档必须是预设列表的子集（档位指向未登记模型
+        # 只会在运行时才暴露，提前失败）
+        if self.model_routing_enabled:
+            tiers = (
+                set(self.model_tier_flagship)
+                | set(self.model_tier_main)
+                | set(self.model_tier_light)
+            )
+            unknown = tiers - set(self.models)
+            if unknown:
+                raise ValueError(
+                    f"模型档位包含未登记模型: {sorted(unknown)}"
+                    "（请同步 model_tier_* 与 models 列表）"
+                )
+
         if self.retry_backoff_base < 0:
             raise ValueError(
                 f"retry_backoff_base 必须非负，当前值: {self.retry_backoff_base!r}"
+            )
+
+        # M8-5：限流参数校验（开启才细查；关闭时维持缺省即可）
+        if self.llm_rate_limit_enabled:
+            if self.llm_rate_limit_rps <= 0:
+                raise ValueError(
+                    "llm_rate_limit_rps 必须为正数，当前值: "
+                    f"{self.llm_rate_limit_rps!r}"
+                )
+            if self.llm_rate_limit_burst < 1:
+                raise ValueError(
+                    "llm_rate_limit_burst 必须 >= 1，当前值: "
+                    f"{self.llm_rate_limit_burst!r}"
+                )
+
+        # M2-4：资源配额校验（尽早失败）
+        import re as _re
+
+        for name in ("docker_mem_limit", "docker_tmpfs_size"):
+            value = getattr(self, name)
+            if not _re.fullmatch(r"\d+(b|k|m|g)", str(value).lower()):
+                raise ValueError(
+                    f"{name} 须为 docker 大小格式（如 512m、1g），当前值: {value!r}"
+                )
+        if self.docker_cpus <= 0:
+            raise ValueError(
+                f"docker_cpus 必须为正数，当前值: {self.docker_cpus!r}"
+            )
+        if self.docker_pids_limit < 16:
+            raise ValueError(
+                f"docker_pids_limit 须 >= 16（pytest 自身需要数十进程余量），"
+                f"当前值: {self.docker_pids_limit!r}"
             )
 
         if not 2.0 <= self.auto_mode_budget_multiplier <= 3.0:

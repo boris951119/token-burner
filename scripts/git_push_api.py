@@ -19,6 +19,7 @@ import base64
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.request
@@ -145,13 +146,17 @@ def main() -> int:
     )
     log(f"合并树: {tree['sha'][:12]}")
 
-    # 5. 新提交（单亲 = 远端 main，快进）
+    # 5. 新提交（单亲 = 远端 main，快进）；提交信息取本地 HEAD（保持与本地一致）
+    head_msg = subprocess.run(
+        ["git", "log", "-1", "--format=%B"], cwd=ROOT,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    ).stdout.strip()
     now = time.strftime("%Y-%m-%dT%H:%M:%S+08:00")
     author = {"name": "token-burner", "email": "jarvis@local", "date": now}
     new_commit = api_call(
         "POST", f"/repos/{owner_repo}/git/commits", token,
         {
-            "message": "feat: v0.4 桌面版与 API server（budget/local_executor、17 个新测试、投资人交付物）",
+            "message": head_msg,
             "tree": tree["sha"],
             "parents": [remote_sha],
             "author": author,

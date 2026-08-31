@@ -315,3 +315,102 @@ class TestStaticGate:
         assert result.status == ModuleStatus.FROZEN
         assert result.fix_attempts == 3
         assert executor.runs == []  # 从未到达执行器
+
+
+# ---------------------------------------------------------------------------
+# _shared 标记块文件名归一化（真实运行回归：LLM 常写带路径的标记名）
+# ---------------------------------------------------------------------------
+
+class TestSplitSharedNormalization:
+    def _engine(self, fm: FileManager) -> DevLoopEngine:
+        return make_engine(ScriptedLLM(), FakeExecutor(["SUCCESS"]), fm)
+
+    def _project(self, fm: FileManager):
+        handle = fm.create_project("测试项目")
+        return handle.project_id
+
+    def test_bare_filename_unchanged(self, fm):
+        pid = self._project(fm)
+        engine = self._engine(fm)
+        engine._active_project_id = pid
+        rest = engine._split_shared(
+            "x = 1\n# ==== shared: utils.py ====\ndef helper():\n    pass\n"
+            "# ==== end shared ====\n"
+        )
+        assert "helper" not in rest          # 共享块已剥离
+        shared = fm.read_file(pid, "code/_shared/utils.py")
+        assert shared is not None and "def helper" in shared
+
+    def test_pathed_filename_normalized_to_basename(self, fm):
+        # 真实故障回归：LLM 写「_shared/utils.py」→ 归一为 utils.py
+        pid = self._project(fm)
+        engine = self._engine(fm)
+        engine._active_project_id = pid
+        engine._split_shared(
+            "# ==== shared: _shared/utils.py ====\nA = 1\n# ==== end shared ====\n"
+        )
+        assert fm.read_file(pid, "code/_shared/utils.py") is not None
+        assert not (fm.get_project(pid).root / "code" / "_shared" / "_shared").exists()
+
+    def test_traversal_filename_dropped(self, fm):
+        # 穿越段被 basename 剥离；纯「..」块整体跳过（不落盘、不崩溃）
+        pid = self._project(fm)
+        engine = self._engine(fm)
+        engine._active_project_id = pid
+        rest = engine._split_shared(
+            "# ==== shared: ../../evil.py ====\nEVIL = 1\n# ==== end shared ====\n"
+            "# ==== shared: .. ====\nBAD = 1\n# ==== end shared ====\n"
+        )
+        # "../../evil.py" → basename "evil.py"，写入 _shared/ 内（不逃逸）
+        shared = fm.read_file(pid, "code/_shared/evil.py")
+        assert shared is not None and "EVIL" in shared
+        root = fm.get_project(pid).root
+        assert not (root / "evil.py").exists()          # 项目根不出现逃逸文件
+        assert not (root.parent / "evil.py").exists()   # 项目外亦然
+        assert "BAD" not in rest                        # 「..」归一为空 → 整块跳过
+
+
+# ---------------------------------------------------------------------------
+# 代码输出围栏剥离（真实运行回归：LLM 用 ```python 包裹代码 → 门禁死循环）
+# ---------------------------------------------------------------------------
+
+class TestExtractCode:
+    def test_fenced_code_extracted(self):
+        from app.agents.dev_loop import _extract_code
+        content = "```python\ndef run():\n    return 1\n```\n"
+        assert _extract_code(content) == "def run():\n    return 1\n"
+
+    def test_longest_block_wins(self):
+        from app.agents.dev_loop import _extract_code
+        content = (
+            "说明片段：\n```\nprint('示例')\n```\n\n完整实现：\n"
+            "```python\nMOD = 1\n\ndef run():\n    return MOD\n```\n"
+        )
+        code = _extract_code(content)
+        assert "MOD = 1" in code and "示例" not in code
+
+    def test_unfenced_passthrough(self):
+        from app.agents.dev_loop import _extract_code
+        assert _extract_code("x = 1\n") == "x = 1\n"
+
+    def test_unclosed_fence_takes_rest(self):
+        from app.agents.dev_loop import _extract_code
+        code = _extract_code("```python\nx = 1\ny = 2\n")
+        assert "x = 1" in code and "```" not in code
+
+    def test_write_code_strips_fence_end_to_end(self, fm):
+        # 端到端：写码输出带围栏 + 内嵌 shared 块 → 门禁应通过（语法正确）
+        engine = make_engine(
+            ScriptedLLM([
+                "```python\n# ==== shared: _shared/util.py ====\nX = 1\n"
+                "# ==== end shared ====\n\ndef run():\n    return X\n```",
+                "```python\ndef test_run():\n    assert True\n```",
+            ]),
+            FakeExecutor(["SKIPPED"]), fm,
+        )
+        pid = fm.create_project("围栏回归").project_id
+        result = engine.run_module("fence_mod", project_id=pid, responsibility="r")
+        assert result.status is ModuleStatus.AWAITING_FEEDBACK  # 语法门禁过 → 安全模式待反馈
+        assert result.fix_attempts == 0
+        assert "```" not in result.code
+        assert fm.read_file(pid, "code/_shared/util.py") is not None  # shared 块仍被拆出

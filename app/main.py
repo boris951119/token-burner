@@ -13,9 +13,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from app.config import Settings
-from app.execution.local_executor import LocalExecutor
-from app.execution.safe_executor import SafeExecutor
+from app.config import Settings, load_settings
+from app.execution.factory import build_executor
 from app.pipeline import Pipeline
 from app.tools.file_manager import FileManager
 from app.utils.model_client import ModelClient
@@ -28,11 +27,15 @@ BANNER = """
 """
 
 
-def _build_executor(mode: str) -> SafeExecutor | LocalExecutor:
-    """3.6：按执行模式构造执行器（auto = 危险预扫描 + 本地真实执行）。"""
-    if mode == "auto":
-        return LocalExecutor()
-    return SafeExecutor()
+def _build_rate_limiter(settings: Settings):
+    """M8-5：CLI 进程级全局限流器（关闭时 None，零开销）。"""
+    if not settings.llm_rate_limit_enabled:
+        return None
+    from app.utils.rate_limiter import RateLimiter
+
+    return RateLimiter(
+        settings.llm_rate_limit_rps, settings.llm_rate_limit_burst
+    )
 
 
 def _find_resumable_project(file_manager: FileManager) -> str | None:
@@ -53,11 +56,11 @@ def _find_resumable_project(file_manager: FileManager) -> str | None:
 
 def main() -> None:
     print(BANNER)
-    settings = Settings()
+    settings = load_settings()
 
     projects_root = Path.cwd() / "projects"
     file_manager = FileManager(projects_root=projects_root)
-    llm = ModelClient(settings)
+    llm = ModelClient(settings, rate_limiter=_build_rate_limiter(settings))
 
     # 中断恢复：存在带快照的中断项目时优先征询（已完成模块自动跳过）
     resumable = _find_resumable_project(file_manager)
@@ -78,7 +81,7 @@ def main() -> None:
             except (OSError, ValueError):
                 mode = "safe"
             pipeline = Pipeline(
-                llm=llm, executor=_build_executor(mode),
+                llm=llm, executor=build_executor(mode, settings),
                 settings=settings, file_manager=file_manager,
             )
             try:
@@ -139,7 +142,7 @@ def main() -> None:
         ).strip() or "确认"
 
         pipeline = Pipeline(
-            llm=llm, executor=_build_executor(mode),
+            llm=llm, executor=build_executor(mode, settings),
             settings=settings, file_manager=file_manager,
         )
         print("\n开始团队流程（讨论 → spec → 拆分 → 开发循环 → 反馈闭环）...\n")
@@ -157,7 +160,7 @@ def main() -> None:
         )
     else:
         pipeline = Pipeline(
-            llm=llm, executor=_build_executor("safe"),
+            llm=llm, executor=build_executor("safe", settings),
             settings=settings, file_manager=file_manager,
         )
         result = pipeline.run(requirement, confirmed_as_coding=confirmed, route=route)
@@ -208,7 +211,8 @@ def _print_result(result) -> None:
         print(result.answer)
         print("\n（简单任务已节流，未组建团队——11.6 省 token 模式）")
     elif result.kind == "declined":
-        print("任务未按编程处理（用户否认），流程结束。")
+        # M9-3：快判拒答展示友好文案；用户否认编程的 declined 保持原语义
+        print(result.declined_reply or "任务未按编程处理（用户否认），流程结束。")
     elif result.kind == "needs_confirm":
         print("评估不确定，等待用户确认（本次会话未继续）。")
     elif result.kind == "budget_exceeded":

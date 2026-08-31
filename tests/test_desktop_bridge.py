@@ -32,9 +32,26 @@ class TestBridgeRequest:
         assert r["status"] == 400
         assert "mode" in r["body"]
 
-    def test_post_route_llm_error_maps_503(self, bridge):
-        """LLM 异常 → 503 可读错误（进程存活语义，server 契约保持）。"""
-        r = bridge.request(
+    def test_post_route_llm_error_maps_503(self):
+        """LLM 异常 → 503 可读错误（进程存活语义，server 契约保持）。
+
+        注入必失败的 LLM 桩构造桥——不依赖「未配置密钥」的环境假设
+        （load_settings 会读取真实 .env，裸 create_app 可能真的调通）。
+        """
+        from app.server import create_app
+        from starlette.testclient import TestClient
+
+        class FailingLLM:
+            call_log: list = []
+
+            def chat(self, model, messages, json_mode=False, **kw):
+                raise RuntimeError("LLM 调用失败（测试注入）")
+
+        app = create_app(llm=FailingLLM())
+        b = Bridge.__new__(Bridge)
+        b._client = TestClient(app)
+        b._lock = threading.Lock()
+        r = b.request(
             "POST", "/api/route",
             '{"requirement": "做一个待办事项应用"}')
         assert r["status"] == 503

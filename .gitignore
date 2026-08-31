@@ -32,7 +32,26 @@ verify_out.txt
 # 推送断点续传缓存
 api_blob_cache.json
 
+# 调试与测试运行杂物（B0 清理，防再生成入库）
+_junit.xml
+_pytest_full.txt
+probe_result.txt
+push_verify.txt
+pv.txt
+simple_test.txt
+_final_task.json
+_m85_1.txt
+_m95_check.txt
+
+# Embedding 缓存（M4-1，含 sqlite journal/wal）
+.embedding_cache.db*
+
 # Python 缓存
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# VS Code 插件构建产物（M1）
+vscode-extension/node_modules/
+vscode-extension/out/
+*.vsix

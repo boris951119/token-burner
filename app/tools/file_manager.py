@@ -94,11 +94,16 @@ class FileManager:
         return handle
 
     def get_project(self, project_id: str) -> ProjectHandle | None:
-        """按 project_id 查找已创建项目；不存在返回 None。"""
+        """按 project_id 查找已创建项目；不存在返回 None。
+
+        兼容两种跨进程形态：
+        - sanitized project_id（不含时间戳）→ 按目录名前缀 `{id}_*` 扫描；
+        - 完整目录名（含时间戳，/api/resumable 与 CLI 中断恢复返回此形态）
+          → 精确目录匹配（真实运行回归：前缀扫描对完整名必然 miss）。
+        """
         record = self._records.get(project_id)
         if record is not None:
             return record.handle
-        # 兼容跨进程恢复：按目录名前缀扫描
         if not self.projects_root.is_dir():
             return None
         for entry in self.projects_root.glob(f"{_glob_escape(project_id)}_*"):
@@ -106,6 +111,11 @@ class FileManager:
                 handle = ProjectHandle(project_id=project_id, root=entry)
                 self._records[project_id] = _ProjectRecord(handle)
                 return handle
+        exact = self.projects_root / project_id
+        if exact.is_dir():
+            handle = ProjectHandle(project_id=project_id, root=exact)
+            self._records[project_id] = _ProjectRecord(handle)
+            return handle
         return None
 
     def _require_project(self, project_id: str) -> ProjectHandle:

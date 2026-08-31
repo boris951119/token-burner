@@ -1,0 +1,3 @@
+{
+  "models": ["openai/glm-4-plus", "openai/glm-4-air", "openai/glm-4-flash"]
+}
