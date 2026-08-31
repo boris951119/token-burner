@@ -461,6 +461,75 @@ def create_app(
         out.sort(key=lambda x: x["project_id"], reverse=True)
         return out
 
+    @app.get("/api/projects")
+    def projects() -> list[dict]:
+        """M5-2 历史项目列表（全部 projects/，最新优先，只读聚合）。
+
+        每项：需求摘要（task_state/pipeline_state 回填，缺失时回落目录名）、
+        执行模式、是否可恢复/已中断、已耗 token（logs/cost_report.json）、
+        更新时间（目录 mtime）。损坏的元数据文件跳过对应字段不跳过项目。
+        """
+        fm = app.state.file_manager
+        root = fm.projects_root
+        if not root.is_dir():
+            return []
+        out = []
+        for p in root.iterdir():
+            if not p.is_dir():
+                continue
+            sessions = p / "sessions"
+            requirement, mode, has_state = "", "safe", False
+            task_state = sessions / "task_state.json"
+            if task_state.is_file():
+                try:
+                    meta = json.loads(task_state.read_text(encoding="utf-8"))
+                    requirement = str(meta.get("requirement", ""))
+                    has_state = True
+                except (OSError, ValueError):
+                    pass
+            pipeline_state = sessions / "pipeline_state.json"
+            if pipeline_state.is_file():
+                has_state = True
+                if not requirement:
+                    try:
+                        requirement = str(json.loads(
+                            pipeline_state.read_text(encoding="utf-8"),
+                        ).get("requirement", ""))
+                    except (OSError, ValueError):
+                        pass
+                try:
+                    mode = json.loads(
+                        pipeline_state.read_text(encoding="utf-8")
+                    ).get("mode", "safe")
+                except (OSError, ValueError):
+                    pass
+            tokens = 0
+            report = p / "logs" / "cost_report.json"
+            if report.is_file():
+                try:
+                    tokens = int(json.loads(
+                        report.read_text(encoding="utf-8"),
+                    ).get("total_tokens", 0))
+                except (OSError, ValueError):
+                    pass
+            try:
+                updated = time.strftime(
+                    "%Y-%m-%d %H:%M", time.localtime(p.stat().st_mtime),
+                )
+            except OSError:
+                updated = ""
+            out.append({
+                "project_id": p.name,
+                "requirement": requirement,
+                "mode": mode,
+                "has_state": has_state,
+                "interrupted": (sessions / "interruption.md").is_file(),
+                "tokens": tokens,
+                "updated": updated,
+            })
+        out.sort(key=lambda x: x["updated"], reverse=True)
+        return out
+
     @app.post("/api/resume")
     def resume(req: ResumeRequest) -> dict:
         """续跑中断任务（问题 4：磁盘重建，已完成模块跳过）。"""
