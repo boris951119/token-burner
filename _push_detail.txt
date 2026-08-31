@@ -1,7 +1,0 @@
-push rc=128
-push stdout:
-
-push stderr:
-fatal: unable to access 'https://github.com/boris951119/token-burner.git/': Failed to connect to github.com:443 after 21064 ms: Could not connect to server
-
-remote main=294c40695ea2cc19146ff8f35a986dae4de6f3f9
