@@ -299,3 +299,70 @@ class TestResumable:
         tc, _, _ = client
         r = tc.post("/api/resume", json={"project_id": "nope"})
         assert r.status_code == 404
+
+
+class TestProjects:
+    """M5-2 历史项目列表（GET /api/projects，只读聚合）。"""
+
+    def test_empty_projects_root(self, client):
+        tc, _, _ = client
+        assert tc.get("/api/projects").json() == []
+
+    def test_lists_project_with_metadata(self, client):
+        tc, _, tmp_path = client
+        fm = FileManager(projects_root=tmp_path / "projects")
+        pid = fm.create_project("通讯录管理工具").project_id
+        root = fm.get_project(pid).root
+        (root / "sessions").mkdir(parents=True, exist_ok=True)
+        (root / "logs").mkdir(parents=True, exist_ok=True)
+        (root / "sessions" / "task_state.json").write_text(json.dumps({
+            "task_id": "t1", "requirement": "开发通讯录管理命令行工具",
+        }, ensure_ascii=False), encoding="utf-8")
+        (root / "sessions" / "pipeline_state.json").write_text(json.dumps({
+            "order": ["user"], "mode": "auto",
+        }), encoding="utf-8")
+        (root / "logs" / "cost_report.json").write_text(json.dumps({
+            "total_tokens": 46352,
+        }), encoding="utf-8")
+
+        data = tc.get("/api/projects").json()
+        assert len(data) == 1
+        item = data[0]
+        assert item["project_id"].startswith(pid)
+        assert item["requirement"] == "开发通讯录管理命令行工具"
+        assert item["mode"] == "auto"
+        assert item["tokens"] == 46352
+        assert item["has_state"] is True
+        assert item["interrupted"] is False
+        assert item["updated"]  # mtime 时间串非空
+
+    def test_corrupt_metadata_falls_back_gracefully(self, client):
+        # 元数据损坏 → 字段回落默认，项目条目不消失
+        tc, _, tmp_path = client
+        fm = FileManager(projects_root=tmp_path / "projects")
+        pid = fm.create_project("损坏元数据项目").project_id
+        root = fm.get_project(pid).root
+        (root / "sessions").mkdir(parents=True, exist_ok=True)
+        (root / "sessions" / "task_state.json").write_text("{broken", encoding="utf-8")
+        (root / "sessions" / "pipeline_state.json").write_text("{also", encoding="utf-8")
+
+        data = tc.get("/api/projects").json()
+        assert len(data) == 1
+        item = data[0]
+        assert item["project_id"].startswith(pid)
+        assert item["requirement"] == ""      # 回落（空串，前端显示目录名）
+        assert item["mode"] == "safe"         # 回落缺省
+        assert item["tokens"] == 0
+        assert item["has_state"] is True      # 文件存在即标记（内容损坏不影响）
+
+    def test_interruption_flagged(self, client):
+        tc, _, tmp_path = client
+        fm = FileManager(projects_root=tmp_path / "projects")
+        pid = fm.create_project("被中断的项目").project_id
+        root = fm.get_project(pid).root
+        (root / "sessions").mkdir(parents=True, exist_ok=True)
+        (root / "sessions" / "interruption.md").write_text("中断\n", encoding="utf-8")
+
+        data = tc.get("/api/projects").json()
+        assert len(data) == 1
+        assert data[0]["interrupted"] is True

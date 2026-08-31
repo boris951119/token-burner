@@ -275,17 +275,86 @@
   footer { padding: var(--sp-2) var(--sp-5); border-top: 1px solid var(--border);
     font-size: var(--fs-xs); color: var(--muted); text-align: center; flex-shrink: 0;
     background: var(--panel); }
+
+  /* =================================================================
+   * 组件：视图切换 Tab（M5-2 工作台 / 项目库）
+   * ================================================================= */
+  .tabs { display: flex; gap: 2px; margin-left: var(--sp-4); }
+  .tab {
+    padding: 5px 14px; font-size: var(--fs-md); font-weight: 500;
+    color: var(--muted); background: transparent; border: none;
+    border-radius: var(--r-md); cursor: pointer; font-family: inherit;
+    white-space: nowrap;
+  }
+  .tab:hover:not(.active) { color: var(--text); background: var(--panel-2); }
+  .tab.active { color: var(--text); background: var(--panel-2);
+    box-shadow: inset 0 0 0 1px var(--border); }
+
+  /* =================================================================
+   * 组件：快速模板卡（M5-2）
+   * ================================================================= */
+  .tpls { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; }
+  .tpl {
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: var(--r-md); padding: var(--sp-3); cursor: pointer;
+    text-align: left; font-family: inherit; color: var(--text);
+    transition: border-color var(--transition), background var(--transition);
+  }
+  .tpl:hover { border-color: var(--accent); background: var(--accent-soft); }
+  .tpl .name { font-weight: 600; font-size: var(--fs-md); margin-bottom: 4px; }
+  .tpl .desc { font-size: var(--fs-xs); color: var(--muted); line-height: 1.5; }
+
+  /* =================================================================
+   * 组件：历史项目条目（M5-2）
+   * ================================================================= */
+  .proj {
+    display: flex; align-items: center; gap: var(--sp-3);
+    background: var(--panel-2); border: 1px solid var(--border);
+    border-radius: var(--r-md); padding: var(--sp-3) var(--sp-4);
+  }
+  .proj .info { flex: 1; min-width: 0; }
+  .proj .name { font-weight: 600; font-size: var(--fs-md); margin-bottom: 3px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .proj .meta { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    font-size: var(--fs-xs); color: var(--muted); }
+  .proj .ops { display: flex; gap: 8px; flex-shrink: 0; }
+
+  /* =================================================================
+   * 组件：实时日志区（M5-3，等宽终端风）
+   * ================================================================= */
+  .logbox {
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: var(--r-md); padding: var(--sp-2) var(--sp-3);
+    max-height: 180px; overflow-y: auto;
+    font-family: var(--font-mono); font-size: var(--fs-xs); line-height: 1.8;
+    margin-top: 10px;
+  }
+  .logbox .ln { color: var(--text-2); white-space: pre-wrap; word-break: break-all; }
+  .logbox .ln .ts { color: var(--muted); margin-right: 8px; }
+  .logbox .ln.stage { color: var(--accent); }
+  .logbox .ln.ok { color: var(--ok); }
+  .logbox .ln.bad { color: var(--bad); }
+
+  /* =================================================================
+   * 组件：空状态
+   * ================================================================= */
+  .empty { padding: var(--sp-5) var(--sp-4); text-align: center;
+    color: var(--muted); font-size: var(--fs-sm); line-height: 1.8; }
 </style>
 </head>
 <body>
 
 <header>
   <div class="logo">token<span>-</span>burner</div>
+  <nav class="tabs">
+    <button class="tab active" id="tab-work">🔥 工作台</button>
+    <button class="tab" id="tab-projects">📁 项目库</button>
+  </nav>
   <div class="tag">文档消耗器 · AI 多智能体项目团队系统 · 规格 v0.3.1</div>
   <div class="conn demo" id="conn">● 演示模式</div>
 </header>
 
-<main>
+<main id="main-work">
 
   <!-- 左：需求描述 + 点火 -->
   <section class="card left">
@@ -345,6 +414,7 @@
         <div class="sub hidden" id="sec-run">
           <h4>执行进度</h4>
           <div class="timeline" id="timeline"></div>
+          <div class="logbox hidden" id="logbox"></div>
         </div>
 
         <!-- 模块 -->
@@ -416,6 +486,25 @@
     </section>
 
   </div>
+</main>
+
+<!-- 项目库视图（M5-2：新建 + 快速模板 + 历史项目） -->
+<main id="main-projects" class="hidden">
+  <section class="card" style="grid-column: 1 / -1; gap: 14px;">
+    <h3>项目库</h3>
+
+    <!-- 快速模板 -->
+    <div class="sub">
+      <h4>快速开始（点击模板填入需求）</h4>
+      <div class="tpls" id="tpl-rows"></div>
+    </div>
+
+    <!-- 历史项目 -->
+    <div class="sub" style="display:flex; flex-direction:column; gap:10px;">
+      <h4>历史项目 <button class="btn-ghost btn-sm" id="btn-refresh-projs" style="margin-left:auto;">刷新</button></h4>
+      <div id="proj-rows" style="display:flex; flex-direction:column; gap:10px;"></div>
+    </div>
+  </section>
 </main>
 
 <!-- 添加 API 弹窗 -->
@@ -712,9 +801,12 @@ $("btn-confirm").addEventListener("click", async () => {
 
   if (LIVE) {
     const btn = $("btn-confirm");
-    btn.disabled = true; btn.textContent = "⏳ 执行中（真实任务可能数分钟）…";
+    btn.disabled = true; btn.textContent = "⏳ 任务已提交，执行中…";
     try {
-      const data = await api("/api/run", {
+      /* M5-3：live 执行切异步任务 API（M8-3/8-4）——
+         提交立即返回 task_id，SSE 实时驱动时间线/日志/token */
+      const created = await api("/api/tasks", {
+        kind: "run",
         requirement: $("requirement").value.trim(),
         models: m,
         mode: $("mode").value,
@@ -722,9 +814,13 @@ $("btn-confirm").addEventListener("click", async () => {
         confirmed_as_coding: true,
         route: window._route || null,
       });
-      renderLiveResult(data);
-    } catch (e) { alert("执行失败：" + e.message); }
-    btn.disabled = false; btn.textContent = "确认组队，开始讨论";
+      runAsyncTask(created.task_id, () => {
+        btn.disabled = false; btn.textContent = "确认组队，开始讨论";
+      });
+    } catch (e) {
+      alert("任务提交失败：" + e.message);
+      btn.disabled = false; btn.textContent = "确认组队，开始讨论";
+    }
     return;
   }
 
@@ -734,19 +830,130 @@ $("btn-confirm").addEventListener("click", async () => {
   show("sec-spec");
 });
 
+/* ---- M5-3：异步任务执行（SSE 事件驱动 UI） ---- */
+function logLine(text, cls) {
+  const box = $("logbox");
+  const ts = new Date().toTimeString().slice(0, 8);
+  const ln = document.createElement("div");
+  ln.className = "ln" + (cls ? " " + cls : "");
+  ln.innerHTML = `<span class="ts">${ts}</span>${escapeHtml(text)}`;
+  box.appendChild(ln);
+  box.scrollTop = box.scrollHeight;
+}
+
+function runAsyncTask(taskId, onSettled) {
+  show("sec-run");
+  $("logbox").classList.remove("hidden");
+  $("logbox").innerHTML = "";
+  logLine(`任务已提交：${taskId}`, "stage");
+
+  let lastStep = null;   // 当前 active step（下一阶段到来时标 done）
+  const markStage = (stage) => {
+    if (lastStep) lastStep.className = "step done";
+    const tl = $("timeline");
+    const step = document.createElement("div");
+    step.className = "step active";
+    step.innerHTML = `<div class="t">${escapeHtml(stage)} <span class="spin">◌</span></div>`;
+    tl.appendChild(step);
+    lastStep = step;
+    tl.scrollTop = tl.scrollHeight;
+    logLine(`阶段：${stage}`, "stage");
+  };
+  const onEvent = (e) => {
+    if (e.type === "snapshot") {
+      if (e.task && e.task.stage) logLine(`阶段：${e.task.stage}`);
+      return;
+    }
+    if (e.type === "status") {
+      logLine(`状态：${e.status}`);
+      return;
+    }
+    if (e.type === "stage") { markStage(e.stage); return; }
+    if (e.type === "project") {
+      currentProject = e.project_id || null;
+      logLine(`项目就绪：${e.project_id}`, "ok");
+      return;
+    }
+    if (e.type === "tokens") {
+      $("c-used").textContent = (e.tokens || 0).toLocaleString();
+      logLine(`累计 token：${(e.tokens || 0).toLocaleString()}${e.model ? "（" + e.model + "）" : ""}`);
+      return;
+    }
+    if (e.type === "module_done") {
+      logLine(`模块完成：${e.module || e.name || ""}`, "ok");
+      return;
+    }
+    if (e.type === "done") {
+      if (lastStep) lastStep.className = "step done";
+      if (e.status === "succeeded") {
+        logLine("执行完成", "ok");
+        renderLiveResult(e.result || {});
+      } else {
+        logLine(`执行失败：${e.error || "未知错误"}`, "bad");
+        alert("任务执行失败：" + (e.error || "未知错误"));
+      }
+      if (onSettled) onSettled();
+    }
+  };
+
+  if (!inDesktop()) {
+    /* 浏览器模式：SSE 实时事件流（M8-4） */
+    const es = new EventSource(`/api/tasks/${taskId}/events`);
+    es.onmessage = (ev) => {
+      let e;
+      try { e = JSON.parse(ev.data); } catch { return; }
+      if (e.type === "done") es.close();
+      onEvent(e);
+    };
+    es.onerror = () => { es.close(); if (onSettled) onSettled(); };
+    return;
+  }
+
+  /* 桌面模式：pywebview 桥无 socket，SSE 不可用 → 轮询兜底（M8-3） */
+  let lastStage = "";   // 幂等：轮询 2s 一次，阶段不变不重复追加
+  const poll = async () => {
+    try {
+      const t = await apiGet(`/api/tasks/${taskId}`);
+      if (t.stage && t.stage !== lastStage) {
+        lastStage = t.stage;
+        markStage(t.stage);
+      }
+      if (t.tokens_used) {
+        $("c-used").textContent = t.tokens_used.toLocaleString();
+      }
+      if (t.status === "succeeded" || t.status === "failed") {
+        onEvent({
+          type: "done", status: t.status,
+          error: t.error, result: t.result,
+        });
+        return;
+      }
+      setTimeout(poll, 2000);
+    } catch {
+      if (onSettled) onSettled();   // 查询异常（服务重启等）：交还按钮
+    }
+  };
+  poll();
+}
+
 async function runStages() {
   const tl = $("timeline");
   tl.innerHTML = "";
+  $("logbox").classList.remove("hidden");
+  $("logbox").innerHTML = "";
+  logLine("演示剧本开始（未连接后端）", "stage");
   for (const [title, desc] of DEMO.stages) {
     const el = document.createElement("div");
     el.className = "step active";
     el.innerHTML = `<div class="t">${title} <span class="spin">◌</span></div><div class="d">${desc}</div>`;
     tl.appendChild(el);
+    logLine(`阶段：${title}`, "stage");
     await sleep(700 + Math.random() * 500);
     el.className = "step done";
     el.querySelector(".t").textContent = title;
     if (title === "模块开发") { renderModules(); show("mod-area"); }
   }
+  logLine("演示剧本结束", "ok");
 }
 
 function renderModules() {
@@ -902,6 +1109,126 @@ $("btn-resume").addEventListener("click", async () => {
     renderLiveResult(data);
   } catch (e) { alert("恢复失败：" + e.message); }
 });
+
+/* =====================================================================
+ * M5-2 视图切换（工作台 / 项目库）
+ * ===================================================================== */
+function switchView(name) {
+  const work = name === "work";
+  $("tab-work").classList.toggle("active", work);
+  $("tab-projects").classList.toggle("active", !work);
+  $("main-work").classList.toggle("hidden", !work);
+  $("main-projects").classList.toggle("hidden", work);
+  if (!work) loadProjects();
+}
+$("tab-work").addEventListener("click", () => switchView("work"));
+$("tab-projects").addEventListener("click", () => switchView("projects"));
+$("btn-refresh-projs").addEventListener("click", loadProjects);
+
+/* =====================================================================
+ * M5-2 快速模板（点击填入需求并切回工作台）
+ * ===================================================================== */
+const TEMPLATES = [
+  { name: "📋 待办事项 CLI", desc: "增删改查 + JSON 持久化 + 优先级排序",
+    text: "开发一个待办事项管理命令行工具 todo-cli：支持任务的增删改查、按优先级排序展示，数据持久化到本地 JSON 文件，附完整单元测试" },
+  { name: "🔐 用户认证系统", desc: "注册/登录 + 双因素认证 + 权限校验",
+    text: "开发一个双因素认证的用户管理系统：支持用户注册、登录、双因素认证（TOTP）、角色权限校验，数据持久化，附完整单元测试" },
+  { name: "📝 Markdown 笔记 API", desc: "REST API + 全文搜索 + 标签分类",
+    text: "开发一个 Markdown 笔记服务 REST API：支持笔记的创建/编辑/删除、全文搜索、标签分类，使用 SQLite 存储，附完整单元测试" },
+  { name: "📖 通讯录管理工具", desc: "联系人增删改查 + 模糊搜索 + 导出",
+    text: "开发一个通讯录管理命令行工具 contacts-cli：支持联系人增删改查、按姓名模糊搜索，联系人含姓名/电话/邮箱字段，数据持久化到 JSON 文件，附完整单元测试" },
+];
+
+function renderTemplates() {
+  $("tpl-rows").innerHTML = TEMPLATES.map((t, i) => `
+    <button class="tpl" data-tpl="${i}">
+      <div class="name">${t.name}</div>
+      <div class="desc">${t.desc}</div>
+    </button>`).join("");
+  $("tpl-rows").querySelectorAll("[data-tpl]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      $("requirement").value = TEMPLATES[Number(btn.dataset.tpl)].text;
+      switchView("work");
+      $("requirement").focus();
+    });
+  });
+}
+renderTemplates();
+
+/* =====================================================================
+ * M5-2 历史项目列表（GET /api/projects）
+ * ===================================================================== */
+async function loadProjects() {
+  const box = $("proj-rows");
+  if (!LIVE) {
+    box.innerHTML = `<div class="empty">未连接后端 —— 启动 <b>python -m app.server</b> 后可查看历史项目与快速模板续跑。</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="empty">加载中…</div>`;
+  let list;
+  try {
+    list = await apiGet("/api/projects");
+  } catch (e) {
+    box.innerHTML = `<div class="empty">加载失败：${escapeHtml(e.message)}</div>`;
+    return;
+  }
+  if (!list.length) {
+    box.innerHTML = `<div class="empty">还没有项目 —— 回到工作台点火第一个任务，或用上方模板快速开始。</div>`;
+    return;
+  }
+  box.innerHTML = "";
+  for (const p of list) {
+    const title = p.requirement || p.project_id;
+    const el = document.createElement("div");
+    el.className = "proj";
+    el.innerHTML = `
+      <div class="info">
+        <div class="name" title="${escapeHtml(p.project_id)}">${escapeHtml(title)}</div>
+        <div class="meta">
+          <span class="badge ${p.mode === "auto" ? "running" : "success"}">${p.mode === "auto" ? "自动验证" : "安全模式"}</span>
+          ${p.interrupted ? '<span class="badge frozen">已中断</span>' : ""}
+          <span>${(p.tokens || 0).toLocaleString()} token</span>
+          ${p.updated ? `<span>${p.updated}</span>` : ""}
+        </div>
+      </div>
+      <div class="ops">
+        ${p.has_state ? '<button class="btn btn-sm" data-resume="1">▶ 继续</button>' : ""}
+        ${p.tokens ? '<button class="btn-ghost btn-sm" data-cost="1">成本</button>' : ""}
+      </div>`;
+    el.querySelector("[data-resume]")?.addEventListener("click", async () => {
+      try {
+        const data = await api("/api/resume", { project_id: p.project_id });
+        switchView("work");
+        renderLiveResult(data);
+      } catch (e) { alert("恢复失败：" + e.message); }
+    });
+    el.querySelector("[data-cost]")?.addEventListener("click", async () => {
+      try {
+        const dash = await apiGet(`/api/project/${p.project_id}/dashboard`);
+        $("c-budget").textContent = (dash.budget_tokens || 0).toLocaleString();
+        $("c-used").textContent = (dash.total_tokens || 0).toLocaleString();
+        const ratio = Math.round((dash.total_tokens || 0) / (dash.budget_tokens || 1) * 100);
+        $("c-ratio").textContent = ratio + "%";
+        $("c-bar").style.width = Math.min(100, ratio) + "%";
+        $("c-rows").innerHTML = Object.entries(dash.by_model || {}).map(([mo, tok]) =>
+          `<tr><td>${escapeHtml(mo)}</td><td>—</td><td class="num">—</td><td class="num">—</td><td class="num"><b>${Number(tok).toLocaleString()}</b></td></tr>`).join("");
+        const sav = dash.savings;
+        if (sav && sav.saved_tokens > 0) {
+          $("c-saved").textContent = sav.saved_tokens.toLocaleString();
+          $("c-saver").textContent = Math.round(sav.saved_ratio * 100) + "%";
+          $("c-hitr").textContent = Math.round(sav.cache_hit_rate * 100) + "%";
+          show("c-savings");
+        } else {
+          hide("c-savings");
+        }
+        currentProject = p.project_id;
+        switchView("work");
+        show("sec-cost");
+      } catch (e) { alert("看板加载失败：" + e.message); }
+    });
+    box.appendChild(el);
+  }
+}
 </script>
 </body>
 </html>
