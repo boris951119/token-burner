@@ -20,6 +20,8 @@ from app.config import Settings
 from app.tools.prompt_templates import (
     CONVERGE_SPEC_SYSTEM,
     CONVERGE_SPEC_USER,
+    FAST_TRIAGE_SYSTEM,
+    FAST_TRIAGE_USER,
     INITIAL_PROPOSAL_SYSTEM,
     INITIAL_PROPOSAL_USER,
     REVIEW_PROPOSAL_SYSTEM,
@@ -38,11 +40,15 @@ from app.tools.prompt_templates import (
 )
 from app.utils.parse import parse_json
 from app.utils.similarity import LoopDetector
+from app.utils.untrusted import sanitize_untrusted
 
 if TYPE_CHECKING:
     from app.tools.file_manager import FileManager
 
 VALID_TASK_TYPES = ("基础", "研究/分析", "编程")
+
+# M9-1：快判意图五值域（System-1 契约冻结）；System-2 三值域不变
+FAST_TRIAGE_INTENTS = ("编程", "研究/分析", "基础", "闲聊", "无意义")
 
 
 def _sanitize_files(value: Any) -> int:
@@ -63,6 +69,7 @@ class Route(Enum):
     DIRECT_OUTPUT = "direct_output"                # 基础/研究·分析：主 LLM 直出
     DIRECT_SIMPLE_CODING = "direct_simple_coding"  # 简单编程节流：主 LLM 直出
     TEAM_FLOW = "team_flow"                        # 编程任务：完整团队流程
+    DECLINED = "declined"                          # M9：快判高置信闲聊/无意义 → 真实意图出口
 
 
 @dataclass
@@ -82,20 +89,87 @@ class RoutingResult:
     suggest_review: bool = False   # 研究·分析 难度 ≥8：可选用一次评审确认
 
 
+@dataclass
+class TriageResult:
+    """System-1 快判结论（M9-1 契约：{intent, confidence, reason}）。"""
+
+    intent: str
+    confidence: float
+    reason: str
+
+
+class FastTriage:
+    """System-1 快判器（M9-2）：轻量模型快速意图分类，只承接最便宜的出口。
+
+    契约冻结（M9-1）：{intent, confidence, reason} JSON；intent 五值域、
+    confidence ∈ [0,1]。失败方向单一（M9 设计决策）：解析失败 / 取值
+    非法 / 调用异常一律由 TaskRouter 静默降级 System-2，不新增失败模式。
+    """
+
+    def __init__(self, llm: Any, settings: Settings):
+        self.llm = llm
+        self.settings = settings
+
+    def classify(self, requirement: str) -> TriageResult | None:
+        """单次快判（不做重试——快判贵在便宜，失败直接升级 System-2）。"""
+        response = self.llm.chat(
+            self.settings.fast_triage_model,
+            [
+                {"role": "system", "content": FAST_TRIAGE_SYSTEM},
+                {"role": "user", "content": FAST_TRIAGE_USER.format(
+                    # M7-6：需求文本不可信，注入提示词前包裹数据边界
+                    requirement=sanitize_untrusted(requirement)
+                )},
+            ],
+            json_mode=True,
+        )
+        value, _detail = parse_json(response.content, location="fast_triage")
+        return self._validate(value)
+
+    @staticmethod
+    def _validate(value: Any) -> TriageResult | None:
+        """契约校验（确定性程序职责，总则 D.1）：非法值视同解析失败。"""
+        if not isinstance(value, dict):
+            return None
+        intent = value.get("intent")
+        confidence = value.get("confidence")
+        if intent not in FAST_TRIAGE_INTENTS:
+            return None
+        if (
+            not isinstance(confidence, (int, float))
+            or isinstance(confidence, bool)
+            or not 0.0 <= confidence <= 1.0
+        ):
+            return None
+        return TriageResult(
+            intent=intent,
+            confidence=float(confidence),
+            reason=str(value.get("reason", "")),
+        )
+
+
 class TaskRouter:
     """需求评估与三分类路由（3.2 节）。
 
     决策归属（总则 D.1）：
-    - 大模型：难度评估、任务类型判定；
-    - 程序：JSON 结构与取值域校验、路由分发、边界信号检测与复核触发。
+    - 大模型：意图快判（M9）、难度评估、任务类型判定；
+    - 程序：JSON 结构与取值域校验、路由分发、快→慢升级规则、
+      边界信号检测与复核触发。
     """
 
     def __init__(self, llm: Any, main_model: str, settings: Settings):
         self.llm = llm
         self.main_model = main_model
         self.settings = settings
+        self._triage = FastTriage(llm, settings)
 
     def route(self, requirement: str) -> RoutingResult:
+        # M9-2：System-1 快判前置（fast_triage_enabled 开启时）；
+        # 未开启 / 升级规则命中 / 快判失败 → 既有 System-2 全量评估
+        fast = self._fast_route(requirement)
+        if fast is not None:
+            return fast
+
         assessment = self._assess(requirement)
 
         if assessment is None:
@@ -123,6 +197,53 @@ class TaskRouter:
             rechecked = False
 
         return self._dispatch(task_type, score, assessment, rechecked)
+
+    # ------------------------------------------------------------------
+    # M9-2：System-1 快判 → 确定性升级/承接规则
+    # ------------------------------------------------------------------
+
+    def _fast_route(self, requirement: str) -> RoutingResult | None:
+        """快判承接判定（程序确定性规则，宁升勿误）。
+
+        返回 None → 升级 System-2 全量评估，情形：
+        - 快判未开启 / 解析失败 / 调用异常（失败方向单一）；
+        - 意图为编程 / 研究·分析（System-2 需要 difficulty_score 与
+          estimated_files 做模块化判定与团队组建，快判不提供这些字段）；
+        - 需求命中执行类边界信号（D.1 边界护栏优先于快判结论）；
+        - 置信度低于阈值（M9：宁升级勿误判）。
+        """
+        if not self.settings.fast_triage_enabled:
+            return None
+        try:
+            triage = self._triage.classify(requirement)
+        except (RuntimeError, ValueError):
+            # LLM 调用失败（超时/限流/密钥缺失/模型未登记）→ 静默降级
+            # System-2；编程类错误不捕获，照常暴露
+            return None
+        if triage is None:
+            return None
+        if triage.intent in ("编程", "研究/分析"):
+            return None
+        if _EXECUTION_SIGNAL_PATTERN.search(requirement):
+            return None
+        if triage.confidence < self.settings.fast_triage_confidence_threshold:
+            return None
+        if triage.intent in ("闲聊", "无意义"):
+            return RoutingResult(
+                route=Route.DECLINED,
+                task_type=triage.intent,
+                difficulty_score=0,
+                difficulty_level="未知",
+                reason=f"[快判] {triage.reason}",
+            )
+        # 高置信「基础」→ 直答（System-1 承接，不进完整评估）
+        return RoutingResult(
+            route=Route.DIRECT_OUTPUT,
+            task_type="基础",
+            difficulty_score=0,
+            difficulty_level="未知",
+            reason=f"[快判] {triage.reason}",
+        )
 
     # ------------------------------------------------------------------
 
@@ -163,9 +284,11 @@ class TaskRouter:
     # ------------------------------------------------------------------
 
     def _assess(self, requirement: str) -> dict | None:
+        # M7-6：需求文本是不可信输入，注入提示词前包裹数据边界
+        wrapped = sanitize_untrusted(requirement)
         messages = [
             {"role": "system", "content": TASK_ASSESSMENT_SYSTEM},
-            {"role": "user", "content": TASK_ASSESSMENT_USER.format(requirement=requirement)},
+            {"role": "user", "content": TASK_ASSESSMENT_USER.format(requirement=wrapped)},
         ]
         strict_messages = [
             {
@@ -201,7 +324,7 @@ class TaskRouter:
             {
                 "role": "user",
                 "content": TASK_ASSESSMENT_RECHECK_USER.format(
-                    requirement=requirement
+                    requirement=sanitize_untrusted(requirement)
                 ),
             },
         ]
@@ -406,7 +529,13 @@ class DiscussionEngine:
         self.file_manager = file_manager
         self.project_id = project_id
         self.budget_guard = budget_guard  # 11.0 总闸（省 token 模式判定）
-        self._detector = LoopDetector(settings)
+        # M4-2：论点库持久化（opt-in，跨任务复用论点向量；冻结计数不跨任务）
+        self._detector = LoopDetector(
+            settings,
+            library_path=(
+                settings.loop_library_path if settings.loop_library_enabled else None
+            ),
+        )
         self._wire_embedder()  # 11.3：第二道 embedding 检测接线
         # 11.5 确认环节状态
         self._confirm_feedbacks: list[str] = []
@@ -433,11 +562,14 @@ class DiscussionEngine:
     def run_discussion(self, requirement: str, project_id: str | None = None) -> DiscussionOutcome:
         """执行完整方案讨论，产出收敛的 spec.md。"""
         pid = project_id or self.project_id
+        # M7-6：需求文本不可信，进入提示词前包裹数据边界
         proposal = self._chat(
             self.main_model,
             [
                 {"role": "system", "content": INITIAL_PROPOSAL_SYSTEM},
-                {"role": "user", "content": INITIAL_PROPOSAL_USER.format(requirement=requirement)},
+                {"role": "user", "content": INITIAL_PROPOSAL_USER.format(
+                    requirement=sanitize_untrusted(requirement)
+                )},
             ],
         )
         history: list[str] = [f"[初始方案]\n{proposal}"]
@@ -492,7 +624,10 @@ class DiscussionEngine:
                 [
                     {"role": "system", "content": REVISE_PROPOSAL_SYSTEM},
                     {"role": "user", "content": REVISE_PROPOSAL_USER.format(
-                        proposal=proposal, dev_review=dev_review, test_review=test_review
+                        proposal=proposal,
+                        # M7-6：评审意见内嵌需求文本（可能含注入指令），包裹边界
+                        dev_review=sanitize_untrusted(dev_review),
+                        test_review=sanitize_untrusted(test_review),
                     )},
                 ],
             )
@@ -504,7 +639,9 @@ class DiscussionEngine:
             [
                 {"role": "system", "content": CONVERGE_SPEC_SYSTEM},
                 {"role": "user", "content": CONVERGE_SPEC_USER.format(
-                    requirement=requirement, history="\n\n".join(history)
+                    requirement=sanitize_untrusted(requirement),
+                    # M7-6：历轮方案与评审均派生自需求文本，整块包裹
+                    history=sanitize_untrusted("\n\n".join(history)),
                 )},
             ],
         )
@@ -543,9 +680,10 @@ class DiscussionEngine:
                     {"role": "system", "content": SPEC_CONFIRM_FINAL_MERGE_SYSTEM},
                     {"role": "user", "content": SPEC_CONFIRM_FINAL_MERGE_USER.format(
                         spec=outcome.spec_md,
-                        feedback_history="\n".join(
+                        # M7-6：用户修改意见不可信，包裹数据边界
+                        feedback_history=sanitize_untrusted("\n".join(
                             f"{i + 1}. {fb}" for i, fb in enumerate(self._confirm_feedbacks)
-                        ),
+                        )),
                     )},
                 ],
             )
@@ -557,7 +695,9 @@ class DiscussionEngine:
             [
                 {"role": "system", "content": SPEC_CONFIRM_REVISE_SYSTEM},
                 {"role": "user", "content": SPEC_CONFIRM_REVISE_USER.format(
-                    spec=outcome.spec_md, feedback=user_reply
+                    spec=outcome.spec_md,
+                    # M7-6：用户修改意见不可信，包裹数据边界
+                    feedback=sanitize_untrusted(user_reply),
                 )},
             ],
         )
@@ -574,7 +714,8 @@ class DiscussionEngine:
             [
                 {"role": "system", "content": REVIEW_PROPOSAL_SYSTEM.format(role=role, focus=focus)},
                 {"role": "user", "content": REVIEW_PROPOSAL_USER.format(
-                    requirement=requirement, proposal=proposal
+                    # M7-6：需求文本不可信，包裹数据边界
+                    requirement=sanitize_untrusted(requirement), proposal=proposal
                 )},
             ],
             json_mode=True,
@@ -617,3 +758,82 @@ def _no_issues(review_text: str) -> bool:
     if not isinstance(data, dict):
         return False
     return not data.get("weaknesses") and not data.get("risks")
+
+
+# ---------------------------------------------------------------------------
+# M3 智能模型路由（三档分层：旗舰 / 主力 / 轻量）
+# ---------------------------------------------------------------------------
+
+def route_models(
+    difficulty_score: int, settings: Settings
+) -> tuple[str, str, str]:
+    """按难度分为三个角色选模型（确定性规则，程序职责；总则 D.1）。
+
+    路由规则（v0.4.md M3-1）：
+    - 难度 1-3 → 全轻量；4-6 → 主力+轻量混合（主 LLM 主力档、副评审轻量档）；
+      7-10 → 全旗舰；
+    - 档位为空或候选已被占用时按 轻量→主力→旗舰 方向回退，
+      始终保证三模型互异且均在 settings.models（3.3 校验不变）；
+    - 保守策略：宁可多花一点 token 也不明显降低质量（质量底线 v0.3.1）。
+    """
+    models = list(settings.models)
+    flagship = [m for m in settings.model_tier_flagship if m in models]
+    main = [m for m in settings.model_tier_main if m in models]
+    light = [m for m in settings.model_tier_light if m in models]
+
+    if difficulty_score >= 7:
+        # 全旗舰；旗舰候选不足时向下回退（质量优先：先主力后轻量）
+        prefs = (
+            [flagship, main, light],
+            [flagship, main, light],
+            [flagship, main, light],
+        )
+    elif difficulty_score >= 4:
+        # 主力+轻量混合：主 LLM 主力档，副 LLM 评审轻量档（评审不需要最强）
+        prefs = (
+            [main, flagship, light],
+            [light, main, flagship],
+            [light, main, flagship],
+        )
+    else:
+        # 1-3：全轻量（仅在 simple_threshold 调高后可达；缺省 ≤3 走节流直出）
+        prefs = (
+            [light, main, flagship],
+            [light, main, flagship],
+            [light, main, flagship],
+        )
+
+    chosen: list[str] = []
+    result: list[str] = []
+    for role_prefs in prefs:
+        pick = None
+        for tier in role_prefs:
+            pick = next((m for m in tier if m not in chosen), None)
+            if pick is not None:
+                break
+        if pick is None:
+            # 三档全空/全占用：任意未占用预设兜底（互异优先）
+            pick = next((m for m in models if m not in chosen), models[0])
+        chosen.append(pick)
+        result.append(pick)
+    return result[0], result[1], result[2]
+
+
+def assessment_model(settings: Settings) -> str:
+    """System-2 评估/复核调用选模（M9-5：固定降档主力档，确定性程序职责）。
+
+    评估是轻量分类任务（输出 8.1 JSON 结构），旗舰档收益有限——固定降档：
+    1. 主力档（model_tier_main ∩ models）第一个可用 → 用之；
+    2. 主力档为空 → models[1]（预设列表第二顺位，缺省配置即主力语义）；
+    3. 仅一个模型 → models[0]（不降无可降）。
+
+    方案讨论/团队协作等重决策仍用旗舰（TeamBuilder 不受影响）；
+    复核（_recheck）与评估共用 TaskRouter.main_model，自动跟随降档。
+    """
+    models = list(settings.models)
+    if len(models) <= 1:
+        return models[0]
+    main_tier = [m for m in settings.model_tier_main if m in models]
+    if main_tier:
+        return main_tier[0]
+    return models[1]

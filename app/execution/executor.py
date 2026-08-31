@@ -2,7 +2,8 @@
 
 统一接口：run(code, tests, timeout) -> ExecutionResult
 - 安全审阅模式实现见 safe_executor.py（MVP）；
-- 自动验证模式（本地 Docker 沙箱）见 sandbox_executor.py（Alpha v0.4 预留）；
+- 自动验证模式（本地进程）见 local_executor.py（Alpha v0.4）；
+- 自动验证模式（Docker 容器）见 docker_executor.py（Alpha v0.4，M2）；
 - 透明性原则：Dev / Test Agent 无需感知当前模式，仅依赖 ExecutionResult
   驱动后续流程（3.6.2）。
 """
@@ -12,6 +13,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 
@@ -44,6 +46,14 @@ class ExecutionResult:
 
 class Executor(ABC):
     """执行器抽象接口：对上层 Agent 屏蔽安全 / 自动模式差异。"""
+
+    # 自动验证模式：项目 code/ 目录（跨模块/_shared 依赖解析）；
+    # 安全模式不用，保持接口一致
+    project_code_dir: Path | None = None
+
+    def bind_project_code_dir(self, path: Path | str) -> None:
+        """M2：绑定项目 code/ 目录（Pipeline 在任务级调用）。"""
+        self.project_code_dir = Path(path)
 
     @abstractmethod
     def run(

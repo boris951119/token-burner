@@ -131,17 +131,27 @@ class ModelClient:
         budget_guard: BudgetGuard | None = None,
         embedding_fn: EmbeddingFn | None = None,
         sleep_fn: Callable[[float], None] | None = None,
+        embedding_cache: Any | None = None,
+        rate_limiter: Any | None = None,
     ):
         self.settings = settings
         self._completion_fn = completion_fn
         self._embedding_fn = embedding_fn
         self._sleep = sleep_fn or time.sleep  # 9 章退避（测试可注入记录器）
+        # M4-1：embedding 向量缓存（跨任务共享实例，由工厂持有；
+        # 命中零 API 调用、零 token；None = 不启用）
+        self.embedding_cache = embedding_cache
+        # M8-5：全局限流器（工厂持有单实例跨任务共享；None = 不限流）
+        self.rate_limiter = rate_limiter
         # 11.0 第 0 层总闸：任务级预算护栏（由 Pipeline 挂接/卸载）
         self.budget_guard: BudgetGuard | None = budget_guard
         # 11.0 可观测性：每步 token 累计
         self.total_tokens_used: int = 0
         # 第 5 章可审计：调用日志（模型、模式、用量）
         self.call_log: list[dict[str, Any]] = []
+        # M8-4：任务进度钩子——每次调用结束后回调（entry 同 call_log 条目）；
+        # 由 Pipeline 按任务挂接，未挂接零开销
+        self.on_call: Callable[[dict[str, Any]], None] | None = None
 
     # ------------------------------------------------------------------
 
@@ -161,6 +171,12 @@ class ModelClient:
         """
         max_retries = self.settings.llm_max_retries
         for attempt in range(max_retries + 1):
+            # M8-5：每次尝试（含 429 重试与续写）先取令牌——排队控节奏，
+            # 与 9 章退避重试互补；未启用限流时零开销直通
+            if self.rate_limiter is not None:
+                from app.utils.rate_limiter import provider_of
+
+                self.rate_limiter.acquire(provider_of(model))
             try:
                 return fn(**kwargs)
             except Exception as exc:
@@ -277,6 +293,25 @@ class ModelClient:
         if self.budget_guard is not None:
             self.budget_guard.ensure_allowed()
 
+        # M4-1：缓存命中直接返回（零 API 调用、零 token；审计留痕 + M4-4 节省量）
+        if self.embedding_cache is not None:
+            cached, saved_tokens = self.embedding_cache.lookup(model, text)
+            if cached is not None:
+                entry = {
+                    "model": model,
+                    "kind": "embedding",
+                    "json_mode": False,
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "content_chars": len(text),
+                    "system_hint": "",
+                    "cache_hit": True,
+                    "saved_tokens": saved_tokens,
+                }
+                self.call_log.append(entry)
+                self._notify_on_call(entry)
+                return cached
+
         embedding = self._embedding_fn or _default_embedding_fn()
         response = self._call_with_retry(
             embedding,
@@ -290,21 +325,24 @@ class ModelClient:
         )
 
         vector, prompt_tokens = _get_embedding(response)
+        # M4-1：写入缓存（同模型同文本下次命中；M4-4：记录原调用 token 供节省量统计）
+        if self.embedding_cache is not None:
+            self.embedding_cache.put(model, text, vector, tokens=prompt_tokens)
         # 11.0 累计与第 5 章审计日志（kind=embedding）
         self.total_tokens_used += prompt_tokens
         if self.budget_guard is not None:
             self.budget_guard.record(prompt_tokens)
-        self.call_log.append(
-            {
-                "model": model,
-                "kind": "embedding",
-                "json_mode": False,
-                "input_tokens": prompt_tokens,
-                "output_tokens": 0,
-                "content_chars": len(text),
-                "system_hint": "",
-            }
-        )
+        entry = {
+            "model": model,
+            "kind": "embedding",
+            "json_mode": False,
+            "input_tokens": prompt_tokens,
+            "output_tokens": 0,
+            "content_chars": len(text),
+            "system_hint": "",
+        }
+        self.call_log.append(entry)
+        self._notify_on_call(entry)
         return vector
 
     # ------------------------------------------------------------------
@@ -341,17 +379,26 @@ class ModelClient:
         self.total_tokens_used += result.total_tokens
         if self.budget_guard is not None:
             self.budget_guard.record(result.total_tokens)
-        self.call_log.append(
-            {
-                "model": model,
-                "json_mode": json_mode,
-                "input_tokens": input_tokens,
-                "output_tokens": output_tokens,
-                "content_chars": len(content),
-                "system_hint": (messages[0]["content"] if messages else ""),  # 8.5 环节归属
-            }
-        )
+        entry = {
+            "model": model,
+            "json_mode": json_mode,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "content_chars": len(content),
+            "system_hint": (messages[0]["content"] if messages else ""),  # 8.5 环节归属
+        }
+        self.call_log.append(entry)
+        self._notify_on_call(entry)
         return result
+
+    def _notify_on_call(self, entry: dict[str, Any]) -> None:
+        """M8-4：调用后进度钩子（回调失败不影响调用本身）。"""
+        if self.on_call is None:
+            return
+        try:
+            self.on_call(entry)
+        except Exception:
+            pass
 
 
 def _get_content(response: Any) -> str:
@@ -388,3 +435,64 @@ def _index(obj: Any, key: str) -> Any:
     if isinstance(obj, dict):
         return obj.get(key)
     return getattr(obj, key, None)
+
+
+class ModelClientFactory:
+    """任务级 ModelClient 工厂（M8-1）。
+
+    budget_guard / call_log / total_tokens_used 是任务级状态：挂在
+    单例上时多任务并发即预算串数、调用日志混写（M8 现状问题）。
+    工厂保证每任务 create() 出独立实例，预算闸门与审计日志天然隔离。
+
+    completion_fn / embedding_fn / sleep_fn 为注入点（测试桩），
+    透传给每个实例；settings 为共享只读配置（无任务级状态）。
+    """
+
+    def __init__(
+        self,
+        settings: Settings | None = None,
+        completion_fn: CompletionFn | None = None,
+        embedding_fn: EmbeddingFn | None = None,
+        sleep_fn: Callable[[float], None] | None = None,
+        rate_limiter: Any | None = None,
+    ):
+        self._settings = settings or Settings()
+        self._completion_fn = completion_fn
+        self._embedding_fn = embedding_fn
+        self._sleep_fn = sleep_fn
+        # M4-1：跨任务共享的 embedding 缓存（工厂持有单实例，
+        # 每个任务级客户端都接入——跨任务复用正是缓存的价值）
+        self._embedding_cache: Any | None = None
+        if self._settings.embedding_cache_enabled:
+            from app.utils.embedding_cache import EmbeddingCache
+
+            self._embedding_cache = EmbeddingCache(
+                self._settings.embedding_cache_path,
+                ttl_days=self._settings.embedding_cache_ttl_days,
+            )
+        # M8-5：全局限流器——工厂持有单实例，所有任务级客户端共享
+        # （限流是进程级约束：每任务一个限流器等于没限）。外部注入优先，
+        # 未注入且配置开启时按配置构建。
+        if rate_limiter is not None:
+            self._rate_limiter: Any | None = rate_limiter
+        elif self._settings.llm_rate_limit_enabled:
+            from app.utils.rate_limiter import RateLimiter
+
+            self._rate_limiter = RateLimiter(
+                self._settings.llm_rate_limit_rps,
+                self._settings.llm_rate_limit_burst,
+                sleep_fn=sleep_fn,
+            )
+        else:
+            self._rate_limiter = None
+
+    def create(self) -> ModelClient:
+        """创建一个任务级独立 ModelClient 实例（共享只读配置与缓存）。"""
+        return ModelClient(
+            self._settings,
+            completion_fn=self._completion_fn,
+            embedding_fn=self._embedding_fn,
+            sleep_fn=self._sleep_fn,
+            embedding_cache=self._embedding_cache,
+            rate_limiter=self._rate_limiter,
+        )

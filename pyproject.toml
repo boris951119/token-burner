@@ -1,0 +1,3 @@
+[tool.pytest.ini_options]
+# 只收集 tests/：避免 demo_projects/ 下生成项目的测试被误收集（B0 工程整备）
+testpaths = ["tests"]

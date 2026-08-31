@@ -25,6 +25,13 @@ from app.utils.parse import parse_json
 
 _MODULE_NAME = re.compile(r"^[a-z][a-z0-9_]{0,30}$")
 
+# 保留名：与项目系统目录冲突的模块名（真实运行回归：LLM 为「附单元测试」
+# 拆出名为 tests 的模块，与 tests/ 收集目录相撞导致导入混乱）
+_RESERVED_MODULE_NAMES = frozenset({
+    "code", "tests", "test", "modules", "changelog", "sessions",
+    "logs", "_shared", "conftest", "spec", "docs",
+})
+
 _REQUIRED_FIELDS = ("name", "responsibility", "dependencies", "priority")
 
 _INTERFACE_FIELDS = ("imports", "exports", "public_api", "dependencies")
@@ -102,6 +109,13 @@ class ModuleBuilder:
                 name = raw["name"]
                 if not isinstance(name, str) or not _MODULE_NAME.match(name):
                     last_error = f"模块名不合法: {name!r}"
+                    plans = []
+                    break
+                if name in _RESERVED_MODULE_NAMES:
+                    last_error = (
+                        f"模块名 {name!r} 与系统目录冲突（保留名），"
+                        "请以功能命名并另拆测试模块或并入各模块职责"
+                    )
                     plans = []
                     break
                 deps = raw["dependencies"]

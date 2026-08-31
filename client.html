@@ -273,6 +273,8 @@
               <div class="bar"><div id="c-bar" style="width:0%"></div></div>
             </div>
           </div>
+          <!-- M6-1 节省量统计 -->
+          <div class="hint hidden" id="c-savings" style="margin-bottom:10px;">🔥 已节省 <b id="c-saved">0</b> token（节省比例 <span id="c-saver">0%</span> · 缓存命中率 <span id="c-hitr">0%</span>）</div>
           <table>
             <thead><tr><th>模型</th><th>环节</th><th style="text-align:right">输入</th><th style="text-align:right">输出</th><th style="text-align:right">合计</th></tr></thead>
             <tbody id="c-rows"></tbody>
@@ -648,10 +650,19 @@ function renderModules() {
 /* live 结果渲染 */
 function renderLiveResult(data) {
   currentProject = data.project_id || null;
+  if (data.kind === "declined") {
+    /* M9-3：快判拒答——展示友好文案，不进入执行时间线 */
+    $("timeline").innerHTML = `<div class="step done"><div class="t">未进入开发流程</div>
+      <div class="d">${escapeHtml(data.declined_reply || "该输入未进入开发流程。")}</div></div>`;
+    show("sec-run");
+    $("done-md").textContent = data.declined_reply || "该输入未进入开发流程。";
+    show("sec-done");
+    return;
+  }
   $("timeline").innerHTML = `<div class="step done"><div class="t">执行完成</div>
     <div class="d">kind: ${data.kind}${(data.frozen_modules || []).length ? " · 冻结模块: " + data.frozen_modules.join(", ") : ""}</div></div>`;
   show("sec-run");
-  $("done-md").textContent = data.deliverable_summary || data.answer || "（无汇总）";
+  $("done-md").textContent = data.declined_reply || data.deliverable_summary || data.answer || "（无汇总）";
   show("sec-done");
   if (data.dashboard) {
     $("c-budget").textContent = data.dashboard.budget_tokens.toLocaleString();
@@ -661,6 +672,15 @@ function renderLiveResult(data) {
     $("c-bar").style.width = Math.min(100, ratio) + "%";
     $("c-rows").innerHTML = Object.entries(data.dashboard.by_model || {}).map(([mo, tok]) =>
       `<tr><td>${mo}</td><td>—</td><td class="num">—</td><td class="num">—</td><td class="num"><b>${tok.toLocaleString()}</b></td></tr>`).join("");
+    const sav = data.dashboard.savings;  // M6-1 节省量三指标
+    if (sav && sav.saved_tokens > 0) {
+      $("c-saved").textContent = sav.saved_tokens.toLocaleString();
+      $("c-saver").textContent = Math.round(sav.saved_ratio * 100) + "%";
+      $("c-hitr").textContent = Math.round(sav.cache_hit_rate * 100) + "%";
+      show("c-savings");
+    } else {
+      hide("c-savings");
+    }
     show("sec-cost");
   }
   if (data.kind === "team_flow" && currentProject) {

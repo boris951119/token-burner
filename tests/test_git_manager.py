@@ -102,6 +102,7 @@ class TestRealGitIntegration:
         log = subprocess.run(
             ["git", "log", "--oneline"],
             cwd=project.root, capture_output=True, text=True,
+            encoding="utf-8",  # 中文提交信息在 GBK 控制台下按系统码页解码会炸
         )
         assert log.returncode == 0
         messages = log.stdout.strip().splitlines()

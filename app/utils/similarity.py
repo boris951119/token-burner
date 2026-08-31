@@ -70,16 +70,27 @@ def _tokenize(text: str) -> set[str]:
 
 
 class LoopDetector:
-    """论点级循环检测器（程序判定，11.3）。"""
+    """论点级循环检测器（程序判定，11.3）。
 
-    def __init__(self, settings: Settings):
+    M4-2 论点库持久化（opt-in）：library_path 给定时，论点文本与向量
+    跨任务复用——预载论点在本任务首次复现视为首次入库（计数归零，
+    冻结语义与不预载完全一致，见 config M4-2 注释）；加速体现在
+    第二道 embedding 比对（向量直接命中，零 embed 调用）。
+    """
+
+    def __init__(self, settings: Settings, library_path: str | None = None):
         self.settings = settings
         self._embedder: Embedder | None = None
-        # 论点指纹 → {count: 重复次数, vec: 向量缓存}
+        # 论点指纹 → {count: 重复次数, vec: 向量缓存, seeded: 是否库预载}
         self._history: dict[str, dict] = {}
         self._frozen = False
         # 11.0：省 token 模式（预算 ≥90%）→ 跳过第二道 embedding 比对
         self.throttling: bool = False
+        # M4-2：论点库（None = 不持久化）
+        self._library_path = library_path
+        self._library_dirty = False
+        if library_path:
+            self._load_library()
 
     # ------------------------------------------------------------------
 
@@ -88,7 +99,10 @@ class LoopDetector:
         self._embedder = embedder
 
     def reset(self) -> None:
-        """重置状态（冻结解除、历史清空；用于新项目/新讨论）。"""
+        """重置状态（冻结解除、历史清空；用于新项目/新讨论）。
+
+        论点库文件不删除（跨任务资产，M4-2）；仅清空本任务内存状态。
+        """
         self._history.clear()
         self._frozen = False
 
@@ -98,12 +112,21 @@ class LoopDetector:
             return LoopVerdict(frozen=True, frozen_reason="已冻结（历史触发）")
 
         counts: dict[str, int] = {}
+        inserted = False
         for argument in self._split_arguments(message):
             fingerprint, repeated, vec = self._match_history(argument)
             if repeated is not None:
-                self._history[fingerprint]["count"] += 1
-                counts[fingerprint] = self._history[fingerprint]["count"]
-                if self._history[fingerprint]["count"] >= self.settings.loop_repeat_limit:
+                record = self._history[fingerprint]
+                if record.pop("seeded", False):
+                    # M4-2：库预载论点本任务首次复现 → 等价首次入库
+                    #（计数归零，不计入重复；冻结语义与不预载完全一致）
+                    record["count"] = 0
+                    if record.get("vec") is None and vec is not None:
+                        record["vec"] = vec
+                    continue
+                record["count"] += 1
+                counts[fingerprint] = record["count"]
+                if record["count"] >= self.settings.loop_repeat_limit:
                     self._frozen = True
                     return LoopVerdict(
                         frozen=True,
@@ -121,6 +144,9 @@ class LoopDetector:
                     "text": argument,
                     "vec": vec if vec is not None else self._embed(argument),
                 }
+                inserted = True
+        if inserted:
+            self._save_library()
         return LoopVerdict(frozen=False, repeat_counts=counts)
 
     # ------------------------------------------------------------------
@@ -171,6 +197,54 @@ class LoopDetector:
         if self._embedder is None or self.throttling:
             return None
         return self._embedder.embed(text)
+
+    # ------------------------------------------------------------------
+    # M4-2 论点库持久化
+    # ------------------------------------------------------------------
+
+    def _load_library(self) -> None:
+        """载入历史论点（全部标记 seeded：计数不跨任务，冻结语义不变）。"""
+        import json
+        from pathlib import Path
+
+        path = Path(self._library_path)
+        if not path.is_file():
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return  # 损坏库文件 → 视为空库（不阻塞讨论）
+        for item in data.get("arguments", []):
+            text = item.get("text", "")
+            if len(text) < _MIN_ARGUMENT_CHARS:
+                continue
+            self._history[text] = {
+                "count": 0,
+                "text": text,
+                "vec": item.get("vec"),
+                "seeded": True,
+            }
+
+    def _save_library(self) -> None:
+        """落盘论点库（去重、上限保留最新；损坏/失败静默——检测不因库失败中断）。"""
+        import json
+        from pathlib import Path
+
+        if not self._library_path:
+            return
+        entries = [
+            {"text": rec["text"], "vec": rec.get("vec")}
+            for rec in self._history.values()
+            if len(rec["text"]) >= _MIN_ARGUMENT_CHARS
+        ]
+        entries = entries[-self.settings.loop_library_max_entries:]
+        try:
+            Path(self._library_path).write_text(
+                json.dumps({"arguments": entries}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass  # 库写失败不影响讨论主流程
 
 
 def _cosine(a: list[float], b: list[float]) -> float:

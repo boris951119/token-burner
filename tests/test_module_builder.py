@@ -253,3 +253,35 @@ class TestInterfaces:
         assert order.index("user") < order.index("auth")
         assert order.index("data") < order.index("auth")
         assert len(order) == 3
+
+
+class TestReservedModuleNames:
+    def test_reserved_name_rejected_with_retry_then_error(self):
+        """真实运行回归：拆出名为 tests 的模块（与系统目录冲突）必须被拒。"""
+        from app.agents.module_builder import SplitError
+
+        class Stub:
+            def __init__(self, scripts):
+                self.scripts = list(scripts)
+
+            def chat(self, model, messages, json_mode=False):
+                from app.utils.model_client import LLMResponse
+                content = self.scripts.pop(0) if self.scripts else self.scripts_last
+                return LLMResponse(model=model, content=content,
+                                   input_tokens=1, output_tokens=1)
+
+        bad = json.dumps({"modules": [
+            {"name": "tests", "responsibility": "测试", "dependencies": [], "priority": 1},
+        ]}, ensure_ascii=False)
+        good = json.dumps({"modules": [
+            {"name": "checker", "responsibility": "测试执行", "dependencies": [], "priority": 1},
+        ]}, ensure_ascii=False)
+
+        stub = Stub([bad, good])
+        from app.agents.module_builder import ModuleBuilder
+
+        settings = Settings(max_parse_retries=2)
+        builder = ModuleBuilder(llm=stub, main_model="m", settings=settings,
+                                file_manager=FileManager(projects_root="projects-unused"))
+        plans = builder.split_spec("spec")
+        assert [p.name for p in plans] == ["checker"]  # 重试后以合法名通过

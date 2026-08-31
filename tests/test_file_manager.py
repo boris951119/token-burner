@@ -145,3 +145,24 @@ class TestPathSafety:
     def test_unknown_project_rejected(self, fm):
         with pytest.raises(ValueError, match="项目"):
             fm.read_file("ghost", "spec.md")
+
+
+class TestCrossProcessLookup:
+    def test_lookup_by_full_directory_name(self, tmp_path):
+        """真实运行回归：/api/resumable 与 CLI 中断恢复返回完整目录名
+        （含时间戳），get_project 必须能精确匹配。"""
+        fm = FileManager(projects_root=tmp_path / "projects")
+        handle = fm.create_project("开发一个待办工具")
+        full_name = handle.root.name  # 含 _YYYYMMDD_HHMMSS 后缀
+        # 跨进程：新 FileManager 实例（无内存记录）
+        fm2 = FileManager(projects_root=tmp_path / "projects")
+        found = fm2.get_project(full_name)
+        assert found is not None
+        assert found.root == handle.root
+        # 原 project_id 前缀形态仍然可用
+        found2 = fm2.get_project(handle.project_id)
+        assert found2 is not None and found2.root == handle.root
+
+    def test_lookup_nonexistent_returns_none(self, tmp_path):
+        fm = FileManager(projects_root=tmp_path / "projects")
+        assert fm.get_project("不存在的项目_20990101_000000") is None

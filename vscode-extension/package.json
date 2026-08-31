@@ -1,0 +1,59 @@
+{
+  "name": "token-burner",
+  "displayName": "token-burner · 文档消耗器",
+  "description": "AI 多智能体项目团队系统：在侧边栏发起开发任务、跟踪进度与成本（M1-1/M1-2）",
+  "version": "0.4.0",
+  "publisher": "token-burner",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "token-burner",
+          "title": "Token 消耗器",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "token-burner": [
+        {
+          "type": "webview",
+          "id": "tokenBurner.panel",
+          "name": "任务发起"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Token 消耗器",
+      "properties": {
+        "tokenBurner.serverUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:8000",
+          "description": "token-burner 本地 API 服务地址（M1-1：优先支持本地 Server）"
+        },
+        "tokenBurner.serverDir": {
+          "type": "string",
+          "default": "",
+          "description": "token-burner 仓库目录（用于「在终端启动服务」；留空则使用当前工作区根目录）"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -w -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^26.4.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}
