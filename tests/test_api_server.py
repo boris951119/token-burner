@@ -366,3 +366,45 @@ class TestProjects:
         data = tc.get("/api/projects").json()
         assert len(data) == 1
         assert data[0]["interrupted"] is True
+
+
+class TestProjectsRootConfig:
+    """M5-2 产出目录配置：config.projects_root 三端统一生效。"""
+
+    def test_settings_projects_root_drives_file_manager(self, tmp_path):
+        # config.json 的 projects_root → 产出落自定义目录（未显式注入时生效）
+        custom = tmp_path / "custom-output"
+        llm = ScriptedLLM(TEAM_SCRIPTS * 10)
+        app = create_app(
+            llm=llm, settings=Settings(projects_root=str(custom)),
+            executor=SkippedExecutor(),      # projects_root 不注入 → 走 settings
+        )
+        assert app.state.file_manager.projects_root == custom
+        tc = TestClient(app)
+        run = tc.post("/api/run", json={
+            "requirement": "单模块系统",
+            "models": ["gpt-4o", "deepseek-chat", "claude-3-5-sonnet"],
+            "mode": "safe", "spec_confirm": "确认",
+        }).json()
+        assert run["project_dir"].startswith(str(custom))
+        assert custom.is_dir()               # 产物真实落在自定义目录
+
+    def test_explicit_injection_overrides_settings(self, tmp_path):
+        # 三层优先：显式注入（测试）> config.projects_root > cwd/projects
+        injected = tmp_path / "injected"
+        explicit = tmp_path / "explicit"
+        app = create_app(
+            settings=Settings(projects_root=str(injected)),
+            projects_root=explicit,
+        )
+        assert app.state.file_manager.projects_root == explicit
+
+    def test_config_endpoint_exposes_projects_root(self, tmp_path):
+        custom = tmp_path / "custom-output"
+        llm = ScriptedLLM(TEAM_SCRIPTS * 10)
+        app = create_app(
+            llm=llm, settings=Settings(projects_root=str(custom)),
+            executor=SkippedExecutor(),
+        )
+        data = TestClient(app).get("/api/config").json()
+        assert data["projects_root"] == str(custom)

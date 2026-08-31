@@ -83,6 +83,11 @@ class Settings:
     default_execution_mode: str = "safe"       # MVP 默认安全审阅模式
     sandbox_timeout_seconds: int = 30          # 3.6.3：沙箱 30s 超时熔断（Alpha v0.4）
 
+    # ---- 产出目录（CLI / 服务端 / 桌面端三端统一）----
+    # 空 = 缺省「启动命令时所在目录 / projects」；配置绝对路径后
+    # 全部产出（projects/、断点快照、成本报告）落到指定目录
+    projects_root: str = ""
+
     # ---- M2 Docker 沙箱（auto 模式可选容器级隔离）----
     # 缺省 False：auto 模式沿用进程级 LocalExecutor（行为与 v0.3.1 一致）
     docker_executor_enabled: bool = False

@@ -83,6 +83,10 @@ class TestModels:
     def test_settings_models_default(self):
         assert list(Settings().models) == list(DEFAULT_MODELS)
 
+    def test_projects_root_default_empty(self):
+        # 产出目录配置：缺省空串 → 各入口回落「启动目录/projects」
+        assert Settings().projects_root == ""
+
 
 class TestExecutionMode:
     """3.6 节：MVP 默认安全审阅模式。"""
