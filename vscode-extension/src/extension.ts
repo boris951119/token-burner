@@ -116,6 +116,15 @@ class PanelProvider implements vscode.WebviewViewProvider {
       case "applyFiles":
         await this.applyFiles(msg.paths ?? []);
         break;
+      case "loadProjects":
+        await this.sendProjects();          // M1-6 历史任务列表
+        break;
+      case "resumeProject":
+        await this.resumeProject(msg.projectId);   // M1-7 一键恢复
+        break;
+      case "fetchCost":
+        await this.sendDashboard(msg.projectId);   // M1-5 成本统计
+        break;
     }
   }
 
@@ -254,6 +263,54 @@ class PanelProvider implements vscode.WebviewViewProvider {
   }
 
   // ------------------------------------------------------------------
+  // 历史项目 / 成本 / 一键恢复（M1-5 / M1-6 / M1-7）
+  // ------------------------------------------------------------------
+
+  /** M1-6：历史项目列表（GET /api/projects，全部项目最新优先）。 */
+  private async sendProjects(): Promise<void> {
+    try {
+      const list = await this.fetchJson("/api/projects");
+      this.post({ command: "projects", list });
+    } catch (err) {
+      this.post({ command: "projects", list: null, error: String(err) });
+    }
+  }
+
+  /** M1-7：一键恢复中断任务（异步任务 API + 既有进度跟踪）。 */
+  private async resumeProject(projectId: string): Promise<void> {
+    this.stopTracking();
+    try {
+      const created = await this.fetchJson("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: "resume", project_id: projectId }),
+      });
+      this.lastProjectId = projectId;
+      this.post({
+        command: "taskCreated",
+        taskId: created.task_id,
+        resumed: true,
+        projectId,
+      });
+      this.startTracking(created.task_id);
+    } catch (err) {
+      this.post({ command: "submitError", error: String(err) });
+    }
+  }
+
+  /** M1-5：成本看板（磁盘 logs/cost_report.json，8.5 审计口径）。 */
+  private async sendDashboard(projectId: string): Promise<void> {
+    try {
+      const dash = await this.fetchJson(
+        `/api/project/${projectId}/dashboard`,
+      );
+      this.post({ command: "cost", dashboard: dash, projectId });
+    } catch (err) {
+      this.post({ command: "cost", dashboard: null, error: String(err) });
+    }
+  }
+
+  // ------------------------------------------------------------------
   // 生成代码：清单 / diff 预览 / 应用（M1-4）
   // ------------------------------------------------------------------
 
@@ -385,7 +442,14 @@ class PanelProvider implements vscode.WebviewViewProvider {
 <title>Token 消耗器</title>
 </head>
 <body>
-  <div id="server-row"><span id="server-dot" class="dot"></span><span id="server-text">连接中…</span></div>
+  <div id="server-row">
+    <span id="server-dot" class="dot"></span>
+    <span id="server-text">连接中…</span>
+    <nav class="tabs">
+      <button id="tab-task" class="tab active" type="button">任务</button>
+      <button id="tab-projects" class="tab" type="button">项目</button>
+    </nav>
+  </div>
 
   <div id="guide" style="display:none">
     <p>本地服务未启动。请在 token-burner 仓库目录运行：</p>
@@ -397,46 +461,64 @@ class PanelProvider implements vscode.WebviewViewProvider {
     <p class="hint">服务地址可在设置中修改：tokenBurner.serverUrl / tokenBurner.serverDir</p>
   </div>
 
-  <form id="form" style="display:none" onsubmit="return false">
-    <label class="field-label" for="requirement">需求描述</label>
-    <textarea id="requirement" rows="6"
-      placeholder="描述你要开发的软件需求，例如：开发一个命令行用户管理系统，支持注册、登录与数据持久化"></textarea>
+  <div id="view-task" style="display:none">
+    <form id="form" style="display:none" onsubmit="return false">
+      <label class="field-label" for="requirement">需求描述</label>
+      <textarea id="requirement" rows="6"
+        placeholder="描述你要开发的软件需求，例如：开发一个命令行用户管理系统，支持注册、登录与数据持久化"></textarea>
 
-    <label class="field-label">模型（主 LLM / 开发副 / 测试副，须互不相同）</label>
-    <div class="models">
-      <select id="main-model" title="主 LLM"></select>
-      <select id="dev-model" title="开发副 LLM"></select>
-      <select id="test-model" title="测试副 LLM"></select>
+      <label class="field-label">模型（主 LLM / 开发副 / 测试副，须互不相同）</label>
+      <div class="models">
+        <select id="main-model" title="主 LLM"></select>
+        <select id="dev-model" title="开发副 LLM"></select>
+        <select id="test-model" title="测试副 LLM"></select>
+      </div>
+
+      <label class="field-label">执行模式</label>
+      <label class="radio"><input type="radio" name="mode" value="safe" checked>
+        安全审阅（不执行代码，交付后手动运行反馈）</label>
+      <label class="radio"><input type="radio" name="mode" value="auto">
+        自动验证（真实执行生成代码）</label>
+      <div id="auto-warn" class="warn" style="display:none"></div>
+
+      <button id="btn-submit" class="primary" type="submit">开始任务</button>
+    </form>
+
+    <div id="progress-wrap" style="display:none">
+      <div class="progress-track"><div id="progress-bar" class="progress-fill"></div></div>
+      <div id="progress-text" class="hint"></div>
+      <details id="log-details" open>
+        <summary>执行日志</summary>
+        <div id="log" class="log"></div>
+      </details>
     </div>
 
-    <label class="field-label">执行模式</label>
-    <label class="radio"><input type="radio" name="mode" value="safe" checked>
-      安全审阅（不执行代码，交付后手动运行反馈）</label>
-    <label class="radio"><input type="radio" name="mode" value="auto">
-      自动验证（真实执行生成代码）</label>
-    <div id="auto-warn" class="warn" style="display:none"></div>
+    <div id="status" style="display:none"></div>
+    <div id="result" style="display:none"></div>
+    <div id="files" style="display:none">
+      <div class="field-label">生成代码（应用到当前工作区，可 Undo）</div>
+      <div id="file-list"></div>
+      <div class="btns">
+        <button id="btn-apply" class="primary">应用所选文件</button>
+        <button id="btn-refresh-files" class="ghost">刷新清单</button>
+      </div>
+    </div>
 
-    <button id="btn-submit" class="primary" type="submit">开始任务</button>
-  </form>
-
-  <div id="progress-wrap" style="display:none">
-    <div class="progress-track"><div id="progress-bar" class="progress-fill"></div></div>
-    <div id="progress-text" class="hint"></div>
-    <details id="log-details" open>
-      <summary>执行日志</summary>
-      <div id="log" class="log"></div>
-    </details>
+    <!-- M1-5 成本统计 -->
+    <div id="cost" style="display:none">
+      <div class="field-label">成本看板</div>
+      <div class="progress-track"><div id="cost-bar" class="progress-fill"></div></div>
+      <div id="cost-text" class="hint" style="margin:4px 0 6px;"></div>
+      <table id="cost-table"><tbody></tbody></table>
+    </div>
   </div>
 
-  <div id="status" style="display:none"></div>
-  <div id="result" style="display:none"></div>
-  <div id="files" style="display:none">
-    <div class="field-label">生成代码（应用到当前工作区，可 Undo）</div>
-    <div id="file-list"></div>
+  <!-- M1-6/M1-7 历史项目列表 -->
+  <div id="view-projects" style="display:none">
     <div class="btns">
-      <button id="btn-apply" class="primary">应用所选文件</button>
-      <button id="btn-refresh-files" class="ghost">刷新清单</button>
+      <button id="btn-refresh-projects" class="ghost">刷新列表</button>
     </div>
+    <div id="proj-list"></div>
   </div>
 
   <script nonce="${nonce}" src="${js}"></script>

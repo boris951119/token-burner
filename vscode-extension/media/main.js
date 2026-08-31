@@ -22,6 +22,7 @@
         renderServerState(msg);
         break;
       case "taskCreated":
+        switchTab("task");
         resetRunView(msg.taskId);
         break;
       case "taskEvent":
@@ -40,7 +41,33 @@
       case "applied":
         log("已应用 " + msg.applied.length + " 个文件到工作区");
         break;
+      case "projects":
+        renderProjects(msg);   // M1-6 历史项目列表
+        break;
+      case "cost":
+        renderCost(msg);       // M1-5 成本看板
+        break;
     }
+  });
+
+  // ------------------------------------------------------------------
+  // 视图 Tab（任务 / 项目）
+  // ------------------------------------------------------------------
+
+  function switchTab(name) {
+    const task = name === "task";
+    $("tab-task").classList.toggle("active", task);
+    $("tab-projects").classList.toggle("active", !task);
+    $("view-task").style.display = task ? "block" : "none";
+    $("view-projects").style.display = task ? "none" : "block";
+    if (!task) {
+      vscode.postMessage({ command: "loadProjects" });   // M1-6
+    }
+  }
+  $("tab-task").addEventListener("click", () => switchTab("task"));
+  $("tab-projects").addEventListener("click", () => switchTab("projects"));
+  $("btn-refresh-projects").addEventListener("click", () => {
+    vscode.postMessage({ command: "loadProjects" });
   });
 
   // ------------------------------------------------------------------
@@ -52,7 +79,12 @@
     $("server-dot").className = "dot " + (ok ? "ok" : "bad");
     $("server-text").textContent = ok ? "本地服务已连接" : "本地服务未启动";
     $("guide").style.display = ok ? "none" : "block";
-    $("form").style.display = ok ? "block" : "none";
+    $("view-task").style.display = ok ? "block" : "none";
+    $("view-projects").style.display = "none";
+    $("tab-task").classList.toggle("active", ok);
+    $("tab-projects").classList.remove("active");
+    $("tab-task").style.display = ok ? "inline-block" : "none";
+    $("tab-projects").style.display = ok ? "inline-block" : "none";
     if (ok) {
       serverConfig = msg.config || {};
       fillModelSelects(serverConfig.models || []);
@@ -280,6 +312,7 @@
     if (result.deliverable_summary) { setResult(result.deliverable_summary); }
     if (projectId) {
       vscode.postMessage({ command: "fetchFiles" });  // 拉取生成代码清单（M1-4）
+      vscode.postMessage({ command: "fetchCost", projectId });  // M1-5 成本看板
     }
   }
 
@@ -366,6 +399,131 @@
   function setBusy(busy) {
     $("btn-submit").disabled = busy;
     $("btn-submit").textContent = busy ? "任务执行中…" : "开始任务";
+  }
+
+  // ------------------------------------------------------------------
+  // M1-6 历史项目列表
+  // ------------------------------------------------------------------
+
+  function renderProjects(msg) {
+    const box = $("proj-list");
+    box.innerHTML = "";
+    if (msg.error || !msg.list) {
+      box.innerHTML = '<div class="empty">加载失败：' + escapeText(msg.error || "") + "</div>";
+      return;
+    }
+    if (!msg.list.length) {
+      box.innerHTML = '<div class="empty">还没有项目 —— 在「任务」页发起第一个开发任务。</div>';
+      return;
+    }
+    for (const p of msg.list) {
+      const row = document.createElement("div");
+      row.className = "proj";
+      const title = p.requirement || p.project_id;
+
+      const info = document.createElement("div");
+      info.className = "proj-info";
+      const name = document.createElement("div");
+      name.className = "proj-name";
+      name.textContent = title;
+      name.title = p.project_id;
+      const meta = document.createElement("div");
+      meta.className = "proj-meta";
+      const modeTag = document.createElement("span");
+      modeTag.className = "tag " + (p.mode === "auto" ? "tag-auto" : "tag-safe");
+      modeTag.textContent = p.mode === "auto" ? "自动验证" : "安全模式";
+      meta.appendChild(modeTag);
+      if (p.interrupted) {
+        const bad = document.createElement("span");
+        bad.className = "tag tag-bad";
+        bad.textContent = "已中断";
+        meta.appendChild(bad);
+      }
+      const cnt = document.createElement("span");
+      cnt.textContent = (p.tokens || 0).toLocaleString() + " token";
+      meta.appendChild(cnt);
+      if (p.updated) {
+        const up = document.createElement("span");
+        up.textContent = p.updated;
+        meta.appendChild(up);
+      }
+      info.appendChild(name);
+      info.appendChild(meta);
+
+      const ops = document.createElement("div");
+      ops.className = "proj-ops";
+      if (p.has_state) {
+        const resume = document.createElement("button");
+        resume.className = "primary";
+        resume.textContent = "▶ 继续";
+        resume.addEventListener("click", () => {
+          vscode.postMessage({ command: "resumeProject", projectId: p.project_id });
+        });
+        ops.appendChild(resume);
+      }
+      if (p.tokens) {
+        const cost = document.createElement("button");
+        cost.className = "ghost";
+        cost.textContent = "成本";
+        cost.addEventListener("click", () => {
+          vscode.postMessage({ command: "fetchCost", projectId: p.project_id });
+        });
+        ops.appendChild(cost);
+      }
+
+      row.appendChild(info);
+      row.appendChild(ops);
+      box.appendChild(row);
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // M1-5 成本看板（预算条 + 按模型明细）
+  // ------------------------------------------------------------------
+
+  function renderCost(msg) {
+    const wrap = $("cost");
+    if (msg.error || !msg.dashboard) {
+      wrap.style.display = "block";
+      $("cost-bar").style.width = "0%";
+      $("cost-text").textContent = "看板加载失败：" + (msg.error || "无数据");
+      $("cost-table").querySelector("tbody").innerHTML = "";
+      return;
+    }
+    const d = msg.dashboard;
+    const total = d.total_tokens || 0;
+    const budget = d.budget_tokens || 1;
+    const ratio = Math.min(100, Math.round(total / budget * 100));
+    wrap.style.display = "block";
+    $("cost-bar").style.width = ratio + "%";
+    $("cost-bar").className = "progress-fill" + (ratio >= 90 ? " bad" : "");
+    let text = total.toLocaleString() + " / " + budget.toLocaleString() +
+      " token（" + ratio + "%）";
+    const sav = d.savings;
+    if (sav && sav.saved_tokens > 0) {
+      text += " · 已节省 " + sav.saved_tokens.toLocaleString() +
+        "（" + Math.round(sav.saved_ratio * 100) + "% · 命中 " +
+        Math.round(sav.cache_hit_rate * 100) + "%）";
+    }
+    $("cost-text").textContent = text;
+    const tbody = $("cost-table").querySelector("tbody");
+    tbody.innerHTML = "";
+    for (const [model, tok] of Object.entries(d.by_model || {})) {
+      const tr = document.createElement("tr");
+      const td1 = document.createElement("td");
+      td1.textContent = model;
+      const td2 = document.createElement("td");
+      td2.className = "num";
+      td2.textContent = Number(tok).toLocaleString();
+      tr.appendChild(td1);
+      tr.appendChild(td2);
+      tbody.appendChild(tr);
+    }
+    switchTab("task");
+  }
+
+  function escapeText(s) {
+    return String(s);
   }
 
   vscode.postMessage({ command: "ready" });
