@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>token-burner 竞品基准分析（v0.4 交付后更新版）</title>
+<style>
+  :root { --accent:#f0883e; --ok:#2da44e; --bad:#cf222e; --muted:#57606a; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:"Microsoft YaHei","PingFang SC",sans-serif; color:#1f2328; line-height:1.7; padding:40px 52px; max-width:1000px; margin:0 auto; }
+  h1 { font-size:26px; border-bottom:3px solid var(--accent); padding-bottom:10px; margin-bottom:6px; }
+  h2 { font-size:19px; margin:28px 0 10px; border-left:4px solid var(--accent); padding-left:10px; }
+  h3 { font-size:15px; margin:18px 0 8px; }
+  .meta { color:var(--muted); font-size:12px; margin-bottom:22px; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; margin:10px 0 18px; }
+  th, td { border:1px solid #d0d7de; padding:7px 9px; text-align:left; vertical-align:top; }
+  th { background:#f6f8fa; }
+  .yes { color:var(--ok); font-weight:600; }
+  .no  { color:var(--bad); font-weight:600; }
+  .part{ color:#9a6700; font-weight:600; }
+  li { margin:4px 0 4px 22px; }
+  .note { background:#fff8ec; border:1px solid #f0c987; border-radius:6px; padding:10px 14px; font-size:12.5px; margin:12px 0; }
+  .summary { background:#f6f8fa; border-radius:8px; padding:14px 18px; margin:14px 0; }
+  .footer { margin-top:36px; padding-top:12px; border-top:1px solid #d0d7de; color:var(--muted); font-size:11px; }
+</style>
+</head>
+<body>
+
+<h1>token-burner 竞品基准分析</h1>
+<div class="meta">版本基准：v0.4.0-alpha（2026-08-31 交付）｜ 更新范围：纳入 v0.4 已交付能力与 v0.5（Beta）规划 ｜ 数据说明：基于公开资料与产品规格的定性对比，评分不代表第三方评测结论</div>
+
+<h2>一、执行摘要</h2>
+<div class="summary">
+  token-burner 在 v0.4（Alpha）完成<b>从「代码补全助手」到「项目级多智能体交付系统」</b>的关键跨越：
+  容器级安全沙箱（只读文件系统 / 无网络 / 非 root / 资源配额）、异步任务 API 与 SSE 实时事件流（4 路并发、任务状态落盘可恢复）、
+  双模式意图识别（System-1 快判 + System-2 全量评估，闲聊/基础类诉求不再消耗全量评估成本）、三档智能模型路由、
+  Embedding / 论点库 / _shared 三级缓存、VS Code 插件全流程闭环、六层成本护栏与全链路可审计。
+  上述组合能力在同类竞品中<b>尚无完整对标</b>——多数竞品强于单点交互体验，弱于成本治理与可审计交付。
+</div>
+
+<h2>二、竞品能力矩阵（2026-08 定性基准）</h2>
+<table>
+  <thead><tr>
+    <th style="width:16%">能力维度</th>
+    <th>token-burner<br>v0.4</th>
+    <th>Cursor</th>
+    <th>GitHub Copilot<br>Workspace</th>
+    <th>Devin<br>(Cognition)</th>
+    <th>OpenHands</th>
+    <th>通义灵码 /<br>文心快码</th>
+  </tr></thead>
+  <tbody>
+    <tr><td>任务层级：项目级自主交付</td><td class="yes">✓ 模块级拆分 + 团队流程</td><td class="part">◐ 会话级</td><td class="part">◐ Issue 级</td><td class="yes">✓ 端到端</td><td class="yes">✓ 端到端</td><td class="no">✗ 补全/问答</td></tr>
+    <tr><td>多智能体协作（PM/评审/Dev/Test 分角色）</td><td class="yes">✓ 三模型互异团队 + 双评审收敛</td><td class="no">✗ 单体</td><td class="no">✗ 单体</td><td class="part">◐ 内部规划器</td><td class="part">◐ 可配置角色</td><td class="no">✗</td></tr>
+    <tr><td>方案讨论收敛机制（双评审 + 收敛上限）</td><td class="yes">✓</td><td class="no">✗</td><td class="no">✗</td><td class="part">◐</td><td class="part">◐</td><td class="no">✗</td></tr>
+    <tr><td>成本护栏（六层：预算闸门/截断/去重/修复上限/收敛上限/看板）</td><td class="yes">✓ 全量</td><td class="no">✗ 订阅制</td><td class="no">✗ 订阅制</td><td class="no">✗ 按任务计费</td><td class="no">✗</td><td class="no">✗</td></tr>
+    <tr><td>智能模型路由（按难度三档降档）</td><td class="yes">✓（v0.4）</td><td class="part">◐ 手动切换</td><td class="part">◐ 固定组合</td><td class="part">◐</td><td class="part">◐</td><td class="part">◐</td></tr>
+    <tr><td>上下文缓存（Embedding / 论点库 / _shared）</td><td class="yes">✓（v0.4）</td><td class="part">◐ 内置索引</td><td class="part">◐</td><td class="no">✗</td><td class="no">✗</td><td class="part">◐</td></tr>
+    <tr><td>安全沙箱：容器级隔离（只读 fs / 无网 / 非 root）</td><td class="yes">✓（v0.4）</td><td class="no">✗ 本地进程</td><td class="part">◐ 云 Codespace</td><td class="yes">✓ 云 VM</td><td class="yes">✓ Docker</td><td class="no">✗</td></tr>
+    <tr><td>资源配额（CPU / 内存 / pids / 磁盘）</td><td class="yes">✓（v0.4）</td><td class="no">✗</td><td class="part">◐</td><td class="part">◐</td><td class="part">◐</td><td class="no">✗</td></tr>
+    <tr><td>危险操作预扫描（AST 黑名单，执行前拦截）</td><td class="yes">✓</td><td class="no">✗</td><td class="no">✗</td><td class="part">◐</td><td class="part">◐</td><td class="no">✗</td></tr>
+    <tr><td>异步任务 API（提交即返回 + 状态落盘可恢复）</td><td class="yes">✓（v0.4）</td><td class="no">✗ 交互式</td><td class="part">◐ Action 运行</td><td class="yes">✓ 会话制</td><td class="part">◐</td><td class="no">✗</td></tr>
+    <tr><td>SSE 实时进度事件流</td><td class="yes">✓（v0.4）</td><td class="no">✗</td><td class="part">◐</td><td class="yes">✓</td><td class="part">◐</td><td class="no">✗</td></tr>
+    <tr><td>中断恢复（断点续跑，已完成模块跳过）</td><td class="yes">✓ 磁盘快照重建</td><td class="no">✗</td><td class="no">✗</td><td class="part">◐ 会话保留</td><td class="part">◐</td><td class="no">✗</td></tr>
+    <tr><td>IDE 集成（VS Code：发起/进度/应用代码/成本）</td><td class="yes">✓（v0.4）</td><td class="yes">✓ 原生</td><td class="yes">✓</td><td class="no">✗ Web</td><td class="no">✗ Web</td><td class="yes">✓</td></tr>
+    <tr><td>全链路可审计（决策记录 / 校验结果 / 消耗明细落盘）</td><td class="yes">✓</td><td class="no">✗</td><td class="part">◐</td><td class="part">◐</td><td class="part">◐</td><td class="no">✗</td></tr>
+    <tr><td>本地 / 私有化部署（数据不出域）</td><td class="yes">✓ 本地运行</td><td class="no">✗ 云</td><td class="no">✗ 云</td><td class="no">✗ 云</td><td class="yes">✓ 开源自托管</td><td class="part">◐ 混合</td></tr>
+    <tr><td>成本模型（自带 Key，按用量付费）</td><td class="yes">✓ BYOK</td><td class="no">✗ 订阅</td><td class="no">✗ 订阅</td><td class="no">✗ 订阅/计费</td><td class="yes">✓ BYOK</td><td class="part">◐ 混合</td></tr>
+    <tr><td>中文场景与国内模型生态</td><td class="yes">✓</td><td class="part">◐</td><td class="part">◐</td><td class="no">✗</td><td class="part">◐</td><td class="yes">✓</td></tr>
+  </tbody>
+</table>
+<div class="note">口径说明：「✓」为产品内建的系统性能力；「◐」为部分具备或依赖外部平台；「✗」为公开资料未见。竞品能力随版本迭代变化，本表仅作产品定位参考，不构成质量评价。</div>
+
+<h2>三、v0.4 交付后的差异化定位</h2>
+<h3>3.1 三条独有护城河</h3>
+<ul>
+  <li><b>成本确定性</b>：唯一把「六层成本护栏 + 三级缓存 + 智能路由 + 节省量看板」作为一等公民的产品——竞品的成本控制普遍停留在订阅定价层面，缺少任务内的程序化闸门。</li>
+  <li><b>可审计交付</b>：模块级决策记录、接口契约门禁、修复轮数上限、成本报告全部落盘可回溯——直接对应企业采购的安全与审计诉求。</li>
+  <li><b>过程质量工程</b>：PM/双评审/收敛的「团队讨论」阶段在竞品中普遍缺失；该阶段把「需求→方案」的失配在写码前拦截，是交付质量的结构性保障。</li>
+</ul>
+<h3>3.2 相对短板（诚实盘点）</h3>
+<ul>
+  <li>交互顺滑度不及 Cursor（逐行补全/内联编辑是 Cursor 核心场景，token-burner 定位为项目级交付，二者互补而非替代）。</li>
+  <li>云原生体验不及 Devin（全托管、零环境搭建）；token-burner 的本地/私有化定位是刻意的安全取舍。</li>
+  <li>生态品牌与分发渠道弱于 GitHub Copilot。</li>
+</ul>
+
+<h2>四、v0.5（Beta）规划对竞争格局的影响</h2>
+<table>
+  <thead><tr><th style="width:22%">v0.5 规划能力</th><th>竞品现状</th><th>交付后的竞争意义</th></tr></thead>
+  <tbody>
+    <tr><td>Researcher Agent（文档调研 + 知识注入，独立预算与缓存）</td><td>Devin/Cursor 均无结构化「调研→注入→可缓存」链路；OpenHands 支持浏览器但无预算治理</td><td>解决 LLM 知识过时导致的技术方案不可行问题；调研结果按「技术栈+API+版本」缓存复用，竞品无对标</td></tr>
+    <tr><td>实时监控面板升级 + Agent 对话流图</td><td>LangSmith/LangFuse 等观测工具需独立接入</td><td>把「多智能体黑盒」可视化为本产品自带能力，降低企业信任门槛</td></tr>
+    <tr><td>模式智能推荐（按历史成功率/成本自动选 safe 或 auto）</td><td>竞品无模式概念</td><td>双模式（安全审阅 / 自动验证）是本产品独有治理模型，推荐引擎进一步降低使用门槛</td></tr>
+    <tr><td>P2 顺延并入：任务取消与僵尸清理、镜像预热、Docker 桌面引导、自动发布流水线</td><td>Devin 具备任务取消；其余普遍缺失</td><td>补齐企业级运维闭环的最后短板</td></tr>
+  </tbody>
+</table>
+
+<h2>五、结论</h2>
+<div class="summary">
+  v0.4 交付后，token-burner 在「成本治理 × 可审计交付 × 项目级多智能体」三个维度形成<b>结构性差异化</b>，
+  与 Cursor（交互体验）、Devin（全托管云）、通义灵码（国内生态）不在同一正面战场。
+  v0.5 的 Researcher 与可视化能力将进一步拉开「过程可观测性」差距；主要竞争风险仍来自
+  GitHub/Cursor 生态位下沉（从补全向项目级任务演进）与 Devin 的降价扩张——
+  应对策略是持续放大「本地私有化 + BYOK + 可审计」的企业侧不可替代性，并以 v0.5 智能化能力巩固先行者优势。
+</div>
+
+<div class="footer">token-burner · 竞品基准分析（v0.4 交付后更新版） · 数据基准 2026-08-31 · 本报告基于公开资料与产品规格的定性分析，供内部战略参考 · 原始版报告备份：competitor-benchmark-analysis.pdf.bak</div>
+
+</body>
+</html>
