@@ -91,6 +91,10 @@ class TaskSubmitRequest(BaseModel):
     spec_confirm: str = "确认"
     confirmed_as_coding: bool = False
     route: dict | None = None                # /api/route 结果回传（复用评估）
+    # M10 Researcher（v0.5 Beta，researcher_enabled 开启时生效）：
+    # research = on（显式调研）| auto（评估命中陌生栈自动触发）| off
+    research: str = "off"
+    research_material: str = ""              # 用户提供的资料文本（降级模式输入）
 
 
 # ---------------------------------------------------------------------------
@@ -329,6 +333,9 @@ def create_app(
                         # 3.6.3：API 显式选择 auto 即视为确认（同 /api/run）
                         auto_mode_confirmed=(req.mode == "auto"),
                         spec_confirm=req.spec_confirm, route=route_obj,
+                        # M10：Researcher 触发模式与资料透传
+                        research=req.research,
+                        research_material=req.research_material,
                     ))
                 return job
 

@@ -85,3 +85,10 @@ WRITE_TESTS_SYSTEM = _load("write_tests_system")
 WRITE_TESTS_USER = _load("write_tests_user")
 FIX_CODE_SYSTEM = _load("fix_code_system")
 FIX_CODE_USER = _load("fix_code_user")
+
+# ---------------------------------------------------------------------------
+# M10 Researcher（v0.5 Beta）：结构化技术摘要（四段式：来源/版本/示例/坑点）
+# ---------------------------------------------------------------------------
+
+RESEARCH_BRIEF_SYSTEM = _load("research_brief_system")
+RESEARCH_BRIEF_USER = _load("research_brief_user")

@@ -17,6 +17,11 @@ from pathlib import Path
 
 from app.agents.dev_loop import DevLoopEngine, ModuleStatus
 from app.agents.module_builder import ModuleBuilder, should_modularize
+from app.agents.researcher import (
+    ResearchCache,
+    Researcher,
+    should_research,
+)
 from app.utils.shared_check import find_shared_dependents
 from app.config import Settings
 from app.dashboard.cost_dashboard import CostDashboard
@@ -34,6 +39,7 @@ from app.tools.file_manager import FileManager
 from app.tools.git_manager import GitManager
 from app.utils.budget import BudgetExceededError, BudgetGuard
 from app.utils.model_client import ModelClient
+from app.utils.untrusted import sanitize_untrusted
 
 
 def _sum_tokens(entries: list[dict]) -> int:
@@ -59,6 +65,9 @@ class PipelineResult:
     route: RoutingResult | None = None
     cost_dashboard: object | None = None  # CostDashboard（8.5 成本统计）
     declined_reply: str = ""  # M9-3：快判拒答的友好文案（仅闲聊/无意义出口填充）
+    # M10-2 条件③：修复失败 ≥2 轮的模块 → 建议 Researcher 调研
+    #（仅建议，不自动激活——4.5「由用户确认后激活」，总则 D.1）
+    research_suggestions: list[str] = field(default_factory=list)
 
 
 # M9-3：declined 友好文案（确定性程序职责，不调 LLM——拒答本身就是为了省
@@ -170,6 +179,8 @@ class Pipeline:
         user_feedback: str = "",
         feedback_fn: Callable[[str], str] | None = None,
         route: RoutingResult | None = None,
+        research: str = "off",
+        research_material: str = "",
     ) -> PipelineResult:
         """执行完整管线。交互参数由外层（CLI）收集后传入。
 
@@ -179,6 +190,11 @@ class Pipeline:
 
         route：外部已完成的路由评估（如 CLI 展示用）→ 直接复用，
         避免二次评估浪费 token；缺省时内部自评估（兼容）。
+
+        M10 Researcher（v0.5 Beta，researcher_enabled 缺省关闭）：
+        research = "on"（用户显式要求调研）/ "auto"（评估 reason 命中
+        陌生技术栈时自动触发）/ "off"（缺省，零行为变化）；
+        research_material = 用户提供的资料文本（4.6 降级模式的输入）。
         """
         # 11.0：基线——本任务开始前的调用日志长度（用量只计本任务）
         self._resolve_llm()  # M8-1：factory 模式下每任务新建客户端
@@ -265,6 +281,64 @@ class Pipeline:
         self._emit("stage", stage=stage)  # M8-4
         module_results: dict = {}
         order: list[str] = []
+
+        # M10 Researcher（4.1 可选前置角色）：触发判定 → 结构化摘要 →
+        # 落盘留档与注入。失败方向单一：无资料 / 预算耗尽 / 校验不通过
+        # / 意外异常 → 跳过研究（research_context 保持空串），任务继续。
+        research_context = ""
+        decision = should_research(
+            requirement, route.reason, research, self.settings.researcher_enabled
+        )
+        if decision.triggered:
+            try:
+                self._emit("stage", stage="研究调研")
+                cache = (
+                    ResearchCache(
+                        self.settings.research_cache_path,
+                        ttl_days=self.settings.research_cache_ttl_days,
+                    )
+                    if self.settings.research_cache_enabled else None
+                )
+                researcher = Researcher(
+                    self.llm, team.dev_model, self.settings,
+                    # 4.4：独立预算（独立于任务总闸；研究调用同样被
+                    # llm.call_log 记录 → 全局消耗日志天然覆盖）
+                    budget_guard=BudgetGuard(
+                        budget_tokens=self.settings.research_budget_tokens
+                    ),
+                    cache=cache,
+                )
+                brief = researcher.generate_brief(
+                    research_material, stack=decision.stack
+                )
+                if cache is not None:
+                    cache.close()
+                if brief is not None:
+                    # 可审计：摘要落盘（resume 时重读注入，无需重新生成）
+                    handle = self.file_manager.get_project(team.project_id)
+                    if handle is not None:
+                        (handle.root / "sessions" / "research_brief.md").write_text(
+                            f"# Researcher 结构化摘要（{decision.source} 触发）\n\n"
+                            + brief.render() + "\n",
+                            encoding="utf-8",
+                        )
+                    # 4.3 注入 + M7-6 治理：摘要源于用户资料（不可信），
+                    # 注入提示词前统一包裹数据边界
+                    research_context = sanitize_untrusted(brief.render())
+                    self._emit(
+                        "research", source=decision.source,
+                        stack=decision.stack,
+                    )
+                else:
+                    self._emit(
+                        "research_skipped", reason=researcher.last_error
+                    )
+            except Exception as exc:  # 研究失败不阻塞任务（方向单一）
+                self._emit(
+                    "research_skipped",
+                    reason=f"{type(exc).__name__}: {exc}",
+                )
+
         try:
             # 6.3：评估结论落盘（可审计：分数/等级/类型/理由/预估文件数/路由）
             self._persist_assessment(team.project_id, route, models, mode)
@@ -324,6 +398,7 @@ class Pipeline:
             result = self._develop_and_deliver(
                 team, route, plans, interfaces, order, guard, mode,
                 feedback_fn, user_feedback, module_results, stage_box,
+                research_context=research_context,
             )
             # 任务完成 → 清理中断现场标记
             handle = self.file_manager.get_project(team.project_id)
@@ -372,11 +447,15 @@ class Pipeline:
         user_feedback: str,
         module_results: dict,
         stage_box: list[str] | None = None,
+        research_context: str = "",
     ) -> PipelineResult:
         """模块开发循环 → _shared 回归 → 反馈环 → 交付（run / resume 共用）。
 
         stage_box：单元素可变列表——中断/预算中止时报告当前阶段
         （「反馈修复」比「模块开发」更精确），resume 传 None。
+
+        research_context：M10-3 Researcher 摘要（已含数据边界治理），
+        空串 = 未触发研究（零行为变化）。
         """
         git = self._git()
         project_root = self.file_manager.get_project(team.project_id).root
@@ -388,6 +467,7 @@ class Pipeline:
             settings=self.settings,
             file_manager=self.file_manager,
             budget_guard=guard,
+            research_context=research_context,
         )
         self._bind_executor_project(team.project_id)
         # 14.4：_shared/ 内容签名基线（变更检测）
@@ -439,6 +519,14 @@ class Pipeline:
         # 14 章：集成（交付汇总 + 成本报告）后最终提交
         if git is not None:
             git.commit_stage(project_root, "integration", "集成完成，交付物汇总")
+        # M10-2 条件③：同一模块连续修复失败 ≥2 轮 → 建议 Researcher 调研
+        #（仅建议不激活——4.5「由用户确认后激活」，总则 D.1）
+        suggestions = [
+            name for name, r in module_results.items()
+            if r.fix_attempts >= 2
+        ]
+        if suggestions:
+            self._emit("research_suggest", modules=suggestions)
         return PipelineResult(
             kind="team_flow",
             project_id=team.project_id,
@@ -449,6 +537,7 @@ class Pipeline:
             ],
             route=route,
             cost_dashboard=self._build_dashboard(mode, team.project_id),
+            research_suggestions=suggestions,
         )
 
     # ------------------------------------------------------------------
@@ -601,6 +690,12 @@ class Pipeline:
         self._resolve_llm()  # M8-1：factory 模式下续跑同样每任务新建
         self._emit("stage", stage="恢复续跑")  # M8-4
         self._task_baseline = len(getattr(self.llm, "call_log", []))  # 看板切片
+        # M10-3：中断前已生成的研究摘要 → 重读注入（无需重新生成消耗）
+        research_brief_path = handle.root / "sessions" / "research_brief.md"
+        research_context = (
+            sanitize_untrusted(research_brief_path.read_text(encoding="utf-8"))
+            if research_brief_path.is_file() else ""
+        )
         guard = BudgetGuard(
             budget_tokens=team.budget_tokens,
             throttle_threshold=self.settings.budget_throttle_threshold,
@@ -610,6 +705,7 @@ class Pipeline:
             result = self._develop_and_deliver(
                 team, None, plans, interfaces, order, guard, mode,
                 feedback_fn, "", module_results,
+                research_context=research_context,
             )
             marker = handle.root / "sessions" / self._INTERRUPT_FILE
             if marker.exists():
