@@ -22,6 +22,7 @@ import argparse
 import json
 import sys
 import time
+from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -165,13 +166,36 @@ def _llm_tokens(llm) -> int:
     return 0
 
 
-def run_suite(fast_triage_enabled: bool, llm=None, cases: list[dict] | None = None) -> dict:
+def _triage_model(settings: Settings) -> str:
+    """快判模型 = 预设中的最轻量档（轻量档末位；未配轻量档取预设列表末位）。
+
+    M9-4 口径「fast_triage_model = 预设列表中的轻量档」；真实评测在
+    生产模型档位上动态选定，避免 config.json 未显式配置时校验失败。
+    """
+    if settings.model_tier_light:
+        return settings.model_tier_light[-1]
+    return settings.models[-1]
+
+
+def run_suite(
+    fast_triage_enabled: bool, llm=None, cases: list[dict] | None = None,
+    settings: Settings | None = None,
+) -> dict:
     """跑一个模式的全部用例，返回汇总（token / 误判 / 承接 / 延迟）。
 
     M12-5：cases 支持外置诉求集（缺省内置标准集）。
+    M13-2 真实评测：settings 传入 load_settings() 结果（生产模型档位），
+    快慢两跑各自覆盖 fast_triage_enabled（其余配置与生产完全一致）。
     """
     cases = cases if cases is not None else CASES
-    settings = Settings(fast_triage_enabled=fast_triage_enabled)
+    if settings is None:
+        settings = Settings(fast_triage_enabled=fast_triage_enabled)
+    else:
+        settings = replace(
+            settings,
+            fast_triage_enabled=fast_triage_enabled,
+            fast_triage_model=_triage_model(settings),
+        )
     if llm is None:
         llm = MockTriageLLM(settings.fast_triage_model, cases)
     router = TaskRouter(llm, settings.models[0], settings)
@@ -194,7 +218,10 @@ def run_suite(fast_triage_enabled: bool, llm=None, cases: list[dict] | None = No
         "mode": "dual" if fast_triage_enabled else "single",
         "cases_total": len(cases),
         "llm_tokens": _llm_tokens(llm),
-        "llm_calls": getattr(llm, "calls", 0),
+        # 计量兼容：mock 用 .calls 计数；真实 ModelClient 读 call_log 长度
+        "llm_calls": getattr(llm, "calls", None)
+        if getattr(llm, "calls", None) is not None
+        else len(getattr(llm, "call_log", [])),
         "misclassified": misclassified,
         "triaged_by_fast_path": triaged,
         "triage_rate": round(triaged / len(cases), 4),
@@ -270,13 +297,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.real:
         from app.utils.model_client import ModelClient  # 真实链路（需密钥）
-        settings = Settings()
+        from app.config import load_settings
+        # M13-2：真实评测使用生产配置（config.json 覆盖 → glm 三档），
+        # 而非裸 Settings 的海外默认模型；密钥经环境变量注入。
+        settings = load_settings()
         llm = ModelClient(settings)
     else:
         llm = None  # run_suite 内部构造 mock
+        settings = None
 
-    single = run_suite(False, llm, cases)
-    dual = run_suite(True, llm, cases)
+    single = run_suite(False, llm, cases, settings)
+    dual = run_suite(True, llm, cases, settings)
     report = {
         "cases": len(cases),
         "cases_file": args.cases or "内置标准集",
