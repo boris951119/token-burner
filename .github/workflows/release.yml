@@ -1,0 +1,47 @@
+name: release
+
+# M13-1 发布流水线：pytest → PyInstaller 构建 → Release 产物。
+# 触发：推送 v* 标签（如 v0.5.0-beta）。
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # 创建 Release 需要写权限
+
+jobs:
+  release:
+    runs-on: windows-latest   # 产物为 Windows EXE（桌面模式入口 app/desktop.py）
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: 全量回归（pytest）
+        run: python -m pytest tests/ -q
+
+      - name: PyInstaller 构建
+        run: pyinstaller token-burner.spec
+
+      - name: 检查产物体积（≤80MB，M13-2 复验口径）
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem dist/*.exe | Select-Object -First 1
+          $mb = [math]::Round($exe.Length / 1MB, 1)
+          Write-Output "产物: $($exe.Name) ${mb} MB"
+          if ($mb -gt 80) { throw "产物超过 80MB 上限：${mb} MB" }
+
+      - name: 创建 Release 并附产物
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.exe
+          generate_release_notes: true

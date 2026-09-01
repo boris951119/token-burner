@@ -1,32 +1,54 @@
 # Changelog
 
-## v0.5.0-beta · V0（进行中）
+## v0.5.0-beta（2026-09-01）
 
-> v0.5 Beta 开篇：Researcher Agent 降级版闭环（M10-1~10-4）+ 可视化升级 V1（M11-1/11-2）+ 运维与推荐 V2（M11-3 / M12-1 / M12-5）。规划见 `v0.5.md` / `v0.5-workplan.md`；竞品基准分析更新至 v0.4 交付后版本。
+> v0.5 Beta 全量交付：Researcher 降级版闭环 + 联网调研、可视化升级、运维与生态（镜像预热/主题/设置页/路由明细）、发布流水线。基线 v0.4.0-alpha（500+ 测试）→ 813+ 测试。
 
-### 新增（M10 Researcher Agent，规格第 4 章）
+### 新增（M10-5 联网调研 · V5 批次）
 
-- **M10-1** Researcher 角色骨架（`app/agents/researcher.py`）：四段式结构化摘要（来源/版本/用法示例/已知坑点）；JSON 契约程序校验——sources/versions 强制非空（规格 19 章来源与版本标注），examples/pitfalls 允许空（宁缺毋编）；校验失败重试 1 次
-- **M10-2** 触发器三条件：① 用户显式指定（`research="on"`）② 评估 reason 命中陌生技术栈信号词（`research="auto"` 时程序检测）③ 同一模块修复 ≥2 轮 → `research_suggestions` 仅建议不激活（4.5「由用户确认后激活」，总则 D.1）
-- **M10-3** 知识注入链路：摘要经 `sanitize_untrusted` 数据边界治理（M7-6 同构）后注入 Dev/Test 全部提示词（写码/写测/修复）；摘要落盘 `sessions/research_brief.md` 留档；resume 重读注入不重复生成
-- **M10-4** 独立预算与缓存：`research_budget_tokens`（默认 20k，独立于任务总预算，研究调用经 `call_log` 计入全局消耗日志）；`ResearchCache`（SQLite，键 = sha256(技术栈+API+版本+资料)，与 embedding 缓存同构，TTL 7 天）
-- 新配置：`researcher_enabled`（缺省 False，关闭态行为与 v0.4 完全一致）/ `research_cache_enabled` / `research_cache_path` / `research_cache_ttl_days`（复用既有 `research_budget_tokens` 预留字段）
-- API：`POST /api/tasks` 新增 `research`（on/auto/off）与 `research_material` 字段透传
-- 提示词外化：`app/prompts/research_brief_system.md` / `research_brief_user.md`（M9 资源化惯例，fail-fast）
-- 新增测试：`tests/test_researcher.py` 30 用例（契约校验/触发判定/预算熔断/缓存命中/注入边界/管线集成），全量 50 文件回归无回退
+- **M10-5** 联网调研通道（`app/agents/web_research.py`）：可配置供应商 duckduckgo（免 key）/ tavily（`TAVILY_API_KEY`），搜索结果确定性拼装为调研资料后进入 Researcher 生成环节（纯 urllib 零新依赖）；任何失败返回空串 → 自动回退用户资料注入模式（降级链路单一，任务不阻塞）
+- 新配置：`researcher_web_enabled`（缺省 False）/ `research_web_provider` / `research_web_max_results` / `research_web_timeout`（供应商白名单校验，拼写错误尽早失败）
+- 抓取文本沿用 `sanitize_untrusted` 治理（`Researcher._one_pass` 统一入口，M7-6 同构）
 
-### 新增（M11 可视化升级 · V1 批次）
+### 新增（M12 运维与生态 · V3/V4 批次）
 
-- **M11-1** 实时监控面板（`client.html` `sec-monitor`）：阶段耗时条形图（SSE 事件驱动，`monStage` 开段 / `monStageSettle` 末段结算）、token 累积曲线（SVG polyline，滚动窗口 60 点 + 峰值标注）、模块状态全景（`m-mods`，待运行/运行中/通过/失败四态）
-- **M11-2** Agent 对话流图（`client.html` `sec-flow`）：讨论消息结构化记录（`orchestrator.py` `_record_message`：role/model/round/content，覆盖 pm → 双评审 → 修订 → 收敛全序列）；落盘 `sessions/discussion_messages.json`；API `GET /api/project/{id}/messages`（404 / 空 / 损坏 JSON 三种边界兜底）；前端纵向节点链渲染（角色配色 + 点击展开原文）
-- 新增测试：`tests/test_discussion.py` 消息记录 5 用例（角色顺序/轮次编号/落盘/无 file_manager 容错）；`tests/test_api_server.py` 端点 4 用例 + 前端契约 2 用例（监控与流图区块存在性、消息端点引用）
+- **M12-2** 镜像预热：`app/execution/prewarm.py` + `POST /api/prewarm`——python/node 镜像缓存校验（命中跳过 pull），报告逐镜像耗时与总耗时；client.html Docker 可用时提供「预热镜像」入口
+- **M12-3** Docker 检测引导：`GET /api/docker/status` 三态（配置关闭 / 可用 / 未装降级）；client.html 可关闭横幅——未装显示安装指引并保持进程模式，可用显示预热入口
+- **M12-4** 插件配置页：VS Code settings 新增 `tokenBurner.budgetTokens`（任务预算总闸覆盖）与 `tokenBurner.defaultModels`（三角色默认模型），设置变更即时生效；`defaults` 消息下发面板默认值（M12-10 契约测试发现并修复 webview 缺失 case 的协议缺口）
+- **M12-6** 自定义路由策略：分档阈值从 orchestrator 硬编码迁入 config（`route_flagship_threshold`/`route_main_threshold`），config.json 可覆盖，非法值尽早失败
+- **M12-7** 设置页重设计：新增「⚙ 设置」页签，四组分类（🎨 外观 / 🤖 模型 / 💰 预算 / 🛡️ 安全）；外观主题三选即时生效，安全组 auto 模式二次确认开关
+- **M12-8** 深浅主题切换：浅色 token 双套（19 配色 + 2 阴影覆盖）+ `system→dark→light` 循环（顶栏 🌓）+ `prefers-color-scheme` 跟随系统实时切换
+- **M12-9** 模型路由明细：call_log 档位标注（`tier_map` 旗舰/主力/轻量）→ cost_report 与实时看板新增 `by_tier`、逐调用档位列、实际成本 vs 旗舰假设成本对比（`model_prices` 价目表可配置，缺价 `available=false` 不误导）
+- **M12-10** 插件消息协议契约测试（`vscode-extension/tests/contract.test.mjs`，Node 内置 runner 零依赖）：双侧源码提取 command 集合做闭合性断言
 
-### 新增（M12-1 / M11-3 / M12-5 · V2 批次）
+### 新增（M10-1~10-4 · V0 批次）
 
-- **M12-1** 任务取消与僵尸清理：`DELETE /api/tasks/{id}`——pending 立即取消（job 不执行）；running 协作式取消（取消旗标经 Pipeline 注入 BudgetGuard，`ensure_allowed` 检查点抛 `TaskCancelledError` 终止任务体，线程释放）；取消与完成竞态 → 用户意图优先标记 cancelled；`recover_zombies()` 服务启动时清扫磁盘遗留 pending/running 状态（服务重启 → 僵尸标记 cancelled）；client.html 任务运行时「取消任务」按钮 + cancelled 终态友好提示（非失败）
-- **M11-3** 模式智能推荐：`GET /api/recommend?requirement=…`——确定性统计历史项目（词袋相似度 ≥0.25：需求文本 sessions/requirements.md、模式 pipeline_state.json、成本与完成态 logs/cost_report.json + interruption.md），输出 `{mode, budget_tokens, reason}`（成功率优先 → 平均成本 → 保守缺省；预算 = 成功样本均值 ×1.2 取整千位）；推荐理由引用数据（N 个相似项目 / 成功 x/y / 平均 token）；无 LLM 参与（D.1），client.html 评估阶段展示推荐（仅展示，模式下拉可覆盖）
-- **M12-5** A/B 框架产品化：`scripts/ab_triage_eval.py` 新增 `--cases` 外置诉求集（JSON 数组，fail-fast 校验 cat/text/expect_single/expect_dual 与合法出口）；报告默认归档 `logs/ab_reports/ab_<时间戳>.json`（`--out` 可指定），报告含 `cases_file` 来源标注
-- 新增测试：`tests/test_task_cancel.py` 11 用例（pending 即时取消不执行 job / running 检查点协作中止 / 竞态取消 / 404 / 409 / 僵尸清扫 / client 取消契约）；`tests/test_recommender.py` 10 用例（无历史缺省 / 成功率决策 / 平手取廉 / 不相关回退 / API 400/200 / client 契约）；`tests/test_ab_triage_eval.py` +9 用例（外置集加载与 fail-fast 校验 / 外置集跑套件 / 归档路径）
+- **M10-1** Researcher 角色骨架（四段式结构化摘要 + JSON 契约程序校验，sources/versions 强制非空）
+- **M10-2** 触发器三条件（显式指定 / 陌生技术栈信号词 / 修复 ≥2 轮建议不自动激活）
+- **M10-3** 知识注入链路（`sanitize_untrusted` 边界治理 → Dev/Test 全部提示词；`sessions/research_brief.md` 留档，resume 重读注入）
+- **M10-4** 独立预算与缓存（`research_budget_tokens` 默认 20k 独立 BudgetGuard；`ResearchCache` SQLite TTL 7 天）
+- 新配置：`researcher_enabled`（缺省 False，关闭态行为与 v0.4 完全一致）；API 新增 `research` / `research_material` 透传
+
+### 新增（M11 可视化 · V1 批次）
+
+- **M11-1** 实时监控面板：阶段耗时条形、token 累积曲线（SVG）、模块状态全景
+- **M11-2** Agent 对话流图：讨论消息结构化记录 + `GET /api/project/{id}/messages` + 纵向节点链渲染
+- **M11-3** 模式智能推荐：`GET /api/recommend` 确定性统计历史项目（词袋相似度，成功率优先 → 平均成本 → 保守缺省，零 LLM 参与）
+
+### 新增（M12-1/M12-5 · V2 批次）
+
+- **M12-1** 任务取消与僵尸清理：`DELETE /api/tasks/{id}` 协作式取消 + `recover_zombies()` 启动清扫
+- **M12-5** A/B 框架产品化：`--cases` 外置诉求集 + 报告归档 `logs/ab_reports/`
+
+### 新增（M13 发布 · V5 批次）
+
+- **M13-1** GitHub Actions 发布流水线（`.github/workflows/release.yml`）：push `v*` 标签 → pytest 全量回归 → PyInstaller 构建 → 产物体积检查（≤80MB）→ Release 附 EXE
+- **M13-2** 版本号 `app.__version__` 升至 `0.5.0-beta`；本条目即发布 CHANGELOG
+
+### 测试
+
+- 新增：`test_researcher.py`（30）/ `test_discussion.py`（5）/ `test_task_cancel.py`（11）/ `test_recommender.py`（10）/ `test_ab_triage_eval.py`（+9）/ `test_api_server.py`（+6）/ `test_v3.py`（9）/ `test_v4.py`（25）/ `test_v5.py`（13）/ 插件契约测试（4）
+- 全量回归：813 passed / 7 skipped（v0.4 基线 500+ → 813+）
 
 ## v0.4.0-alpha（2026-08-31）
 
