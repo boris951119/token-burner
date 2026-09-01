@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -408,3 +409,75 @@ class TestProjectsRootConfig:
         )
         data = TestClient(app).get("/api/config").json()
         assert data["projects_root"] == str(custom)
+
+
+class TestMessagesEndpoint:
+    """M11-2：讨论消息记录端点（对话流图数据源）。"""
+
+    def test_project_not_found(self, client):
+        tc, _, _ = client
+        r = tc.get("/api/project/nonexistent/messages")
+        assert r.status_code == 404
+
+    def test_no_messages_yields_empty_list(self, client):
+        # 任务未到讨论完成（无记录文件）→ 空列表不报错（前端占位渲染）
+        tc, _, tmp_path = client
+        fm = FileManager(projects_root=tmp_path / "projects")
+        pid = fm.create_project("无消息项目").project_id
+        data = tc.get(f"/api/project/{pid}/messages").json()
+        assert data == {"project_id": pid, "messages": []}
+
+    def test_messages_roundtrip(self, client):
+        tc, _, tmp_path = client
+        fm = FileManager(projects_root=tmp_path / "projects")
+        pid = fm.create_project("有消息项目").project_id
+        root = fm.get_project(pid).root
+        (root / "sessions").mkdir(parents=True, exist_ok=True)
+        records = [
+            {"role": "pm", "model": "gpt-4o", "round": 0, "content": "初始方案"},
+            {"role": "dev_review", "model": "deepseek-chat", "round": 1,
+             "content": "评审意见"},
+            {"role": "pm_converge", "model": "gpt-4o", "round": 1,
+             "content": "最终 spec"},
+        ]
+        (root / "sessions" / "discussion_messages.json").write_text(
+            json.dumps(records, ensure_ascii=False), encoding="utf-8"
+        )
+        data = tc.get(f"/api/project/{pid}/messages").json()
+        assert len(data["messages"]) == 3
+        assert data["messages"][0]["role"] == "pm"
+        assert data["messages"][-1]["content"] == "最终 spec"
+
+    def test_corrupted_record_returns_empty(self, client):
+        # 记录损坏 → 空列表（不阻塞前端渲染）
+        tc, _, tmp_path = client
+        fm = FileManager(projects_root=tmp_path / "projects")
+        pid = fm.create_project("坏记录项目").project_id
+        root = fm.get_project(pid).root
+        (root / "sessions").mkdir(parents=True, exist_ok=True)
+        (root / "sessions" / "discussion_messages.json").write_text(
+            "{损坏的 JSON", encoding="utf-8"
+        )
+        data = tc.get(f"/api/project/{pid}/messages").json()
+        assert data["messages"] == []
+
+
+class TestClientFlowContract:
+    """M11 前端契约：client.html 监控面板与流图区块、消息端点引用。"""
+
+    _ROOT = Path(__file__).resolve().parent.parent
+
+    def test_monitor_and_flow_sections_exist(self):
+        html = (self._ROOT / "client.html").read_text(encoding="utf-8")
+        assert 'id="sec-monitor"' in html      # M11-1 监控面板
+        assert 'id="m-stages"' in html         # 阶段耗时条形容器
+        assert 'id="m-curve-line"' in html     # token 曲线
+        assert 'id="m-mods"' in html           # 模块全景
+        assert 'id="sec-flow"' in html         # M11-2 流图
+        assert 'id="flow-chain"' in html
+        assert "monStageSettle" in html        # 末阶段耗时结算
+        assert "loadFlow" in html              # 流图加载
+
+    def test_flow_uses_messages_endpoint(self):
+        html = (self._ROOT / "client.html").read_text(encoding="utf-8")
+        assert "/api/project/${projectId}/messages" in html

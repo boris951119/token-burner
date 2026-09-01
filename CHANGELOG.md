@@ -2,7 +2,7 @@
 
 ## v0.5.0-beta · V0（进行中）
 
-> v0.5 Beta 开篇：Researcher Agent 降级版闭环（M10-1~10-4）。规划见 `v0.5.md` / `v0.5-workplan.md`；竞品基准分析更新至 v0.4 交付后版本。
+> v0.5 Beta 开篇：Researcher Agent 降级版闭环（M10-1~10-4）+ 可视化升级 V1（M11-1/11-2）。规划见 `v0.5.md` / `v0.5-workplan.md`；竞品基准分析更新至 v0.4 交付后版本。
 
 ### 新增（M10 Researcher Agent，规格第 4 章）
 
@@ -14,6 +14,12 @@
 - API：`POST /api/tasks` 新增 `research`（on/auto/off）与 `research_material` 字段透传
 - 提示词外化：`app/prompts/research_brief_system.md` / `research_brief_user.md`（M9 资源化惯例，fail-fast）
 - 新增测试：`tests/test_researcher.py` 30 用例（契约校验/触发判定/预算熔断/缓存命中/注入边界/管线集成），全量 50 文件回归无回退
+
+### 新增（M11 可视化升级 · V1 批次）
+
+- **M11-1** 实时监控面板（`client.html` `sec-monitor`）：阶段耗时条形图（SSE 事件驱动，`monStage` 开段 / `monStageSettle` 末段结算）、token 累积曲线（SVG polyline，滚动窗口 60 点 + 峰值标注）、模块状态全景（`m-mods`，待运行/运行中/通过/失败四态）
+- **M11-2** Agent 对话流图（`client.html` `sec-flow`）：讨论消息结构化记录（`orchestrator.py` `_record_message`：role/model/round/content，覆盖 pm → 双评审 → 修订 → 收敛全序列）；落盘 `sessions/discussion_messages.json`；API `GET /api/project/{id}/messages`（404 / 空 / 损坏 JSON 三种边界兜底）；前端纵向节点链渲染（角色配色 + 点击展开原文）
+- 新增测试：`tests/test_discussion.py` 消息记录 5 用例（角色顺序/轮次编号/落盘/无 file_manager 容错）；`tests/test_api_server.py` 端点 4 用例 + 前端契约 2 用例（监控与流图区块存在性、消息端点引用）
 
 ## v0.4.0-alpha（2026-08-31）
 

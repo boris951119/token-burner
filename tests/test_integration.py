@@ -58,13 +58,18 @@ SCRIPTS = [
 
 
 class LockedScriptedLLM:
-    """线程安全剧本桩（M8-1：每任务经 factory 独立实例）。"""
+    """线程安全剧本桩（M8-1：每任务经 factory 独立实例）。
+
+    契约与 ModelClient 对齐：chat() 追加 call_log 条目后回调 on_call
+    （M8-4 tokens 事件经 Pipeline 转发 → task_manager 计入 tokens_used）。
+    """
 
     def __init__(self):
         self.scripts = list(SCRIPTS)
         self.calls = 0
         self.call_log: list[dict] = []
         self.budget_guard = None
+        self.on_call = None
         self._lock = threading.Lock()
 
     def chat(self, model, messages, json_mode=False, **kw):
@@ -74,10 +79,13 @@ class LockedScriptedLLM:
                 self.budget_guard.ensure_allowed()
             self.calls += 1
             content = self.scripts.pop(0) if self.scripts else "ok"
-        self.call_log.append({
+        entry = {
             "model": model, "kind": "chat", "input_tokens": 10,
             "output_tokens": 5, "content_chars": len(content),
-        })
+        }
+        self.call_log.append(entry)
+        if self.on_call is not None:
+            self.on_call(entry)
         return LLMResponse(model=model, content=content,
                            input_tokens=10, output_tokens=5)
 

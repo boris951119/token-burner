@@ -340,6 +340,51 @@
    * ================================================================= */
   .empty { padding: var(--sp-5) var(--sp-4); text-align: center;
     color: var(--muted); font-size: var(--fs-sm); line-height: 1.8; }
+
+  /* =================================================================
+   * M11-1 监控面板：阶段耗时条形
+   * ================================================================= */
+  .m-row { display: flex; align-items: center; gap: var(--sp-3); font-size: var(--fs-xs); }
+  .m-row .m-name { width: 110px; flex: none; color: var(--text-2);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .m-row .m-bar { flex: 1; height: 14px; background: var(--panel-2);
+    border-radius: var(--r-sm); overflow: hidden; }
+  .m-row .m-bar > div { height: 100%; background: var(--accent-soft);
+    border-right: 2px solid var(--accent); transition: width var(--transition); }
+  .m-row .m-ms { width: 64px; flex: none; text-align: right; color: var(--muted);
+    font-family: var(--font-mono); }
+
+  /* =================================================================
+   * M11-2 对话流图：垂直节点链
+   * ================================================================= */
+  .flow-chain { display: flex; flex-direction: column; }
+  .flow-node { position: relative; padding: 8px 10px 8px 26px;
+    border-left: 2px solid var(--border); cursor: pointer; }
+  .flow-node:last-child { border-left-color: transparent; }
+  .flow-node::before { content: ""; position: absolute; left: -6px; top: 14px;
+    width: 10px; height: 10px; border-radius: var(--r-full);
+    background: var(--panel); border: 2px solid var(--accent); }
+  .flow-node.r-dev_review::before { border-color: var(--ok); }
+  .flow-node.r-test_review::before { border-color: var(--accent2); }
+  .flow-node.r-pm_converge::before { border-color: var(--text-2); }
+  .flow-node .fn-head { display: flex; align-items: center; gap: 8px;
+    font-size: var(--fs-xs); margin-bottom: 4px; }
+  .flow-node .fn-role { font-weight: 700; }
+  .flow-node.r-pm .fn-role, .flow-node.r-pm_revise .fn-role { color: var(--accent); }
+  .flow-node.r-dev_review .fn-role { color: var(--ok); }
+  .flow-node.r-test_review .fn-role { color: var(--accent2); }
+  .flow-node.r-pm_converge .fn-role { color: var(--text-2); }
+  .flow-node .fn-model { color: var(--muted); font-family: var(--font-mono); }
+  .flow-node .fn-round { color: var(--muted); margin-left: auto; }
+  .flow-node .fn-prev { color: var(--text-2); font-size: var(--fs-xs);
+    overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical; }
+  .flow-detail { margin-top: 8px; padding: 10px; background: var(--panel-2);
+    border: 1px solid var(--border); border-radius: var(--r-sm);
+    font-size: var(--fs-xs); white-space: pre-wrap; word-break: break-word;
+    max-height: 220px; overflow: auto; display: none; }
+  .flow-node.open .flow-detail { display: block; }
+  .flow-node.open { background: var(--panel-2); border-radius: var(--r-sm); }
 </style>
 </head>
 <body>
@@ -415,6 +460,26 @@
           <h4>执行进度</h4>
           <div class="timeline" id="timeline"></div>
           <div class="logbox hidden" id="logbox"></div>
+        </div>
+
+        <!-- M11-1 实时监控面板 -->
+        <div class="sub hidden" id="sec-monitor">
+          <h4>实时监控 <span style="font-weight:400; font-size:11px; color:var(--muted)">（阶段耗时 · token 曲线 · 模块全景）</span></h4>
+          <div id="m-stages" style="display:flex; flex-direction:column; gap:5px; margin-bottom:12px;"></div>
+          <svg id="m-curve" viewBox="0 0 300 80" preserveAspectRatio="none"
+               style="width:100%; height:80px; background:var(--panel-2); border:1px solid var(--border); border-radius:8px; margin-bottom:12px;">
+            <polyline id="m-curve-line" fill="none" stroke="var(--accent)" stroke-width="2" points=""/>
+          </svg>
+          <div style="font-size:11px; color:var(--muted); margin-bottom:6px;">token 累积曲线（峰值 <b id="m-peak">0</b>）</div>
+          <div class="mods" id="m-mods"></div>
+        </div>
+
+        <!-- M11-2 Agent 对话流图 -->
+        <div class="sub hidden" id="sec-flow">
+          <h4>Agent 对话流图 <span style="font-weight:400; font-size:11px; color:var(--muted)">（PM → 双评审 → 修订 → 收敛 · 点击节点看原文）</span></h4>
+          <div class="flow-chain" id="flow-chain">
+            <div class="empty">讨论结束后自动加载；历史项目可在项目库点「流图」查看。</div>
+          </div>
         </div>
 
         <!-- 模块 -->
@@ -676,6 +741,18 @@ const DEMO = {
     { name: "storage", status: "success", fix: "修复 0 次 · 测试 5 项通过" },
     { name: "core",   status: "awaiting", fix: "修复 1 次（JSON 路径边界）· 等待用户反馈" },
   ],
+  messages: [
+    { role: "pm", model: "gpt-4o", round: 0,
+      content: "待办事项 CLI 方案：Python 标准库实现，两模块划分（storage 持久化 / core 业务），JSON 存 ~/.todos.json，优先级三档排序。" },
+    { role: "dev_review", model: "deepseek-chat", round: 1,
+      content: "可行性 9/10。建议：storage 读写用原子写（tempfile+rename）避免进程中断损坏；模块划分合理，接口建议 load/save 两函数。" },
+    { role: "test_review", model: "claude-3-5-sonnet", round: 1,
+      content: "可测性良好。风险：优先级取值需校验（非法值回退「中」）；验收标准建议明确 pytest 用例数与 CLI 退出码约定。" },
+    { role: "pm_revise", model: "gpt-4o", round: 1,
+      content: "采纳：① storage 原子写；② 优先级白名单校验；③ 验收=pytest ≥8 用例全绿 + CLI 退出码 0/1。" },
+    { role: "pm_converge", model: "gpt-4o", round: 1,
+      content: "最终 spec v1 定稿：功能/模块/验收三节，详见 spec.md。" },
+  ],
   cost: {
     budget: 200000, used: 46352,
     rows: [
@@ -841,8 +918,114 @@ function logLine(text, cls) {
   box.scrollTop = box.scrollHeight;
 }
 
+/* ---- M11-1 实时监控：阶段耗时 / token 曲线 / 模块全景（SSE 事件驱动） ---- */
+const MON = { stages: [], curStage: null, curStart: 0, series: [], mods: {} };
+
+function monReset() {
+  MON.stages = []; MON.curStage = null; MON.curStart = 0;
+  MON.series = []; MON.mods = {};
+}
+
+function monStage(stage) {
+  const now = Date.now();
+  if (MON.curStage !== null) {
+    MON.stages.push({ name: MON.curStage, ms: now - MON.curStart });
+  }
+  MON.curStage = stage; MON.curStart = now;
+  renderStageBars();
+}
+
+function monStageSettle() {
+  if (MON.curStage !== null) {
+    MON.stages.push({ name: MON.curStage, ms: Date.now() - MON.curStart });
+    MON.curStage = null;
+    renderStageBars();
+  }
+}
+
+function renderStageBars() {
+  const rows = MON.stages.filter(s => s.ms > 0);
+  if (!rows.length) { $("m-stages").innerHTML = ""; return; }
+  const maxMs = Math.max(...rows.map(s => s.ms));
+  $("m-stages").innerHTML = rows.map(s => `
+    <div class="m-row">
+      <span class="m-name">${escapeHtml(s.name)}</span>
+      <div class="m-bar"><div style="width:${Math.max(3, Math.round(s.ms / maxMs * 100))}%"></div></div>
+      <span class="m-ms">${(s.ms / 1000).toFixed(1)}s</span>
+    </div>`).join("");
+}
+
+function monTokens(total) {
+  MON.series.push(total);
+  const peak = Math.max(...MON.series, 0);
+  $("m-peak").textContent = peak.toLocaleString();
+  const pts = MON.series.slice(-60).map((v, i) => {
+    const x = MON.series.length <= 1 ? 0 : i / (Math.min(MON.series.length, 60) - 1) * 300;
+    const y = 78 - (peak ? v / peak * 74 : 0);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(" ");
+  $("m-curve-line").setAttribute("points", pts);
+}
+
+function monModule(e) {
+  const name = e.module || e.name || "";
+  if (!name) return;
+  const st = { success: ["success", "完成"], failed: ["frozen", "失败"],
+               frozen: ["frozen", "冻结"], awaiting_feedback: ["awaiting", "待反馈"] };
+  const [cls, label] = st[e.status] || ["running", e.status || "…"];
+  MON.mods[name] = { cls, label, fix: e.fix_attempts || 0 };
+  $("m-mods").innerHTML = Object.entries(MON.mods).map(([n, m]) => `
+    <div class="mod">
+      <div class="name">${escapeHtml(n)} ${badge(m.cls)}</div>
+      <div class="fix">修复 ${m.fix} 次</div>
+    </div>`).join("");
+}
+
+/* ---- M11-2 对话流图：加载与渲染（数据源 /api/project/{id}/messages） ---- */
+const FLOW_ROLES = {
+  pm: ["PM · 初始方案"], pm_revise: ["PM · 修订"], pm_converge: ["PM · 收敛 spec"],
+  dev_review: ["评审 A · 开发工程师"], test_review: ["评审 B · 测试工程师"],
+};
+
+async function loadFlow(projectId) {
+  if (!projectId) return;
+  let data;
+  try {
+    data = await apiGet(`/api/project/${projectId}/messages`);
+  } catch { return; }   // 拉取失败静默（流图是辅助视图）
+  renderFlow(data.messages || []);
+}
+
+function renderFlow(messages) {
+  const box = $("flow-chain");
+  if (!messages.length) {
+    box.innerHTML = `<div class="empty">暂无讨论消息记录（任务可能未进入方案讨论阶段）。</div>`;
+    return;
+  }
+  box.innerHTML = "";
+  messages.forEach((m, i) => {
+    const [roleLabel] = FLOW_ROLES[m.role] || [m.role || "未知角色"];
+    const node = document.createElement("div");
+    node.className = `flow-node r-${escapeHtml(m.role || "pm")}`;
+    const prev = String(m.content || "").replace(/\s+/g, " ").slice(0, 90);
+    node.innerHTML = `
+      <div class="fn-head">
+        <span class="fn-role">${roleLabel}</span>
+        <span class="fn-model">${escapeHtml(m.model || "")}</span>
+        <span class="fn-round">第 ${m.round ?? i} 步</span>
+      </div>
+      <div class="fn-prev">${escapeHtml(prev)}…</div>
+      <div class="flow-detail">${escapeHtml(m.content || "")}</div>`;
+    node.addEventListener("click", () => node.classList.toggle("open"));
+    box.appendChild(node);
+  });
+}
+
 function runAsyncTask(taskId, onSettled) {
   show("sec-run");
+  show("sec-monitor");
+  show("sec-flow");
+  monReset();
   $("logbox").classList.remove("hidden");
   $("logbox").innerHTML = "";
   logLine(`任务已提交：${taskId}`, "stage");
@@ -868,7 +1051,13 @@ function runAsyncTask(taskId, onSettled) {
       logLine(`状态：${e.status}`);
       return;
     }
-    if (e.type === "stage") { markStage(e.stage); return; }
+    if (e.type === "stage") {
+      markStage(e.stage);
+      monStage(e.stage);          // M11-1：阶段耗时
+      // M11-2：进入模块开发 = 讨论已结束 → 预拉流图
+      if (e.stage === "模块开发" && currentProject) loadFlow(currentProject);
+      return;
+    }
     if (e.type === "project") {
       currentProject = e.project_id || null;
       logLine(`项目就绪：${e.project_id}`, "ok");
@@ -876,17 +1065,29 @@ function runAsyncTask(taskId, onSettled) {
     }
     if (e.type === "tokens") {
       $("c-used").textContent = (e.tokens || 0).toLocaleString();
+      monTokens(e.tokens || 0);   // M11-1：token 曲线
       logLine(`累计 token：${(e.tokens || 0).toLocaleString()}${e.model ? "（" + e.model + "）" : ""}`);
       return;
     }
     if (e.type === "module_done") {
+      monModule(e);               // M11-1：模块全景
       logLine(`模块完成：${e.module || e.name || ""}`, "ok");
       return;
     }
+    if (e.type === "research") {
+      logLine(`研究调研完成（${e.source || ""} 触发）`, "ok");
+      return;
+    }
+    if (e.type === "research_skipped") {
+      logLine(`研究跳过：${e.reason || ""}`);
+      return;
+    }
     if (e.type === "done") {
+      monStageSettle();           // M11-1：结算末阶段耗时
       if (lastStep) lastStep.className = "step done";
       if (e.status === "succeeded") {
         logLine("执行完成", "ok");
+        if (currentProject) loadFlow(currentProject);   // M11-2：完成后刷新流图
         renderLiveResult(e.result || {});
       } else {
         logLine(`执行失败：${e.error || "未知错误"}`, "bad");
@@ -917,9 +1118,12 @@ function runAsyncTask(taskId, onSettled) {
       if (t.stage && t.stage !== lastStage) {
         lastStage = t.stage;
         markStage(t.stage);
+        monStage(t.stage);        // M11-1：桌面轮询同步监控
+        if (t.stage === "模块开发" && currentProject) loadFlow(currentProject);
       }
       if (t.tokens_used) {
         $("c-used").textContent = t.tokens_used.toLocaleString();
+        monTokens(t.tokens_used); // M11-1：token 曲线（轮询粒度）
       }
       if (t.status === "succeeded" || t.status === "failed") {
         onEvent({
@@ -939,20 +1143,32 @@ function runAsyncTask(taskId, onSettled) {
 async function runStages() {
   const tl = $("timeline");
   tl.innerHTML = "";
+  show("sec-monitor");
+  show("sec-flow");
+  monReset();
   $("logbox").classList.remove("hidden");
   $("logbox").innerHTML = "";
   logLine("演示剧本开始（未连接后端）", "stage");
+  let tokenAcc = 0;
   for (const [title, desc] of DEMO.stages) {
     const el = document.createElement("div");
     el.className = "step active";
     el.innerHTML = `<div class="t">${title} <span class="spin">◌</span></div><div class="d">${desc}</div>`;
     tl.appendChild(el);
     logLine(`阶段：${title}`, "stage");
+    monStage(title);
     await sleep(700 + Math.random() * 500);
     el.className = "step done";
     el.querySelector(".t").textContent = title;
-    if (title === "模块开发") { renderModules(); show("mod-area"); }
+    tokenAcc += 3000 + Math.floor(Math.random() * 8000);
+    monTokens(tokenAcc);
+    if (title === "模块开发") {
+      renderModules(); show("mod-area");
+      DEMO.modules.forEach(m => monModule({ module: m.name, status: m.status, fix_attempts: 1 }));
+      renderFlow(DEMO.messages);       // M11-2：演示流图
+    }
   }
+  monStageSettle();
   logLine("演示剧本结束", "ok");
 }
 
@@ -1194,7 +1410,16 @@ async function loadProjects() {
       <div class="ops">
         ${p.has_state ? '<button class="btn btn-sm" data-resume="1">▶ 继续</button>' : ""}
         ${p.tokens ? '<button class="btn-ghost btn-sm" data-cost="1">成本</button>' : ""}
+        <button class="btn-ghost btn-sm" data-flow="1">流图</button>
       </div>`;
+    el.querySelector("[data-flow]")?.addEventListener("click", async () => {
+      switchView("work");
+      show("sec-run"); show("sec-monitor"); show("sec-flow");
+      monReset();
+      renderFlow([]);   // 先占位
+      $("flow-chain").innerHTML = `<div class="empty">加载中…</div>`;
+      await loadFlow(p.project_id);
+    });
     el.querySelector("[data-resume]")?.addEventListener("click", async () => {
       try {
         const data = await api("/api/resume", { project_id: p.project_id });

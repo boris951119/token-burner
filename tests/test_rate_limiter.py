@@ -20,7 +20,11 @@ from app.utils.rate_limiter import RateLimiter, provider_of
 
 
 class FakeClock:
-    """假时钟：sleep 即推进（单线程确定性，不真实等待）。"""
+    """假时钟：sleep 即推进（单线程确定性，不真实等待）。
+
+    推进量下限 1e-9s：极小 wait（如 0.1*10 回填的浮点残差 5.68e-15）
+    会因 ULP 吸收导致时钟停滞 → elapsed=0 → 死循环（MemoryError）。
+    """
 
     def __init__(self):
         self.now = 0.0
@@ -31,7 +35,7 @@ class FakeClock:
 
     def sleep(self, seconds: float) -> None:
         self.sleeps.append(seconds)
-        self.now += seconds
+        self.now += seconds if seconds > 1e-9 else 1e-9
 
 
 _OK_RESPONSE = {

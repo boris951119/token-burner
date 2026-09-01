@@ -273,7 +273,8 @@ class Pipeline:
             budget_tokens=team.budget_tokens,
             throttle_threshold=self.settings.budget_throttle_threshold,
         )
-        guard.record(_sum_tokens(self.llm.call_log[baseline:]))
+        # getattr 防护与 200/692 行同构：测试桩 LLM 无 call_log 时按 0 计
+        guard.record(_sum_tokens(getattr(self.llm, "call_log", [])[baseline:]))
         setattr(self.llm, "budget_guard", guard)
 
         stage = "方案讨论"

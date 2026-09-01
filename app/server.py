@@ -600,6 +600,27 @@ def create_app(
             raise HTTPException(404, "尚无成本报告（任务未产生调用）")
         return json.loads(report.read_text(encoding="utf-8"))
 
+    @app.get("/api/project/{project_id}/messages")
+    def project_messages(project_id: str) -> dict:
+        """M11-2：方案讨论消息记录（对话流图数据源，只读）。
+
+        数据为讨论产物落盘（sessions/discussion_messages.json，审计口径）；
+        任务未到讨论完成 / 记录不存在 → 空列表（前端渲染占位）。
+        """
+        handle = app.state.file_manager.get_project(project_id)
+        if handle is None:
+            raise HTTPException(404, f"项目不存在: {project_id}")
+        messages_file = handle.root / "sessions" / "discussion_messages.json"
+        if not messages_file.is_file():
+            return {"project_id": project_id, "messages": []}
+        try:
+            messages = json.loads(messages_file.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            messages = []  # 记录损坏不阻塞前端（返回空 + 占位渲染）
+        if not isinstance(messages, list):
+            messages = []
+        return {"project_id": project_id, "messages": messages}
+
     # ------------------------------------------------------------------
     # 生成代码只读访问（M1-4：插件 diff 预览与应用）
     # ------------------------------------------------------------------
