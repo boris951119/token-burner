@@ -2,20 +2,30 @@
 
 提示词正文已外置于 app/prompts/*.md（一个常量一个文件），
 prompt_templates.py 仅负责加载。本测试守护：
-- 30 个常量全部非空（loader fail-fast 之外的第二道防线）
+- 目录文件 ↔ 常量一一对应（防漏加载 / 防孤儿文件；数量随外化进度自然增长，不硬编码）
+- 全部常量非空（loader fail-fast 之外的第二道防线）
 - 关键占位符未被误删（引用方 .format 依赖）
 - 含 JSON 示例的模板保留 {{}} 转义（否则 .format 会 KeyError）
 - 注入防护语言仍在（审计问题 8 依赖）
 """
+from pathlib import Path
+
 import pytest
 
 from app.tools import prompt_templates as pt
+
+_PROMPTS_DIR = Path(__file__).resolve().parent.parent / "app" / "prompts"
 
 
 def test_all_prompts_loaded_and_non_empty():
     # 排除下划线开头的私有名（如 _PROMPTS_DIR，isupper() 对其返回 True）
     names = sorted(n for n in dir(pt) if n.isupper() and not n.startswith("_"))
-    assert len(names) == 30
+    # 唯一事实来源 = prompts 目录：文件名（大写）必须与常量名完全一致
+    files = sorted(p.stem.upper() for p in _PROMPTS_DIR.glob("*.md"))
+    assert names == files, (
+        f"目录文件与常量不一致；仅目录有: {sorted(set(files) - set(names))}；"
+        f"仅常量有: {sorted(set(names) - set(files))}"
+    )
     for name in names:
         assert str(getattr(pt, name)).strip(), f"提示词常量为空: {name}"
 

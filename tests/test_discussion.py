@@ -301,3 +301,52 @@ class TestSpecConfirm:
         assert r4.final is True
         assert r4.spec_md == "最终收敛合并版"
         assert llm.remaining == 0
+
+
+class TestMessageRecording:
+    """M11-2：讨论消息记录（对话流图数据源）。"""
+
+    def test_messages_roles_and_order(self, fm):
+        # 1 轮收敛：pm → dev_review → test_review → pm_converge
+        llm = ScriptedLLM(positive_scripts())
+        engine = make_engine(llm, file_manager=fm)
+        engine.run_discussion("需求", _create(fm))
+        roles = [m["role"] for m in engine.messages]
+        assert roles == ["pm", "dev_review", "test_review", "pm_converge"]
+        # 模型归属与角色一致（PM=主力档，评审A=dev 档，评审B=test 档）
+        assert engine.messages[0]["model"] == "gpt-4o"
+        assert engine.messages[1]["model"] == "deepseek-chat"
+        assert engine.messages[2]["model"] == "claude-3-5-sonnet"
+        # 全部消息带内容
+        assert all(m["content"].strip() for m in engine.messages)
+
+    def test_messages_round_numbering(self, fm):
+        # 2 轮讨论：修订轮次正确递增（显式限定 max_discussion_rounds=2，
+        # 否则默认 3 轮上限会让有弱点的评审继续跑第 3 轮）
+        llm = ScriptedLLM(varying_scripts(2))
+        engine = make_engine(
+            llm, settings=Settings(max_discussion_rounds=2), file_manager=fm
+        )
+        engine.run_discussion("需求", _create(fm))
+        rounds = [m["round"] for m in engine.messages]
+        assert rounds == [0, 1, 1, 1, 2, 2, 2]  # pm0 → r1(评A/评B/修订) → r2(评A/评B) → 收敛
+        assert engine.messages[3]["role"] == "pm_revise"
+        assert engine.messages[-1]["role"] == "pm_converge"
+
+    def test_messages_persisted_to_disk(self, fm):
+        # 落盘 sessions/discussion_messages.json（流图数据源，审计口径）
+        llm = ScriptedLLM(positive_scripts())
+        engine = make_engine(llm, file_manager=fm)
+        pid = _create(fm)
+        engine.run_discussion("需求", pid)
+        path = fm.get_project(pid).root / "sessions" / "discussion_messages.json"
+        assert path.is_file()
+        data = json.loads(path.read_text(encoding="utf-8"))
+        assert [m["role"] for m in data] == ["pm", "dev_review", "test_review", "pm_converge"]
+
+    def test_no_file_manager_no_crash(self):
+        # 无 file_manager（纯讨论模式）→ 记录在内存，不落盘不报错
+        llm = ScriptedLLM(positive_scripts())
+        engine = make_engine(llm, file_manager=None)
+        engine.run_discussion("需求", None)
+        assert len(engine.messages) == 4

@@ -540,6 +540,17 @@ class DiscussionEngine:
         # 11.5 确认环节状态
         self._confirm_feedbacks: list[str] = []
         self._final_spec: str | None = None  # 强制收敛后的最终 spec（不再修改）
+        # M11-2：讨论消息记录（对话流图数据源）——每条 {role, model, round, content}
+        self.messages: list[dict] = []
+
+    def _record_message(self, role: str, model: str, round_no: int, content: str) -> None:
+        """M11-2：记录一条讨论消息（流图节点数据，讨论结束落盘）。"""
+        self.messages.append({
+            "role": role,
+            "model": model,
+            "round": round_no,
+            "content": content,
+        })
 
     def _wire_embedder(self) -> None:
         """11.3/6.1：llm 具备 embed 能力且开关开启 → 注入第二道检测。
@@ -572,6 +583,7 @@ class DiscussionEngine:
                 )},
             ],
         )
+        self._record_message("pm", self.main_model, 0, proposal)
         history: list[str] = [f"[初始方案]\n{proposal}"]
         summaries: list[str] = []
         rounds = 0
@@ -581,6 +593,7 @@ class DiscussionEngine:
             # 11.3：评审意见进入论点库检测（重复论点计数）；
             # 开发评审触发冻结时，本轮测试评审直接跳过（省 token）
             dev_review = self._get_review(requirement, proposal, self.dev_model, "开发工程师", "实现成本、技术可行性、模块划分合理性")
+            self._record_message("dev_review", self.dev_model, rounds + 1, dev_review)
             rounds += 1
             if self._detector.check(dev_review).frozen:
                 frozen = True
@@ -598,6 +611,7 @@ class DiscussionEngine:
                 break
 
             test_review = self._get_review(requirement, proposal, self.test_model, "测试工程师", "可测试性、边界条件覆盖、验收标准明确性")
+            self._record_message("test_review", self.test_model, rounds, test_review)
             if self._detector.check(test_review).frozen:
                 frozen = True
                 summaries.append(
@@ -631,6 +645,7 @@ class DiscussionEngine:
                     )},
                 ],
             )
+            self._record_message("pm_revise", self.main_model, rounds, proposal)
             history.append(f"[第 {rounds} 轮修订]\n{proposal}")
 
         # 收敛裁决：轮数耗尽 / 循环打断 / 无新意见 → 主 LLM 产出最终 spec
@@ -645,6 +660,7 @@ class DiscussionEngine:
                 )},
             ],
         )
+        self._record_message("pm_converge", self.main_model, rounds, spec_md)
 
         outcome = DiscussionOutcome(
             spec_md=spec_md,
@@ -731,7 +747,11 @@ class DiscussionEngine:
         return self.llm.chat(model, messages).content
 
     def _persist_discussion(self, pid: str | None, outcome: DiscussionOutcome) -> None:
-        """讨论结果落盘（6.3：spec.md + sessions/discussion_summary.md）。"""
+        """讨论结果落盘（6.3：spec.md + sessions/discussion_summary.md）。
+
+        M11-2：另落 sessions/discussion_messages.json（逐条消息记录，
+        对话流图数据源）——消息为讨论产物（落盘即审计），不走 LLM。
+        """
         if not pid or self.file_manager is None:
             return
         handle = self.file_manager.get_project(pid)
@@ -741,6 +761,11 @@ class DiscussionEngine:
         summary = handle.root / "sessions" / "discussion_summary.md"
         summary.write_text(
             outcome.discussion_summary or "（无评审轮记录）", encoding="utf-8"
+        )
+        messages_file = handle.root / "sessions" / "discussion_messages.json"
+        messages_file.write_text(
+            json.dumps(self.messages, ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
 
 

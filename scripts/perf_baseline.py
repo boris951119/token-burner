@@ -32,7 +32,7 @@ CASES: list[dict] = [
     {"name": "简单直答", "requirement": "什么是 REST API？",
      "expect_kind": "direct_answer"},
     {"name": "简单编程", "requirement": "写一个判断回文字符串的 Python 函数",
-     "expect_kind": "direct_simple_coding"},
+     "expect_kind": "direct_code"},
     {"name": "复杂编程", "requirement": "开发一个用户管理系统，支持注册登录与数据持久化",
      "expect_kind": "team_flow"},
 ]
@@ -85,8 +85,17 @@ class FixedScriptLLM:
     def chat(self, model, messages, json_mode=False, **kw):
         self.calls += 1
         user = messages[-1]["content"] if messages else ""
-        if "REST API" in user:                      # 简单直答：1 次
-            content, tokens = "REST 是表征状态转移…", 15
+        if "REST API" in user:                      # 简单直答：评估 1 次 + 直答 1 次
+            if json_mode:
+                # 评估契约：task_type=基础 → Route.DIRECT_OUTPUT（路由见 orchestrator._dispatch）
+                content, tokens = (
+                    json.dumps({"task_type": "基础", "difficulty_score": 1,
+                                "reason": "baseline", "estimated_files": 0},
+                               ensure_ascii=False),
+                    300,
+                )
+            else:
+                content, tokens = "REST 是表征状态转移…", 15
         elif "回文" in user:                        # 简单编程：评估 1 次 + 直出 1 次
             if json_mode:
                 content, tokens = _assessment(3), 300
