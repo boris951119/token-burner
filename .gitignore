@@ -2,6 +2,10 @@
 projects/
 demo_projects/
 logs/
+# 例外：A/B 评测报告归档（M13-2 发布证据，随入库）
+!logs/
+!logs/ab_reports/
+!logs/ab_reports/*.json
 data_store.json
 
 # 打包发布物（经 GitHub Release 分发，不入库）

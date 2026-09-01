@@ -21,7 +21,8 @@ from dulwich.repo import Repo
 ROOT = Path(__file__).resolve().parent.parent
 AUTHOR = b"token-burner <jarvis@local>"
 # 仓库内部目录与生成产物：无条件排除（.git 自引用防范）
-HARD_IGNORED = {".git", ".vendor", "projects", "demo_projects", "logs",
+# （logs 不在硬排除——M13-2 A/B 报告归档需经 .gitignore 例外白名单入库）
+HARD_IGNORED = {".git", ".vendor", "projects", "demo_projects",
                 ".env", ".venv", "__pycache__", ".pytest_cache"}
 
 
@@ -37,16 +38,32 @@ def load_gitignore() -> list[str]:
 
 
 def is_ignored(path: Path, rules: list[str]) -> bool:
+    """.gitignore 规则判定（M13-2：支持 `!` 否定例外，后匹配覆盖先匹配）。
+
+    否定规则剥掉前导 `!` 后按同样语义匹配（目录名 / 全相对路径 / 文件名），
+    命中即解除忽略——用于 logs/ 下的 A/B 报告白名单。
+    """
     rel = path.relative_to(ROOT).as_posix()
     parts = rel.split("/")
     if parts[0] in HARD_IGNORED:
         return True
+    ignored = False
     for rule in rules:
-        if rule in parts:  # 目录名规则（如 __pycache__、.vendor）
-            return True
-        if fnmatch.fnmatch(rel, rule) or fnmatch.fnmatch(parts[-1], rule):
-            return True
-    return False
+        negated = rule.startswith("!")
+        pattern = rule[1:] if negated else rule
+        if not pattern:
+            continue
+        if negated:
+            # 否定例外按全相对路径 / 文件名匹配（粗粒度目录名匹配会把
+            # !logs 变成整目录解禁——白名单意图是仅放行特定子路径）
+            matched = (fnmatch.fnmatch(rel, pattern)
+                       or fnmatch.fnmatch(parts[-1], pattern))
+        else:
+            matched = (pattern in parts or fnmatch.fnmatch(rel, pattern)
+                       or fnmatch.fnmatch(parts[-1], pattern))
+        if matched:
+            ignored = not negated
+    return ignored
 
 
 def main() -> None:

@@ -1,0 +1,351 @@
+{
+  "cases": 20,
+  "cases_file": "内置标准集",
+  "single": {
+    "llm_tokens": 6300,
+    "llm_calls": 21,
+    "misclassified": 0,
+    "misjudge_rate": 0.0,
+    "avg_elapsed_ms": 0.8
+  },
+  "dual": {
+    "llm_tokens": 3800,
+    "llm_calls": 32,
+    "misclassified": 0,
+    "triage_rate": 0.45,
+    "misjudge_rate": 0.0,
+    "avg_elapsed_ms": 0.0
+  },
+  "token_saved": 2500,
+  "token_saved_ratio": 0.3968,
+  "kpi": {
+    "triage_rate_ge_60pct": false,
+    "misjudge_rate_lt_5pct": true
+  },
+  "per_case": {
+    "single": [
+      {
+        "cat": "闲聊",
+        "text": "你好呀，今天天气怎么样？",
+        "expect": "direct_output",
+        "actual": "direct_output",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "闲聊",
+        "text": "你是谁？能介绍一下自己吗",
+        "expect": "direct_output",
+        "actual": "direct_output",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "闲聊",
+        "text": "哈哈哈笑死我了",
+        "expect": "direct_output",
+        "actual": "direct_output",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "闲聊",
+        "text": "帮我讲个笑话吧",
+        "expect": "direct_output",
+        "actual": "direct_output",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "闲聊",
+        "text": "晚安，明天见",
+        "expect": "direct_output",
+        "actual": "direct_output",
+        "misclassified": false,
+        "elapsed_ms": 15
+      },
+      {
+        "cat": "基础问答",
+        "text": "Python 的 list 和 tuple 有什么区别？",
+        "expect": "direct_output",
+        "actual": "direct_output",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "基础问答",
+        "text": "什么是 REST API？",
+        "expect": "direct_output",
+        "actual": "direct_output",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "基础问答",
+        "text": "Git 里 rebase 和 merge 的区别是什么",
+        "expect": "direct_output",
+        "actual": "direct_output",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "基础问答",
+        "text": "SQL 中 LEFT JOIN 是什么意思？",
+        "expect": "direct_output",
+        "actual": "direct_output",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "基础问答",
+        "text": "HTTP 404 状态码代表什么",
+        "expect": "direct_output",
+        "actual": "direct_output",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "简单编程",
+        "text": "写一个 Python 函数判断字符串是否是回文",
+        "expect": "direct_simple_coding",
+        "actual": "direct_simple_coding",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "简单编程",
+        "text": "帮我写个脚本批量重命名当前目录的 txt 文件",
+        "expect": "direct_simple_coding",
+        "actual": "direct_simple_coding",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "简单编程",
+        "text": "用正则表达式提取文本里的所有邮箱地址",
+        "expect": "direct_simple_coding",
+        "actual": "direct_simple_coding",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "简单编程",
+        "text": "写一个计算斐波那契数列第 n 项的函数",
+        "expect": "direct_simple_coding",
+        "actual": "direct_simple_coding",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "简单编程",
+        "text": "帮我把 CSV 的两列互换位置",
+        "expect": "direct_simple_coding",
+        "actual": "direct_simple_coding",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "复杂编程",
+        "text": "开发一个双因素认证的用户管理系统，支持注册登录与权限校验",
+        "expect": "team_flow",
+        "actual": "team_flow",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "复杂编程",
+        "text": "做一个电商购物车服务，含库存扣减、优惠券与订单持久化",
+        "expect": "team_flow",
+        "actual": "team_flow",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "复杂编程",
+        "text": "开发一个通讯录管理命令行工具，支持增删改查、模糊搜索与 JSON 持久化",
+        "expect": "team_flow",
+        "actual": "team_flow",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "复杂编程",
+        "text": "构建一个博客平台：文章管理、评论系统、标签分类与全文搜索",
+        "expect": "team_flow",
+        "actual": "team_flow",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "复杂编程",
+        "text": "实现一个带断点续传的多线程文件下载器，支持校验与限速",
+        "expect": "team_flow",
+        "actual": "team_flow",
+        "misclassified": false,
+        "elapsed_ms": 0
+      }
+    ],
+    "dual": [
+      {
+        "cat": "闲聊",
+        "text": "你好呀，今天天气怎么样？",
+        "expect": "declined",
+        "actual": "declined",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "闲聊",
+        "text": "你是谁？能介绍一下自己吗",
+        "expect": "declined",
+        "actual": "declined",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "闲聊",
+        "text": "哈哈哈笑死我了",
+        "expect": "declined",
+        "actual": "declined",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "闲聊",
+        "text": "帮我讲个笑话吧",
+        "expect": "declined",
+        "actual": "declined",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "闲聊",
+        "text": "晚安，明天见",
+        "expect": "declined",
+        "actual": "declined",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "基础问答",
+        "text": "Python 的 list 和 tuple 有什么区别？",
+        "expect": "direct_output",
+        "actual": "direct_output",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "基础问答",
+        "text": "什么是 REST API？",
+        "expect": "direct_output",
+        "actual": "direct_output",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "基础问答",
+        "text": "Git 里 rebase 和 merge 的区别是什么",
+        "expect": "direct_output",
+        "actual": "direct_output",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "基础问答",
+        "text": "SQL 中 LEFT JOIN 是什么意思？",
+        "expect": "direct_output",
+        "actual": "direct_output",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "基础问答",
+        "text": "HTTP 404 状态码代表什么",
+        "expect": "direct_output",
+        "actual": "direct_output",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "简单编程",
+        "text": "写一个 Python 函数判断字符串是否是回文",
+        "expect": "direct_simple_coding",
+        "actual": "direct_simple_coding",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "简单编程",
+        "text": "帮我写个脚本批量重命名当前目录的 txt 文件",
+        "expect": "direct_simple_coding",
+        "actual": "direct_simple_coding",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "简单编程",
+        "text": "用正则表达式提取文本里的所有邮箱地址",
+        "expect": "direct_simple_coding",
+        "actual": "direct_simple_coding",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "简单编程",
+        "text": "写一个计算斐波那契数列第 n 项的函数",
+        "expect": "direct_simple_coding",
+        "actual": "direct_simple_coding",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "简单编程",
+        "text": "帮我把 CSV 的两列互换位置",
+        "expect": "direct_simple_coding",
+        "actual": "direct_simple_coding",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "复杂编程",
+        "text": "开发一个双因素认证的用户管理系统，支持注册登录与权限校验",
+        "expect": "team_flow",
+        "actual": "team_flow",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "复杂编程",
+        "text": "做一个电商购物车服务，含库存扣减、优惠券与订单持久化",
+        "expect": "team_flow",
+        "actual": "team_flow",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "复杂编程",
+        "text": "开发一个通讯录管理命令行工具，支持增删改查、模糊搜索与 JSON 持久化",
+        "expect": "team_flow",
+        "actual": "team_flow",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "复杂编程",
+        "text": "构建一个博客平台：文章管理、评论系统、标签分类与全文搜索",
+        "expect": "team_flow",
+        "actual": "team_flow",
+        "misclassified": false,
+        "elapsed_ms": 0
+      },
+      {
+        "cat": "复杂编程",
+        "text": "实现一个带断点续传的多线程文件下载器，支持校验与限速",
+        "expect": "team_flow",
+        "actual": "team_flow",
+        "misclassified": false,
+        "elapsed_ms": 0
+      }
+    ]
+  }
+}
