@@ -174,6 +174,11 @@ class Settings:
     research_cache_enabled: bool = True        # 三元组+资料哈希键，SQLite 单文件
     research_cache_path: str = ".research_cache.db"
     research_cache_ttl_days: int = 7
+    # M10-5 联网调研（缺省关闭；失败自动回退资料注入模式）
+    researcher_web_enabled: bool = False
+    research_web_provider: str = ""            # duckduckgo（免 key）| tavily（需 TAVILY_API_KEY）
+    research_web_max_results: int = 5          # 搜索结果拼接条数
+    research_web_timeout: int = 15             # 请求超时（秒）
 
     # ---- 14 章 生成项目本地 git 版本管理 ----
     enable_git: bool = True                      # 阶段性本地提交（免推送）
@@ -266,6 +271,19 @@ class Settings:
                     raise ValueError(
                         f"model_prices[{model!r}][{side!r}] 须为非负数值: {v!r}"
                     )
+
+        # M10-5：联网调研供应商白名单（开启才要求配置，避免拼写错误静默回退）
+        if self.researcher_web_enabled:
+            if self.research_web_provider not in ("duckduckgo", "tavily"):
+                raise ValueError(
+                    "research_web_provider 须为 'duckduckgo' 或 'tavily'，"
+                    f"当前值: {self.research_web_provider!r}"
+                )
+        if not (1 <= self.research_web_max_results <= 20):
+            raise ValueError(
+                "research_web_max_results 须在 1-20 之间，"
+                f"当前值: {self.research_web_max_results!r}"
+            )
 
         if self.retry_backoff_base < 0:
             raise ValueError(

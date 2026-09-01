@@ -22,6 +22,7 @@ from app.agents.researcher import (
     Researcher,
     should_research,
 )
+from app.agents.web_research import fetch_web_material
 from app.utils.shared_check import find_shared_dependents
 from app.config import Settings
 from app.dashboard.cost_dashboard import CostDashboard
@@ -323,6 +324,20 @@ class Pipeline:
                     ),
                     cache=cache,
                 )
+                # M10-5 联网调研（缺省关）：搜索结果增强资料；
+                # 失败返回空串 → 回退用户资料注入模式（降级链路单一）
+                if self.settings.researcher_web_enabled:
+                    web_material = fetch_web_material(
+                        decision.stack or requirement, self.settings
+                    )
+                    if web_material:
+                        research_material = (
+                            f"{research_material}\n\n{web_material}".strip()
+                        )
+                        self._emit("research_web",
+                                   provider=self.settings.research_web_provider)
+                    else:
+                        self._emit("research_web_fallback")
                 brief = researcher.generate_brief(
                     research_material, stack=decision.stack
                 )
