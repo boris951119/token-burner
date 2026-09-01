@@ -11,9 +11,15 @@
 
 from __future__ import annotations
 
+from typing import Callable
+
 
 class BudgetExceededError(RuntimeError):
     """任务 token 总预算耗尽（11.0：立即中止，落盘交用户）。"""
+
+
+class TaskCancelledError(RuntimeError):
+    """任务被用户取消（M12-1 协作式取消：检查点抛出，任务体终止）。"""
 
 
 class BudgetGuard:
@@ -30,12 +36,19 @@ class BudgetGuard:
         self.budget_tokens = budget_tokens
         self.throttle_threshold = throttle_threshold
         self.used_tokens = 0
+        # M12-1：协作式取消——任务取消旗标检查（ensure_allowed 复用本检查点）
+        self._cancel_check: Callable[[], bool] | None = None
+        self.cancelled = False
 
     # ------------------------------------------------------------------
 
     def record(self, total_tokens: int) -> None:
         """累计一次 LLM 调用的用量（input + output）。"""
         self.used_tokens += max(0, int(total_tokens))
+
+    def attach_cancel_check(self, check: Callable[[], bool]) -> None:
+        """M12-1：注入取消旗标检查（ensure_allowed 复用为取消检查点）。"""
+        self._cancel_check = check
 
     @property
     def ratio(self) -> float:
@@ -52,7 +65,10 @@ class BudgetGuard:
         return self.used_tokens >= self.budget_tokens
 
     def ensure_allowed(self) -> None:
-        """调用前检查：超预算即抛错（立即中止，不静默继续）。"""
+        """调用前检查：取消旗标 / 超预算即抛错（立即中止，不静默继续）。"""
+        if self._cancel_check is not None and self._cancel_check():
+            self.cancelled = True
+            raise TaskCancelledError("任务已被用户取消（M12-1 协作式取消检查点）")
         if self.exceeded:
             raise BudgetExceededError(
                 f"任务 token 总预算已耗尽: {self.summary()}（11.0 总闸）"

@@ -1,4 +1,4 @@
-"""异步任务管理器（规格 M8-3 提交+轮询 / M8-4 进度事件流）。
+"""异步任务管理器（规格 M8-3 提交+轮询 / M8-4 进度事件流 / M12-1 取消与僵尸清理）。
 
 - submit() 立即返回 task_id，线程池执行（默认并发 4）；
 - get() 查询状态：内存优先；服务重启后从项目 sessions/task_state.json
@@ -6,7 +6,10 @@
 - 进度事件源：Pipeline on_event（stage / module_done / project）与
   ModelClient on_call（tokens，经 Pipeline 转发）→ 双通道分发：
   订阅队列（SSE 实时推送）+ 状态落盘（轮询与重启恢复）；
-- M8-6（任务取消 / 僵尸清理，P2）仅预留 CANCELLED 终态，不实现。
+- M12-1 任务取消：pending 立即取消（job 不执行）；running 协作式取消
+  （cancel_flag 经 Pipeline 注入 BudgetGuard 检查点，抛 TaskCancelledError
+  终止任务体，线程释放）；recover_zombies() 重启后清扫磁盘遗留的
+  pending/running 状态（服务重启 → 僵尸标记 cancelled）。
 
 线程模型：工作线程执行任务；状态变更经内部互斥锁；事件广播
 put_nowait（订阅者消费过慢时丢弃进度帧——状态可经 GET 兜底）。
@@ -25,6 +28,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
 
+from app.utils.budget import TaskCancelledError
+
 _STATE_FILE = "task_state.json"
 
 
@@ -33,13 +38,13 @@ def _now() -> str:
 
 
 class TaskStatus(str, Enum):
-    """任务终态机（M8-6 预留 PENDING / CANCELLED）。"""
+    """任务终态机（M12-1：CANCELLED 正式启用）。"""
 
     PENDING = "pending"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
-    CANCELLED = "cancelled"   # 预留（M8-6，P2）
+    CANCELLED = "cancelled"   # 用户取消 / 僵尸清理（M12-1）
 
     @classmethod
     def terminal(cls) -> tuple["TaskStatus", ...]:
@@ -74,6 +79,7 @@ class TaskManager:
         )
         self._tasks: dict[str, TaskState] = {}
         self._subscribers: dict[str, list[queue.Queue]] = {}
+        self._cancel_flags: dict[str, threading.Event] = {}  # M12-1
         self._lock = threading.Lock()
 
     # ------------------------------------------------------------------
@@ -101,15 +107,106 @@ class TaskManager:
         )
         with self._lock:
             self._tasks[task_id] = state
+            self._cancel_flags[task_id] = threading.Event()  # M12-1
         self._pool.submit(self._run, task_id, job_factory(task_id))
         return task_id
 
+    # ------------------------------------------------------------------
+    # 取消（M12-1）
+    # ------------------------------------------------------------------
+
+    def cancel_flag(self, task_id: str) -> threading.Event | None:
+        """任务取消旗标（Pipeline 注入 BudgetGuard 检查点用）。"""
+        with self._lock:
+            return self._cancel_flags.get(task_id)
+
+    def cancel(self, task_id: str) -> tuple[str, dict] | None:
+        """取消任务（M12-1）。
+
+        返回 (action, state_dict)：
+        - immediate：pending → 立即置 CANCELLED（job 不执行）；
+        - cooperative：running → 置取消旗标，任务体在下一检查点中止；
+        - already_terminal：任务已终态，无法取消（调用方映射 409）。
+        未知任务返回 None（调用方映射 404）。
+        """
+        with self._lock:
+            state = self._tasks.get(task_id)
+            if state is None:
+                return None
+            if state.status in TaskStatus.terminal():
+                return "already_terminal", self._state_dict(state)
+            if state.status is TaskStatus.PENDING:
+                state.status = TaskStatus.CANCELLED
+                state.error = "用户取消（任务未开始执行）"
+                state.updated_at = _now()
+                state_dict = self._state_dict(state)
+                action = "immediate"
+            else:
+                flag = self._cancel_flags.get(task_id)
+                if flag is not None:
+                    flag.set()
+                state.error = "用户取消（协作式中止，下一检查点生效）"
+                state.updated_at = _now()
+                state_dict = self._state_dict(state)
+                action = "cooperative"
+        if action == "immediate":
+            self._persist(state)
+            self._broadcast(task_id, {
+                "type": "done", "status": TaskStatus.CANCELLED.value,
+                "task_id": task_id, "error": state.error,
+            })
+        return action, state_dict
+
+    def recover_zombies(self) -> int:
+        """M12-1：服务重启后清扫僵尸任务（磁盘遗留 pending/running）。
+
+        服务重启意味着旧任务线程已消失——磁盘上仍为 pending/running
+        的状态即僵尸，统一标记 cancelled 并落盘。返回清理数量。
+        """
+        if not self._projects_root.is_dir():
+            return 0
+        cleaned = 0
+        for state_file in self._projects_root.glob(f"*/sessions/{_STATE_FILE}"):
+            try:
+                data = json.loads(state_file.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if data.get("status") not in (
+                TaskStatus.PENDING.value, TaskStatus.RUNNING.value,
+            ):
+                continue
+            data["status"] = TaskStatus.CANCELLED.value
+            data["error"] = "服务重启中断，任务标记取消（M12-1 僵尸清理）"
+            data["updated_at"] = _now()
+            try:
+                state_file.write_text(
+                    json.dumps(data, ensure_ascii=False, indent=2),
+                    encoding="utf-8",
+                )
+                cleaned += 1
+            except OSError:
+                continue
+        return cleaned
+
     def _run(self, task_id: str, job: Callable[[], dict]) -> None:
         state = self._tasks[task_id]
+        if state.status is TaskStatus.CANCELLED:
+            # M12-1：排队期间被取消 → 跳过执行，直接确认终态
+            self._broadcast(task_id, {
+                "type": "done", "status": TaskStatus.CANCELLED.value,
+                "task_id": task_id, "error": state.error,
+            })
+            self._cancel_flags.pop(task_id, None)
+            return
         self._update(state, status=TaskStatus.RUNNING)
         self._broadcast(task_id, {"type": "status", "status": "running"})
         try:
             result = job()
+        except TaskCancelledError as exc:
+            # M12-1：协作式取消在检查点中止（中断现场已由管线落盘）
+            self._set_cancelled(state, task_id, f"用户取消（协作式中止：{exc}）")
+            self._cancel_flags.pop(task_id, None)
+            return
         except Exception as exc:  # noqa: BLE001 —— 任务失败转终态（可观测）
             self._update(
                 state, status=TaskStatus.FAILED,
@@ -119,6 +216,15 @@ class TaskManager:
                 "type": "done", "status": TaskStatus.FAILED.value,
                 "task_id": task_id, "error": state.error,
             })
+            self._cancel_flags.pop(task_id, None)
+            return
+        with self._lock:
+            flag = self._cancel_flags.get(task_id)
+            cancelled_in_race = flag is not None and flag.is_set()
+        if cancelled_in_race:
+            # M12-1：取消请求与完成竞态 → 用户意图优先（结果作废）
+            self._set_cancelled(state, task_id, "用户取消（与完成竞态，结果作废）")
+            self._cancel_flags.pop(task_id, None)
             return
         with self._lock:
             state.result = result
@@ -128,6 +234,15 @@ class TaskManager:
         self._broadcast(task_id, {
             "type": "done", "status": TaskStatus.SUCCEEDED.value,
             "task_id": task_id, "result": result,
+        })
+        self._cancel_flags.pop(task_id, None)
+
+    def _set_cancelled(self, state: TaskState, task_id: str, error: str) -> None:
+        """M12-1：协作式取消终态（更新 + 落盘 + 广播）。"""
+        self._update(state, status=TaskStatus.CANCELLED, error=error)
+        self._broadcast(task_id, {
+            "type": "done", "status": TaskStatus.CANCELLED.value,
+            "task_id": task_id, "error": error,
         })
 
     # ------------------------------------------------------------------

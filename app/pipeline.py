@@ -95,6 +95,7 @@ class Pipeline:
         git_manager_factory=None,
         llm_factory=None,
         on_event: Callable[[str, dict], None] | None = None,
+        cancel_check: Callable[[], bool] | None = None,
     ):
         # M8-1：llm 与 llm_factory 二选一——
         # - 直传 llm：单任务模式（CLI / 测试注入），原样使用；
@@ -107,6 +108,8 @@ class Pipeline:
         # M8-4：任务进度事件回调（kind, data）——异步任务的进度源，
         # 未挂接零开销；回调失败不影响任务本身
         self._on_event = on_event
+        # M12-1：协作式取消旗标检查（复用 BudgetGuard 检查点，见 run/resume）
+        self._cancel_check = cancel_check
         self.executor = executor
         self.settings = settings
         self.file_manager = file_manager
@@ -276,6 +279,9 @@ class Pipeline:
         # getattr 防护与 200/692 行同构：测试桩 LLM 无 call_log 时按 0 计
         guard.record(_sum_tokens(getattr(self.llm, "call_log", [])[baseline:]))
         setattr(self.llm, "budget_guard", guard)
+        # M12-1：协作式取消检查点注入（ensure_allowed 每次调用前生效）
+        if self._cancel_check is not None:
+            guard.attach_cancel_check(self._cancel_check)
 
         stage = "方案讨论"
         stage_box: list[str] = [stage]  # 可变引用（_develop_and_deliver 内更新）
@@ -702,6 +708,9 @@ class Pipeline:
             throttle_threshold=self.settings.budget_throttle_threshold,
         )
         setattr(self.llm, "budget_guard", guard)
+        # M12-1：协作式取消检查点注入（resume 路径同 run）
+        if self._cancel_check is not None:
+            guard.attach_cancel_check(self._cancel_check)
         try:
             result = self._develop_and_deliver(
                 team, None, plans, interfaces, order, guard, mode,

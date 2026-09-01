@@ -45,6 +45,7 @@ from pydantic import BaseModel, Field
 
 from app.config import Settings, load_settings
 from app.dashboard.cost_dashboard import CostDashboard
+from app.recommender import recommend as recommend_mode
 from app.execution.factory import build_executor
 from app.orchestrator import Route, RoutingResult, TaskRouter
 from app.pipeline import Pipeline, PipelineResult
@@ -189,6 +190,7 @@ def create_app(
     app.state.task_manager = TaskManager(
         projects_root=app.state.file_manager.projects_root,
     )  # M8-3 异步任务（线程池 + 状态落盘 + 事件广播）
+    app.state.task_manager.recover_zombies()  # M12-1：重启后僵尸清扫
 
     def _client():
         """M8-1：本请求的 ModelClient（注入 llm 时退回共享实例）。"""
@@ -206,6 +208,11 @@ def create_app(
             on_event=(
                 (lambda kind, data:
                  app.state.task_manager.on_pipeline_event(task_id, kind, data))
+                if task_id else None
+            ),
+            # M12-1：协作式取消旗标（异步任务注入 BudgetGuard 检查点）
+            cancel_check=(
+                (lambda: app.state.task_manager.cancel_flag(task_id).is_set())
                 if task_id else None
             ),
         )
@@ -301,6 +308,17 @@ def create_app(
             route=route_obj,
         )
         return _result_dict(result)
+
+    @app.get("/api/recommend")
+    def recommend(requirement: str = "") -> dict:
+        """M11-3：模式智能推荐（历史项目确定性统计，无 LLM，可覆盖）。"""
+        if not requirement.strip():
+            raise HTTPException(400, "requirement 不能为空")
+        return recommend_mode(
+            requirement,
+            app.state.file_manager.projects_root,
+            app.state.settings,
+        )
 
     @app.post("/api/tasks")
     def submit_task(req: TaskSubmitRequest) -> dict:
@@ -408,6 +426,30 @@ def create_app(
         if data is None:
             raise HTTPException(404, f"任务不存在: {task_id}")
         return data
+
+    @app.delete("/api/tasks/{task_id}")
+    def cancel_task(task_id: str) -> dict:
+        """M12-1：取消任务（pending 立即 / running 协作式）。
+
+        - pending → 立即置 CANCELLED（响应 status=cancelled）；
+        - running → 置协作取消旗标（响应 status=cancelling，
+          任务体在下一 BudgetGuard 检查点中止，终态经 GET/SSE 收敛）；
+        - 已终态 → 409；未知 task_id → 404。
+        """
+        result = app.state.task_manager.cancel(task_id)
+        if result is None:
+            raise HTTPException(404, f"任务不存在: {task_id}")
+        action, state = result
+        if action == "already_terminal":
+            raise HTTPException(
+                409, f"任务已终态（{state['status']}），无法取消"
+            )
+        return {
+            "task_id": task_id,
+            "status": "cancelled" if action == "immediate" else "cancelling",
+            "mode": action,
+            "detail": state.get("error", ""),
+        }
 
     @app.get("/api/tasks/{task_id}/events")
     def task_events(task_id: str):

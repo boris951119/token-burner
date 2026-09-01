@@ -2,7 +2,7 @@
 
 ## v0.5.0-beta · V0（进行中）
 
-> v0.5 Beta 开篇：Researcher Agent 降级版闭环（M10-1~10-4）+ 可视化升级 V1（M11-1/11-2）。规划见 `v0.5.md` / `v0.5-workplan.md`；竞品基准分析更新至 v0.4 交付后版本。
+> v0.5 Beta 开篇：Researcher Agent 降级版闭环（M10-1~10-4）+ 可视化升级 V1（M11-1/11-2）+ 运维与推荐 V2（M11-3 / M12-1 / M12-5）。规划见 `v0.5.md` / `v0.5-workplan.md`；竞品基准分析更新至 v0.4 交付后版本。
 
 ### 新增（M10 Researcher Agent，规格第 4 章）
 
@@ -20,6 +20,13 @@
 - **M11-1** 实时监控面板（`client.html` `sec-monitor`）：阶段耗时条形图（SSE 事件驱动，`monStage` 开段 / `monStageSettle` 末段结算）、token 累积曲线（SVG polyline，滚动窗口 60 点 + 峰值标注）、模块状态全景（`m-mods`，待运行/运行中/通过/失败四态）
 - **M11-2** Agent 对话流图（`client.html` `sec-flow`）：讨论消息结构化记录（`orchestrator.py` `_record_message`：role/model/round/content，覆盖 pm → 双评审 → 修订 → 收敛全序列）；落盘 `sessions/discussion_messages.json`；API `GET /api/project/{id}/messages`（404 / 空 / 损坏 JSON 三种边界兜底）；前端纵向节点链渲染（角色配色 + 点击展开原文）
 - 新增测试：`tests/test_discussion.py` 消息记录 5 用例（角色顺序/轮次编号/落盘/无 file_manager 容错）；`tests/test_api_server.py` 端点 4 用例 + 前端契约 2 用例（监控与流图区块存在性、消息端点引用）
+
+### 新增（M12-1 / M11-3 / M12-5 · V2 批次）
+
+- **M12-1** 任务取消与僵尸清理：`DELETE /api/tasks/{id}`——pending 立即取消（job 不执行）；running 协作式取消（取消旗标经 Pipeline 注入 BudgetGuard，`ensure_allowed` 检查点抛 `TaskCancelledError` 终止任务体，线程释放）；取消与完成竞态 → 用户意图优先标记 cancelled；`recover_zombies()` 服务启动时清扫磁盘遗留 pending/running 状态（服务重启 → 僵尸标记 cancelled）；client.html 任务运行时「取消任务」按钮 + cancelled 终态友好提示（非失败）
+- **M11-3** 模式智能推荐：`GET /api/recommend?requirement=…`——确定性统计历史项目（词袋相似度 ≥0.25：需求文本 sessions/requirements.md、模式 pipeline_state.json、成本与完成态 logs/cost_report.json + interruption.md），输出 `{mode, budget_tokens, reason}`（成功率优先 → 平均成本 → 保守缺省；预算 = 成功样本均值 ×1.2 取整千位）；推荐理由引用数据（N 个相似项目 / 成功 x/y / 平均 token）；无 LLM 参与（D.1），client.html 评估阶段展示推荐（仅展示，模式下拉可覆盖）
+- **M12-5** A/B 框架产品化：`scripts/ab_triage_eval.py` 新增 `--cases` 外置诉求集（JSON 数组，fail-fast 校验 cat/text/expect_single/expect_dual 与合法出口）；报告默认归档 `logs/ab_reports/ab_<时间戳>.json`（`--out` 可指定），报告含 `cases_file` 来源标注
+- 新增测试：`tests/test_task_cancel.py` 11 用例（pending 即时取消不执行 job / running 检查点协作中止 / 竞态取消 / 404 / 409 / 僵尸清扫 / client 取消契约）；`tests/test_recommender.py` 10 用例（无历史缺省 / 成功率决策 / 平手取廉 / 不相关回退 / API 400/200 / client 契约）；`tests/test_ab_triage_eval.py` +9 用例（外置集加载与 fail-fast 校验 / 外置集跑套件 / 归档路径）
 
 ## v0.4.0-alpha（2026-08-31）
 

@@ -26,6 +26,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+ROOT = Path(__file__).resolve().parent.parent
+
 from app.config import Settings  # noqa: E402
 from app.orchestrator import TaskRouter, Route  # noqa: E402
 
@@ -87,10 +89,14 @@ _ASSESS_TOKENS = (200, 100)    # 主模型 json_mode 评估
 
 
 class MockTriageLLM:
-    """离线评测桩：按文本类别返回快判 / 评估 JSON（token 计量贴近真实量级）。"""
+    """离线评测桩：按文本类别返回快判 / 评估 JSON（token 计量贴近真实量级）。
 
-    def __init__(self, fast_model: str):
+    M12-5：支持外置诉求集（cases 参数，缺省内置标准集）。
+    """
+
+    def __init__(self, fast_model: str, cases: list[dict] | None = None):
         self.fast_model = fast_model
+        self.cases = cases if cases is not None else CASES
         self.calls = 0
         self.tokens = 0
         self.call_log: list[dict] = []
@@ -104,7 +110,7 @@ class MockTriageLLM:
             self.tokens += tokens
             self.call_log.append({"model": model, "tokens": tokens, "kind": "fast"})
             for cat, tri in _TRIAGE_BY_CAT.items():
-                for case in CASES:
+                for case in self.cases:
                     if case["cat"] == cat and case["text"] in user:
                         return _resp(json.dumps(tri, ensure_ascii=False), tokens)
             return _resp(json.dumps({"intent": "无意义", "confidence": 0.9}), tokens)
@@ -112,7 +118,7 @@ class MockTriageLLM:
         self.tokens += tokens
         self.call_log.append({"model": model, "tokens": tokens, "kind": "assess"})
         for cat, assess in _ASSESS_BY_CAT.items():
-            for case in CASES:
+            for case in self.cases:
                 if case["cat"] == cat and case["text"] in user:
                     self.assessed_texts.add(case["text"])
                     payload = {**assess, "reason": f"mock-{cat}"}
@@ -159,14 +165,18 @@ def _llm_tokens(llm) -> int:
     return 0
 
 
-def run_suite(fast_triage_enabled: bool, llm=None) -> dict:
-    """跑一个模式的全部用例，返回汇总（token / 误判 / 承接 / 延迟）。"""
+def run_suite(fast_triage_enabled: bool, llm=None, cases: list[dict] | None = None) -> dict:
+    """跑一个模式的全部用例，返回汇总（token / 误判 / 承接 / 延迟）。
+
+    M12-5：cases 支持外置诉求集（缺省内置标准集）。
+    """
+    cases = cases if cases is not None else CASES
     settings = Settings(fast_triage_enabled=fast_triage_enabled)
     if llm is None:
-        llm = MockTriageLLM(settings.fast_triage_model)
+        llm = MockTriageLLM(settings.fast_triage_model, cases)
     router = TaskRouter(llm, settings.models[0], settings)
 
-    per_case = [_route_case(router, c, fast_triage_enabled) for c in CASES]
+    per_case = [_route_case(router, c, fast_triage_enabled) for c in cases]
 
     misclassified = sum(1 for c in per_case if c["misclassified"])
     # 快判承接数：未进 System-2 评估的条目（精确口径——升级后出口恰好
@@ -182,15 +192,15 @@ def run_suite(fast_triage_enabled: bool, llm=None) -> dict:
         )
     return {
         "mode": "dual" if fast_triage_enabled else "single",
-        "cases_total": len(CASES),
+        "cases_total": len(cases),
         "llm_tokens": _llm_tokens(llm),
         "llm_calls": getattr(llm, "calls", 0),
         "misclassified": misclassified,
         "triaged_by_fast_path": triaged,
-        "triage_rate": round(triaged / len(CASES), 4),
-        "misjudge_rate": round(misclassified / len(CASES), 4),
+        "triage_rate": round(triaged / len(cases), 4),
+        "misjudge_rate": round(misclassified / len(cases), 4),
         "avg_elapsed_ms": round(
-            sum(c["elapsed_ms"] for c in per_case) / len(CASES), 1,
+            sum(c["elapsed_ms"] for c in per_case) / len(cases), 1,
         ),
         "per_case": per_case,
     }
@@ -215,13 +225,48 @@ def compare(single: dict, dual: dict) -> dict:
     }
 
 
+def load_cases(path: str | None) -> list[dict]:
+    """M12-5：加载外置诉求集（JSON 数组）；None 返回内置标准集。
+
+    fail-fast 校验（总则 D.1 确定性边界）：数组元素必须包含
+    cat / text / expect_single / expect_dual，且期望出口合法。
+    """
+    if path is None:
+        return CASES
+    cases = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(cases, list) or not cases:
+        raise ValueError(f"诉求集 {path} 必须为非空 JSON 数组")
+    for i, c in enumerate(cases):
+        for field in ("cat", "text", "expect_single", "expect_dual"):
+            if field not in c:
+                raise ValueError(f"诉求集第 {i} 条缺少字段 {field}")
+        for field in ("expect_single", "expect_dual"):
+            if c[field] not in _EXPECTED_BY_ROUTE:
+                raise ValueError(
+                    f"诉求集第 {i} 条 {field} 非法: {c[field]}（合法值："
+                    f"{sorted(_EXPECTED_BY_ROUTE)}）"
+                )
+    return cases
+
+
+def _archive_path(out: str) -> Path:
+    """M12-5：报告归档路径——--out 优先；缺省 logs/ab_reports/ 时间戳归档。"""
+    if out:
+        return Path(out)
+    stamp = time.strftime("%Y%m%d_%H%M%S")
+    return ROOT / "logs" / "ab_reports" / f"ab_{stamp}.json"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="M9-4 快慢双模式 A/B 评测")
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--mock", action="store_true", help="离线 mock LLM 自检")
     group.add_argument("--real", action="store_true", help="真实 LLM（需密钥）")
-    parser.add_argument("--out", default="", help="报告 JSON 输出路径（缺省打印）")
+    parser.add_argument("--cases", default="", help="外置诉求集 JSON 路径（缺省内置标准集）")
+    parser.add_argument("--out", default="", help="报告 JSON 输出路径（缺省归档 logs/ab_reports/）")
     args = parser.parse_args(argv)
+
+    cases = load_cases(args.cases or None)
 
     if args.real:
         from app.utils.model_client import ModelClient  # 真实链路（需密钥）
@@ -230,27 +275,32 @@ def main(argv: list[str] | None = None) -> int:
     else:
         llm = None  # run_suite 内部构造 mock
 
-    single = run_suite(False, llm)
-    dual = run_suite(True, llm)
-    report = {"cases": len(CASES), **compare(single, dual),
-              "per_case": {"single": single["per_case"], "dual": dual["per_case"]}}
+    single = run_suite(False, llm, cases)
+    dual = run_suite(True, llm, cases)
+    report = {
+        "cases": len(cases),
+        "cases_file": args.cases or "内置标准集",
+        **compare(single, dual),
+        "per_case": {"single": single["per_case"], "dual": dual["per_case"]},
+    }
 
     print("=" * 62)
-    print(f"M9-4 快慢双模式 A/B 评测（标准诉求集 {len(CASES)} 条）")
+    print(f"M9-4 快慢双模式 A/B 评测（诉求集 {len(cases)} 条）")
     print("=" * 62)
     print(f"单模式 token：{single['llm_tokens']:>8}  调用 {single['llm_calls']:>3}  "
           f"误判 {single['misclassified']}")
     print(f"双模式 token：{dual['llm_tokens']:>8}  调用 {dual['llm_calls']:>3}  "
-          f"误判 {dual['misclassified']}  快判承接 {dual['triaged_by_fast_path']}/{len(CASES)}")
+          f"误判 {dual['misclassified']}  快判承接 {dual['triaged_by_fast_path']}/{len(cases)}")
     print(f"节省：{report['token_saved']} token（{report['token_saved_ratio']:.1%}）")
     kpi = report["kpi"]
     print(f"KPI  快判承接 ≥60%：{'✅' if kpi['triage_rate_ge_60pct'] else '❌'}"
           f"   误判率 <5%：{'✅' if kpi['misjudge_rate_lt_5pct'] else '❌'}")
 
-    if args.out:
-        Path(args.out).write_text(
-            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(f"报告已写入：{args.out}")
+    archive = _archive_path(args.out)
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    archive.write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"报告已归档：{archive}")
     return 0
 
 

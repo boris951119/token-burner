@@ -1,10 +1,16 @@
-"""M9-4 快慢双模式 A/B 评测测试（mock 离线；真实运行见 scripts/ab_triage_eval.py --real）。"""
+"""M9-4 快慢双模式 A/B 评测测试（mock 离线；真实运行见 scripts/ab_triage_eval.py --real）。
+
+M12-5：外置诉求集（--cases JSON）与报告归档（logs/ab_reports/）回归。
+"""
 
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
+
+import pytest
 
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "ab_triage_eval.py"
 _spec = importlib.util.spec_from_file_location("ab_triage_eval", _SCRIPT)
@@ -72,3 +78,68 @@ class TestCompare:
 
     def test_main_mock_run_exits_zero(self):
         assert abe.main(["--mock"]) == 0
+
+
+class TestExternalCaseSet:
+    """M12-5：外置诉求集（--cases JSON）与报告归档。"""
+
+    def _write_cases(self, tmp_path: Path, cases: list[dict]) -> str:
+        p = tmp_path / "cases.json"
+        p.write_text(json.dumps(cases, ensure_ascii=False), encoding="utf-8")
+        return str(p)
+
+    def test_load_cases_none_returns_builtin(self):
+        assert abe.load_cases(None) is abe.CASES
+
+    def test_load_cases_from_json(self, tmp_path):
+        cases = [
+            {"cat": "闲聊", "text": "嗨嗨嗨", "expect_single": "direct_output", "expect_dual": "declined"},
+            {"cat": "复杂编程", "text": "做一个博客系统", "expect_single": "team_flow", "expect_dual": "team_flow"},
+        ]
+        path = self._write_cases(tmp_path, cases)
+        loaded = abe.load_cases(path)
+        assert loaded == cases
+
+    def test_load_cases_rejects_bad_expect(self, tmp_path):
+        path = self._write_cases(tmp_path, [
+            {"cat": "闲聊", "text": "嗨", "expect_single": "bad_route", "expect_dual": "declined"},
+        ])
+        with pytest.raises(ValueError, match="expect_single"):
+            abe.load_cases(path)
+
+    def test_load_cases_rejects_missing_field(self, tmp_path):
+        path = self._write_cases(tmp_path, [{"cat": "闲聊", "text": "嗨"}])
+        with pytest.raises(ValueError, match="expect_single"):
+            abe.load_cases(path)
+
+    def test_run_suite_with_external_cases(self, tmp_path):
+        cases = [
+            {"cat": "闲聊", "text": "嗨嗨嗨", "expect_single": "direct_output", "expect_dual": "declined"},
+            {"cat": "复杂编程", "text": "做一个博客系统", "expect_single": "team_flow", "expect_dual": "team_flow"},
+        ]
+        single = abe.run_suite(False, cases=cases)
+        dual = abe.run_suite(True, cases=cases)
+        assert single["cases_total"] == 2 and dual["cases_total"] == 2
+        assert single["misclassified"] == 0
+        assert dual["misclassified"] == 0
+        assert dual["triaged_by_fast_path"] == 1   # 闲聊被快判承接
+        assert [c["text"] for c in dual["per_case"]] == [c["text"] for c in cases]
+
+    def test_main_with_external_cases_archives_report(self, tmp_path):
+        cases = [
+            {"cat": "闲聊", "text": "嗨嗨嗨", "expect_single": "direct_output", "expect_dual": "declined"},
+            {"cat": "复杂编程", "text": "做一个博客系统", "expect_single": "team_flow", "expect_dual": "team_flow"},
+        ]
+        cases_path = self._write_cases(tmp_path, cases)
+        out_path = tmp_path / "report.json"
+        assert abe.main(["--mock", "--cases", cases_path, "--out", str(out_path)]) == 0
+        report = json.loads(out_path.read_text(encoding="utf-8"))
+        assert report["cases"] == 2
+        assert report["cases_file"] == cases_path
+        assert set(report["kpi"]) == {"triage_rate_ge_60pct", "misjudge_rate_lt_5pct"}
+
+    def test_default_archive_under_logs_ab_reports(self):
+        p = abe._archive_path("")
+        assert p.parent == abe.ROOT / "logs" / "ab_reports"
+        assert p.suffix == ".json"
+        assert abe._archive_path("x/r.json") == Path("x/r.json")

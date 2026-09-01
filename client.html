@@ -409,6 +409,7 @@
       <button class="btn" id="btn-start">🔥 点火</button>
       <span class="hint" id="resume-hint" style="display:none;"></span>
       <button class="btn-ghost btn-sm hidden" id="btn-resume">恢复续跑</button>
+      <button class="btn-ghost btn-sm hidden" id="btn-cancel-task" onclick="cancelTask()">■ 取消任务</button>
     </div>
   </section>
 
@@ -845,6 +846,10 @@ $("btn-start").addEventListener("click", async () => {
       window._route = r;
       fillRoute(r);
       show("sec-route");
+      // M11-3：历史数据模式推荐（仅展示，可覆盖——模式下拉框仍可自由选择）
+      try {
+        fillRecommend(await apiGet(`/api/recommend?requirement=${encodeURIComponent(req)}`));
+      } catch { /* 推荐失败不影响评估展示 */ }
     } catch (e) { alert("评估失败：" + e.message); }
     $("btn-start").disabled = false;
     return;
@@ -862,6 +867,16 @@ function fillRoute(r) {
   $("m-type").textContent = r.task_type;
   $("m-files").textContent = r.estimated_files;
   $("m-reason").textContent = "评估理由：" + r.reason;
+}
+
+/* M11-3：历史数据模式推荐（确定性统计，仅展示可覆盖） */
+function fillRecommend(rec) {
+  if (!rec || !rec.reason) return;
+  $("m-reason").innerHTML =
+    `${escapeHtml($("m-reason").textContent)}<br>` +
+    `<span style="color:var(--accent)">💡 历史推荐：${escapeHtml(rec.mode)} 模式 · ` +
+    `预算约 ${Number(rec.budget_tokens || 0).toLocaleString()} token（可覆盖）</span><br>` +
+    `<span style="color:var(--muted)">${escapeHtml(rec.reason)}</span>`;
 }
 
 $("mode").addEventListener("change", (e) => {
@@ -1021,11 +1036,38 @@ function renderFlow(messages) {
   });
 }
 
+/* ---- M12-1：任务取消（DELETE /api/tasks/{id}，协作式） ---- */
+let activeTaskId = null;
+async function cancelTask() {
+  if (!activeTaskId) return;
+  if (!confirm("确定取消当前任务？中断现场已落盘，之后可恢复续跑。")) return;
+  try {
+    const resp = await fetch(`/api/tasks/${activeTaskId}`, { method: "DELETE" });
+    const body = await resp.json().catch(() => ({}));
+    if (resp.status === 200) {
+      logLine(body.status === "cancelled"
+        ? "任务已取消（尚未开始执行）"
+        : "取消请求已发出，任务将在下一检查点停止", "stage");
+    } else {
+      logLine(`取消失败：${body.detail || resp.status}`, "bad");
+    }
+  } catch (e) {
+    logLine("取消请求失败：" + e.message, "bad");
+  }
+}
+
 function runAsyncTask(taskId, onSettled) {
   show("sec-run");
   show("sec-monitor");
   show("sec-flow");
   monReset();
+  activeTaskId = taskId;                                    // M12-1
+  $("btn-cancel-task").classList.remove("hidden");          // M12-1
+  const settle = () => {                                    // M12-1：终态后交还按钮
+    $("btn-cancel-task").classList.add("hidden");
+    activeTaskId = null;
+    if (onSettled) onSettled();
+  };
   $("logbox").classList.remove("hidden");
   $("logbox").innerHTML = "";
   logLine(`任务已提交：${taskId}`, "stage");
@@ -1089,11 +1131,15 @@ function runAsyncTask(taskId, onSettled) {
         logLine("执行完成", "ok");
         if (currentProject) loadFlow(currentProject);   // M11-2：完成后刷新流图
         renderLiveResult(e.result || {});
+      } else if (e.status === "cancelled") {
+        // M12-1：用户取消（友好提示，非失败）
+        logLine("任务已取消", "bad");
+        if (currentProject) loadFlow(currentProject);   // 中断现场已落盘 → 流图刷新
       } else {
         logLine(`执行失败：${e.error || "未知错误"}`, "bad");
         alert("任务执行失败：" + (e.error || "未知错误"));
       }
-      if (onSettled) onSettled();
+      settle();
     }
   };
 
@@ -1106,7 +1152,7 @@ function runAsyncTask(taskId, onSettled) {
       if (e.type === "done") es.close();
       onEvent(e);
     };
-    es.onerror = () => { es.close(); if (onSettled) onSettled(); };
+    es.onerror = () => { es.close(); settle(); };
     return;
   }
 
@@ -1125,7 +1171,7 @@ function runAsyncTask(taskId, onSettled) {
         $("c-used").textContent = t.tokens_used.toLocaleString();
         monTokens(t.tokens_used); // M11-1：token 曲线（轮询粒度）
       }
-      if (t.status === "succeeded" || t.status === "failed") {
+      if (t.status === "succeeded" || t.status === "failed" || t.status === "cancelled") {
         onEvent({
           type: "done", status: t.status,
           error: t.error, result: t.result,
@@ -1134,7 +1180,7 @@ function runAsyncTask(taskId, onSettled) {
       }
       setTimeout(poll, 2000);
     } catch {
-      if (onSettled) onSettled();   // 查询异常（服务重启等）：交还按钮
+      settle();   // 查询异常（服务重启等）：交还按钮
     }
   };
   poll();
