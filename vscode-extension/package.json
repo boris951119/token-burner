@@ -43,6 +43,18 @@
           "type": "string",
           "default": "",
           "description": "token-burner 仓库目录（用于「在终端启动服务」；留空则使用当前工作区根目录）"
+        },
+        "tokenBurner.budgetTokens": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "description": "任务预算 token 数（M12-4：0 = 按服务端档位配置；>0 覆盖每次任务的预算总闸）"
+        },
+        "tokenBurner.defaultModels": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "默认模型（M12-4：主 LLM / 开发副 / 测试副，按序 3 项；留空 = 用服务端 /api/config 预设）"
         }
       }
     }

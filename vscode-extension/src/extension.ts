@@ -41,6 +41,12 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("tokenBurner.openPanel", async () => {
       await vscode.commands.executeCommand("token-burner.focus");
     }),
+    // M12-4：设置变更即时生效（预算 / 默认模型 / 服务地址变更即刷新面板）
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("tokenBurner")) {
+        provider.notifyConfigChange();
+      }
+    }),
   );
 }
 
@@ -84,6 +90,30 @@ class PanelProvider implements vscode.WebviewViewProvider {
     return vscode.workspace
       .getConfiguration("tokenBurner")
       .get<string>("serverDir", "");
+  }
+
+  // M12-4：任务预算覆盖（0 = 按服务端档位配置）
+  private get budgetTokens(): number {
+    return vscode.workspace
+      .getConfiguration("tokenBurner")
+      .get<number>("budgetTokens", 0);
+  }
+
+  // M12-4：默认模型（主/开发/测试，按序 ≤3 项；空 = 服务端预设）
+  private get defaultModels(): string[] {
+    return vscode.workspace
+      .getConfiguration("tokenBurner")
+      .get<string[]>("defaultModels", []);
+  }
+
+  /** M12-4：设置变更即时生效——重发连接状态与面板默认值。 */
+  notifyConfigChange(): void {
+    void this.checkServer();
+    this.post({
+      command: "defaults",
+      models: this.defaultModels,
+      budgetTokens: this.budgetTokens,
+    });
   }
 
   private async fetchJson(path: string, init?: RequestInit): Promise<any> {
@@ -133,6 +163,12 @@ class PanelProvider implements vscode.WebviewViewProvider {
       await this.fetchJson("/api/health");
       const config = await this.fetchJson("/api/config");
       this.post({ command: "serverState", ok: true, config });
+      // M12-4：面板默认值（预算 / 默认模型）随连接下发
+      this.post({
+        command: "defaults",
+        models: this.defaultModels,
+        budgetTokens: this.budgetTokens,
+      });
     } catch {
       this.post({ command: "serverState", ok: false });
     }
@@ -174,6 +210,10 @@ class PanelProvider implements vscode.WebviewViewProvider {
           requirement: msg.requirement,
           models: msg.models,
           mode: msg.mode,
+          // M12-4：插件设置页预算覆盖（0/缺省 = 服务端档位配置）
+          ...(this.budgetTokens > 0
+            ? { budget_tokens: this.budgetTokens }
+            : {}),
         }),
       });
       this.post({ command: "taskCreated", taskId: created.task_id });
@@ -473,6 +513,7 @@ class PanelProvider implements vscode.WebviewViewProvider {
         <select id="dev-model" title="开发副 LLM"></select>
         <select id="test-model" title="测试副 LLM"></select>
       </div>
+      <div id="budget-hint" class="hint" style="display:none"></div>
 
       <label class="field-label">执行模式</label>
       <label class="radio"><input type="radio" name="mode" value="safe" checked>

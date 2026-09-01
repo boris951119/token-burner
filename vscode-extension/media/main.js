@@ -88,6 +88,31 @@
     if (ok) {
       serverConfig = msg.config || {};
       fillModelSelects(serverConfig.models || []);
+      if (msg.defaults) applyDefaults(msg.defaults);   // M12-4
+    }
+  }
+
+  /* M12-4：插件设置页默认值（预算 / 默认模型），设置变更即时生效 */
+  let panelDefaults = { models: [], budgetTokens: 0 };
+
+  function applyDefaults(defaults) {
+    panelDefaults = {
+      models: Array.isArray(defaults.models) ? defaults.models : [],
+      budgetTokens: Number(defaults.budgetTokens) || 0,
+    };
+    // 默认模型：按序预选（值必须在服务端预设列表内才可选中）
+    const [main, dev, test] = panelDefaults.models;
+    if (main) $("main-model").value = main;
+    if (dev) $("dev-model").value = dev;
+    if (test) $("test-model").value = test;
+    // 预算提示（0 = 服务端档位配置）
+    const budgetHint = $("budget-hint");
+    if (budgetHint) {
+      budgetHint.textContent = panelDefaults.budgetTokens > 0
+        ? "任务预算：约 " + panelDefaults.budgetTokens.toLocaleString() +
+          " token（来自插件设置 tokenBurner.budgetTokens）"
+        : "";
+      budgetHint.style.display = panelDefaults.budgetTokens > 0 ? "block" : "none";
     }
   }
 

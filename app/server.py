@@ -47,12 +47,16 @@ from app.config import Settings, load_settings
 from app.dashboard.cost_dashboard import CostDashboard
 from app.recommender import recommend as recommend_mode
 from app.execution.factory import build_executor
+from app.execution.prewarm import prewarm_images
 from app.orchestrator import Route, RoutingResult, TaskRouter
 from app.pipeline import Pipeline, PipelineResult
 from app.task_manager import TaskManager, TaskStatus
 from app.tools.file_manager import FileManager
 from app.utils.locks import ProjectLockManager
 from app.utils.model_client import ModelClientFactory
+
+# M12-2 测试注入点：返回预热用 runner（None = 真实 subprocess）
+_prewarm_runner: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +100,9 @@ class TaskSubmitRequest(BaseModel):
     # research = on（显式调研）| auto（评估命中陌生栈自动触发）| off
     research: str = "off"
     research_material: str = ""              # 用户提供的资料文本（降级模式输入）
+    # M12-4（插件配置页）：任务级预算覆盖（插件设置 tokenBurner.budgetTokens
+    # 透传；None = 用服务端配置的档位预算）。≤0 视为非法，端点层校验。
+    budget_tokens: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +327,41 @@ def create_app(
             app.state.settings,
         )
 
+    @app.get("/api/docker/status")
+    def docker_status() -> dict:
+        """M12-3：Docker 检测与引导（未装 → 指引 + 自动降级进程模式）。"""
+        from app.execution.docker_executor import DockerExecutor
+
+        if not app.state.settings.docker_executor_enabled:
+            return {
+                "available": False,
+                "mode_effective": "process",
+                "hint": "配置 docker_executor_enabled 已关闭：auto 模式使用进程执行。",
+            }
+        if DockerExecutor.available():
+            return {
+                "available": True,
+                "mode_effective": "docker",
+                "hint": "Docker 可用：auto 模式使用容器级隔离执行。",
+            }
+        return {
+            "available": False,
+            "mode_effective": "process",
+            "hint": (
+                "未检测到 Docker：auto 模式已自动降级为进程执行，任务可正常运行；"
+                "如需容器级隔离，请安装 Docker Desktop"
+                "（https://www.docker.com/products/docker-desktop）后重启服务。"
+            ),
+        }
+
+    @app.post("/api/prewarm")
+    def prewarm() -> dict:
+        """M12-2：镜像缓存与预热（python/node；已存在跳过 pull，缓存校验）。"""
+        from app.execution.prewarm import prewarm_images
+
+        runner = _prewarm_runner() if callable(_prewarm_runner) else None
+        return prewarm_images(app.state.settings, runner=runner)
+
     @app.post("/api/tasks")
     def submit_task(req: TaskSubmitRequest) -> dict:
         """M8-3 异步任务提交：立即返回 task_id（线程池执行，并发 ≥4）。
@@ -340,6 +382,10 @@ def create_app(
                 raise HTTPException(400, f"mode 非法: {req.mode}")
             models = _validated_models(req.models)
             route_obj = _route_from_dict(req.route) if req.route else None
+            if req.budget_tokens is not None and req.budget_tokens <= 0:
+                raise HTTPException(
+                    400, f"budget_tokens 必须为正整数，当前: {req.budget_tokens}"
+                )
 
             def job_factory(task_id: str) -> Any:
                 def job() -> dict:
@@ -354,6 +400,8 @@ def create_app(
                         # M10：Researcher 触发模式与资料透传
                         research=req.research,
                         research_material=req.research_material,
+                        # M12-4：插件设置页预算覆盖（None = 服务端档位预算）
+                        budget_override=req.budget_tokens,
                     ))
                 return job
 
