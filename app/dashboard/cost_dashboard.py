@@ -36,6 +36,8 @@ class CallRecord:
     kind: str = ""
     cache_hit: bool = False
     saved_tokens: int = 0
+    # M12-9：路由档位（旗舰/主力/轻量；空串 = 未登记模型）
+    tier: str = ""
 
     @property
     def total(self) -> int:
@@ -76,25 +78,37 @@ class CostDashboard:
         kind: str = "",
         cache_hit: bool = False,
         saved_tokens: int = 0,
+        tier: str = "",
     ) -> None:
         self.records.append(
             CallRecord(model, stage, input_tokens, output_tokens,
-                       kind, cache_hit, saved_tokens)
+                       kind, cache_hit, saved_tokens, tier)
         )
 
     @classmethod
-    def from_call_log(cls, call_log: list[dict], budget_tokens: int) -> "CostDashboard":
-        """从 ModelClient.call_log 构建（须含 system_hint，否则归「其他」）。"""
+    def from_call_log(
+        cls,
+        call_log: list[dict],
+        budget_tokens: int,
+        tier_map: dict[str, str] | None = None,
+    ) -> "CostDashboard":
+        """从 ModelClient.call_log 构建（须含 system_hint，否则归「其他」）。
+
+        M12-9：tier_map（模型 → 档位名）提供时为每条记录标注路由档位。
+        """
         dashboard = cls(budget_tokens=budget_tokens)
+        tier_map = tier_map or {}
         for entry in call_log:
+            model = entry.get("model", "?")
             dashboard.record(
-                model=entry.get("model", "?"),
+                model=model,
                 stage=StageTracker.stage_of(entry.get("system_hint", "")),
                 input_tokens=entry.get("input_tokens", 0),
                 output_tokens=entry.get("output_tokens", 0),
                 kind=entry.get("kind", ""),
                 cache_hit=bool(entry.get("cache_hit", False)),
                 saved_tokens=int(entry.get("saved_tokens", 0) or 0),
+                tier=tier_map.get(model, ""),
             )
         return dashboard
 
@@ -115,6 +129,60 @@ class CostDashboard:
         for r in self.records:
             out[r.stage] = out.get(r.stage, 0) + r.total
         return out
+
+    def by_tier(self) -> dict[str, int]:
+        """按路由档位聚合 token（M12-9；未标注的记入「未登记」）。"""
+        out: dict[str, int] = {}
+        for r in self.records:
+            key = r.tier or "未登记"
+            out[key] = out.get(key, 0) + r.total
+        return out
+
+    # 档位路由成本对比（M12-9，原 M6-2）---------------------------------
+
+    def routing_costs(
+        self,
+        prices: dict[str, dict[str, float]] | None = None,
+        flagship_price: dict[str, float] | None = None,
+    ) -> dict[str, object]:
+        """实际成本 vs 旗舰假设成本（价格维度，不混入 token 口径）。
+
+        - prices: {model: {input, output}} 单价表（$/Mtok，config 可覆盖）；
+        - flagship_price: 旗舰档基准单价——假设全部调用都按旗舰档计费；
+        - 任一模型缺价只影响实际成本的覆盖范围；旗舰价缺失 → 不可用。
+        返回 {available, actual_cost_usd, flagship_cost_usd, saved_cost_usd}。
+        """
+        actual = 0.0
+        hypo = 0.0
+        priced = False
+        for r in self.records:
+            p = (prices or {}).get(r.model)
+            if p:
+                priced = True
+                actual += (
+                    r.input_tokens / 1e6 * p["input"]
+                    + r.output_tokens / 1e6 * p["output"]
+                )
+            if flagship_price:
+                hypo += (
+                    r.input_tokens / 1e6 * flagship_price["input"]
+                    + r.output_tokens / 1e6 * flagship_price["output"]
+                )
+        available = priced and hypo > 0
+        return {
+            "available": available,
+            "actual_cost_usd": round(actual, 4) if available else 0.0,
+            "flagship_cost_usd": round(hypo, 4) if available else 0.0,
+            "saved_cost_usd": round(hypo - actual, 4) if available else 0.0,
+        }
+
+    def attach_routing_costs(
+        self,
+        prices: dict[str, dict[str, float]] | None = None,
+        flagship_price: dict[str, float] | None = None,
+    ) -> None:
+        """M12-9：管线构建时预计算成本对比并缓存（实时看板序列化用）。"""
+        self.routing_costs_snapshot = self.routing_costs(prices, flagship_price)
 
     def input_output_totals(self) -> dict[str, int]:
         return {
@@ -205,8 +273,13 @@ class CostDashboard:
             lines.append(f"  {stage}: {tokens}")
         return "\n".join(lines)
 
-    def persist(self, directory: Path) -> Path:
-        """落盘 logs/cost_report.json（8.5）。"""
+    def persist(
+        self,
+        directory: Path,
+        prices: dict[str, dict[str, float]] | None = None,
+        flagship_price: dict[str, float] | None = None,
+    ) -> Path:
+        """落盘 logs/cost_report.json（8.5；M12-9 附加档位与成本对比）。"""
         path = Path(directory) / "cost_report.json"
         payload = {
             "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -215,12 +288,15 @@ class CostDashboard:
             "input_output": self.input_output_totals(),
             "by_model": self.by_model(),
             "by_stage": self.by_stage(),
+            "by_tier": self.by_tier(),  # M12-9
             "cache": self.cache_stats(),  # M4-4
             "savings": self.savings_summary(),  # M6-1
+            "routing_costs": self.routing_costs(prices, flagship_price),  # M12-9
             "calls": [
                 {
                     "model": r.model,
                     "stage": r.stage,
+                    "tier": r.tier,  # M12-9
                     "input_tokens": r.input_tokens,
                     "output_tokens": r.output_tokens,
                 }

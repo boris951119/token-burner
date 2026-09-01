@@ -34,6 +34,7 @@ from app.orchestrator import (
     TeamBuilder,
     assessment_model,
     route_models,
+    tier_map,
 )
 from app.tools.file_manager import FileManager
 from app.tools.git_manager import GitManager
@@ -1003,13 +1004,32 @@ class Pipeline:
             guard.budget_tokens if guard is not None
             else self.settings.task_token_budget(mode)
         )
+        # M12-9：路由档位标注 + 旗舰假设成本（价格维度，确定性计算）
+        tmap = tier_map(self.settings)
+        ref = next(
+            (m for m in self.settings.model_tier_flagship
+             if m in self.settings.models),
+            None,
+        )
+        flagship_price = (
+            self.settings.model_prices.get(ref) if ref is not None else None
+        )
         dashboard = CostDashboard.from_call_log(
             self.llm.call_log[self._task_baseline:],  # 仅本任务条目
             budget_tokens=budget,
+            tier_map=tmap,
         )
         handle = self.file_manager.get_project(project_id)
         if handle is not None:
-            dashboard.persist(handle.root / "logs")
+            dashboard.attach_routing_costs(
+                prices=self.settings.model_prices,
+                flagship_price=flagship_price,
+            )
+            dashboard.persist(
+                handle.root / "logs",
+                prices=self.settings.model_prices,
+                flagship_price=flagship_price,
+            )
         return dashboard
 
     # ------------------------------------------------------------------

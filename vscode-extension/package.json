@@ -61,7 +61,8 @@
   },
   "scripts": {
     "compile": "tsc -p ./",
-    "watch": "tsc -w -p ./"
+    "watch": "tsc -w -p ./",
+    "test": "node --test tests/"
   },
   "devDependencies": {
     "@types/node": "^26.4.0",

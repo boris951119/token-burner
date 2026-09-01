@@ -115,6 +115,17 @@ class Settings:
         default_factory=lambda: ["claude-3-5-sonnet", "deepseek-chat"]
     )
     model_tier_light: list[str] = field(default_factory=list)
+    # M12-6：分档阈值可配置（原 orchestrator 硬编码 7/4，行为默认不变）
+    route_flagship_threshold: int = 7   # 难度 ≥ 此值 → 全旗舰
+    route_main_threshold: int = 4       # 难度 ≥ 此值 → 主力+轻量混合（< → 全轻量）
+    # M12-9：模型单价表（$/Mtok，input/output 双价，近似值仅供参考，
+    # 用户可按实际供应商计费在 config.json 覆盖；未登记的模型不计入成本对比）
+    model_prices: dict[str, dict[str, float]] = field(default_factory=lambda: {
+        "gpt-4o": {"input": 2.50, "output": 10.00},
+        "claude-3-5-sonnet": {"input": 3.00, "output": 15.00},
+        "deepseek-chat": {"input": 0.27, "output": 1.10},
+        "gemini-1.5-pro": {"input": 1.25, "output": 5.00},
+    })
 
     # ---- M4 上下文缓存（M4-1 Embedding 缓存，缺省关闭）----
     embedding_cache_enabled: bool = False
@@ -233,6 +244,28 @@ class Settings:
                     f"模型档位包含未登记模型: {sorted(unknown)}"
                     "（请同步 model_tier_* 与 models 列表）"
                 )
+
+        # M12-6：路由分档阈值校验（旗舰阈值必须大于主力阈值，且在难度域内）
+        if not (0 <= self.route_main_threshold < self.route_flagship_threshold <= 10):
+            raise ValueError(
+                "路由阈值需满足 0 ≤ route_main_threshold < "
+                "route_flagship_threshold ≤ 10，当前: "
+                f"main={self.route_main_threshold}, "
+                f"flagship={self.route_flagship_threshold}"
+            )
+
+        # M12-9：价格表结构校验（尽早失败：model → {input, output} 非负数值）
+        for model, price in self.model_prices.items():
+            if not isinstance(price, dict) or not {"input", "output"} <= set(price):
+                raise ValueError(
+                    f"model_prices[{model!r}] 须含 input/output 两个单价键"
+                )
+            for side in ("input", "output"):
+                v = price[side]
+                if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+                    raise ValueError(
+                        f"model_prices[{model!r}][{side!r}] 须为非负数值: {v!r}"
+                    )
 
         if self.retry_backoff_base < 0:
             raise ValueError(
