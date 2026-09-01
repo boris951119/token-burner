@@ -86,6 +86,19 @@
   .conn.demo { color: var(--warn); border-color: var(--warn); background: var(--warn-soft); }
   .conn.live { color: var(--ok); border-color: var(--ok); background: var(--ok-soft); }
 
+  /* ===== M12-3：Docker 状态横幅（未装指引 / 可用预热） ===== */
+  .banner { display: none; align-items: center; gap: var(--sp-3);
+    margin: var(--sp-3) var(--sp-4) 0; padding: var(--sp-2) var(--sp-4);
+    border: 1px solid var(--border); border-radius: var(--r-lg);
+    background: var(--panel); font-size: var(--fs-sm); color: var(--muted); }
+  .banner.show { display: flex; }
+  .banner.warn { border-color: var(--warn); background: var(--warn-soft); color: var(--text); }
+  .banner.ok { border-color: var(--ok); background: var(--ok-soft); }
+  .banner .banner-text { flex: 1; line-height: 1.6; }
+  .banner .banner-close { cursor: pointer; background: none; border: none;
+    color: var(--muted); font-size: var(--fs-md); line-height: 1; padding: 2px 6px; }
+  .banner .banner-close:hover { color: var(--text); }
+
   /* ===== 主布局：左需求 / 右（上工作台 + 下 API 配置） ===== */
   main {
     flex: 1; display: grid; grid-template-columns: 400px 1fr;
@@ -398,6 +411,13 @@
   <div class="tag">文档消耗器 · AI 多智能体项目团队系统 · 规格 v0.3.1</div>
   <div class="conn demo" id="conn">● 演示模式</div>
 </header>
+
+<!-- M12-3：Docker 状态横幅（连接后由 checkDockerStatus 渲染） -->
+<div class="banner" id="docker-banner">
+  <span class="banner-text" id="docker-banner-text"></span>
+  <button class="btn btn-sm hidden" id="btn-prewarm">预热镜像</button>
+  <button class="banner-close" id="docker-banner-close" title="关闭">✕</button>
+</div>
 
 <main id="main-work">
 
@@ -789,6 +809,47 @@ function badge(status) {
   return `<span class="badge ${cls}">${text}</span>`;
 }
 
+/* ===== M12-3：Docker 状态横幅（未装 → 安装指引 + 保持进程模式；可用 → 镜像预热） ===== */
+function renderDockerBanner(data) {
+  const banner = $("docker-banner");
+  const text = $("docker-banner-text");
+  const prewarmBtn = $("btn-prewarm");
+  banner.classList.add("show");
+  banner.classList.toggle("warn", !data.available);
+  banner.classList.toggle("ok", data.available);
+  text.textContent = data.hint || "";
+  // M12-2：Docker 可用时提供预热入口（缓存校验，命中跳过 pull）
+  prewarmBtn.classList.toggle("hidden", !data.available);
+  if (!data.available) prewarmBtn.onclick = null;
+}
+
+async function checkDockerStatus() {
+  try {
+    renderDockerBanner(await apiGet("/api/docker/status"));
+  } catch { /* 状态获取失败不影响主流程 */ }
+}
+
+$("btn-prewarm").addEventListener("click", async () => {
+  const btn = $("btn-prewarm");
+  btn.disabled = true;
+  btn.textContent = "预热中…";
+  try {
+    const r = await api("/api/prewarm", {});
+    const stat = r.images.map((i) =>
+      `${i.image}${i.cached ? "（缓存命中）" : i.ok ? "（已拉取）" : "（失败：" + i.error + "）"}`
+    ).join("；");
+    $("docker-banner-text").textContent =
+      `镜像预热${r.ok ? "完成" : "部分失败"}，总耗时 ${(r.total_ms / 1000).toFixed(1)}s — ${stat}`;
+  } catch (e) {
+    $("docker-banner-text").textContent = "预热失败：" + e.message;
+  }
+  btn.disabled = false;
+  btn.textContent = "预热镜像";
+});
+$("docker-banner-close").addEventListener("click", () => {
+  $("docker-banner").classList.remove("show");
+});
+
 (async function detect() {
   if (API_BASE === null) return;
   // 桌面模式：pywebview 注入完成前 window.pywebview 不存在——
@@ -797,6 +858,7 @@ function badge(status) {
   try {
     if (inDesktop()) {
       const el = $("conn"); el.textContent = "● 桌面模式（已连接）"; el.className = "conn live";
+      checkDockerStatus();   // M12-3：连接后检测 Docker 状态（横幅指引/预热入口）
       const list = await apiGet("/api/resumable");
       if (list.length) {
         $("resume-hint").style.display = "inline";
@@ -809,6 +871,7 @@ function badge(status) {
     const r = await fetch(API_BASE + "/api/health");
     if (r.ok) {
       const el = $("conn"); el.textContent = "● 已连接"; el.className = "conn live";
+      checkDockerStatus();   // M12-3：连接后检测 Docker 状态（横幅指引/预热入口）
       const list = await apiGet("/api/resumable");
       if (list.length) {
         $("resume-hint").style.display = "inline";

@@ -184,6 +184,7 @@ class Pipeline:
         route: RoutingResult | None = None,
         research: str = "off",
         research_material: str = "",
+        budget_override: int | None = None,
     ) -> PipelineResult:
         """执行完整管线。交互参数由外层（CLI）收集后传入。
 
@@ -198,6 +199,9 @@ class Pipeline:
         research = "on"（用户显式要求调研）/ "auto"（评估 reason 命中
         陌生技术栈时自动触发）/ "off"（缺省，零行为变化）；
         research_material = 用户提供的资料文本（4.6 降级模式的输入）。
+
+        M12-4：budget_override = 任务级预算覆盖（插件设置页透传；
+        None/缺省 = team 档位预算，≤0 视为非法）。
         """
         # 11.0：基线——本任务开始前的调用日志长度（用量只计本任务）
         self._resolve_llm()  # M8-1：factory 模式下每任务新建客户端
@@ -272,8 +276,11 @@ class Pipeline:
 
         # 11.0 第 0 层总闸：按模式预算创建护栏并挂接到 LLM 客户端。
         # 评估等前置调用的用量计入本任务预算；任务结束（含异常）后卸载。
+        # M12-4：任务级预算覆盖（插件设置页；None/缺省 = team 档位预算）
+        if budget_override is not None and budget_override <= 0:
+            raise ValueError(f"budget_override 必须为正整数，当前: {budget_override}")
         guard = BudgetGuard(
-            budget_tokens=team.budget_tokens,
+            budget_tokens=budget_override or team.budget_tokens,
             throttle_threshold=self.settings.budget_throttle_threshold,
         )
         # getattr 防护与 200/692 行同构：测试桩 LLM 无 call_log 时按 0 计
@@ -990,9 +997,15 @@ class Pipeline:
         """8.5 成本统计：从本任务切片构建仪表盘并落盘 logs/（问题 7）。"""
         if not hasattr(self.llm, "call_log"):
             return None
+        # M12-4：看板预算 = 实际生效预算（任务级覆盖优先于档位配置）
+        guard = getattr(self.llm, "budget_guard", None)
+        budget = (
+            guard.budget_tokens if guard is not None
+            else self.settings.task_token_budget(mode)
+        )
         dashboard = CostDashboard.from_call_log(
             self.llm.call_log[self._task_baseline:],  # 仅本任务条目
-            budget_tokens=self.settings.task_token_budget(mode),
+            budget_tokens=budget,
         )
         handle = self.file_manager.get_project(project_id)
         if handle is not None:

@@ -24,6 +24,12 @@ function activate(context) {
     const provider = new PanelProvider(context.extensionUri);
     context.subscriptions.push(vscode.window.registerWebviewViewProvider("tokenBurner.panel", provider), vscode.commands.registerCommand("tokenBurner.openPanel", async () => {
         await vscode.commands.executeCommand("token-burner.focus");
+    }), 
+    // M12-4：设置变更即时生效（预算 / 默认模型 / 服务地址变更即刷新面板）
+    vscode.workspace.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration("tokenBurner")) {
+            provider.notifyConfigChange();
+        }
     }));
 }
 function deactivate() {
@@ -56,6 +62,27 @@ class PanelProvider {
         return vscode.workspace
             .getConfiguration("tokenBurner")
             .get("serverDir", "");
+    }
+    // M12-4：任务预算覆盖（0 = 按服务端档位配置）
+    get budgetTokens() {
+        return vscode.workspace
+            .getConfiguration("tokenBurner")
+            .get("budgetTokens", 0);
+    }
+    // M12-4：默认模型（主/开发/测试，按序 ≤3 项；空 = 服务端预设）
+    get defaultModels() {
+        return vscode.workspace
+            .getConfiguration("tokenBurner")
+            .get("defaultModels", []);
+    }
+    /** M12-4：设置变更即时生效——重发连接状态与面板默认值。 */
+    notifyConfigChange() {
+        void this.checkServer();
+        this.post({
+            command: "defaults",
+            models: this.defaultModels,
+            budgetTokens: this.budgetTokens,
+        });
     }
     async fetchJson(path, init) {
         const res = await fetch(this.baseUrl + path, init);
@@ -102,6 +129,12 @@ class PanelProvider {
             await this.fetchJson("/api/health");
             const config = await this.fetchJson("/api/config");
             this.post({ command: "serverState", ok: true, config });
+            // M12-4：面板默认值（预算 / 默认模型）随连接下发
+            this.post({
+                command: "defaults",
+                models: this.defaultModels,
+                budgetTokens: this.budgetTokens,
+            });
         }
         catch {
             this.post({ command: "serverState", ok: false });
@@ -134,6 +167,10 @@ class PanelProvider {
                     requirement: msg.requirement,
                     models: msg.models,
                     mode: msg.mode,
+                    // M12-4：插件设置页预算覆盖（0/缺省 = 服务端档位配置）
+                    ...(this.budgetTokens > 0
+                        ? { budget_tokens: this.budgetTokens }
+                        : {}),
                 }),
             });
             this.post({ command: "taskCreated", taskId: created.task_id });
@@ -406,6 +443,7 @@ class PanelProvider {
         <select id="dev-model" title="开发副 LLM"></select>
         <select id="test-model" title="测试副 LLM"></select>
       </div>
+      <div id="budget-hint" class="hint" style="display:none"></div>
 
       <label class="field-label">执行模式</label>
       <label class="radio"><input type="radio" name="mode" value="safe" checked>
