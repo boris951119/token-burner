@@ -21,6 +21,9 @@
       case "serverState":
         renderServerState(msg);
         break;
+      case "defaults":                    // M12-4：插件默认值（预算/默认模型）
+        applyDefaults(msg);
+        break;
       case "taskCreated":
         switchTab("task");
         resetRunView(msg.taskId);

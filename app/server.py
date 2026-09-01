@@ -132,13 +132,29 @@ def _route_from_dict(data: dict) -> RoutingResult:
 
 
 def _dashboard_dict(dashboard: CostDashboard) -> dict:
+    # M12-9：档位标注与成本对比（管线预计算快照优先，缺省走无价格计算）
+    routing_costs = getattr(dashboard, "routing_costs_snapshot", None)
+    if routing_costs is None:
+        routing_costs = dashboard.routing_costs()
     return {
         "budget_tokens": dashboard.budget_tokens,
         "total_tokens": dashboard.total_tokens,
         "input_output": dashboard.input_output_totals(),
         "by_model": dashboard.by_model(),
         "by_stage": dashboard.by_stage(),
+        "by_tier": dashboard.by_tier(),  # M12-9：档位聚合
         "savings": dashboard.savings_summary(),  # M6-1：节省量三指标
+        "routing_costs": routing_costs,  # M12-9：旗舰假设成本对比
+        "calls": [
+            {
+                "model": r.model,
+                "stage": r.stage,
+                "tier": r.tier,
+                "input_tokens": r.input_tokens,
+                "output_tokens": r.output_tokens,
+            }
+            for r in dashboard.records
+        ],
     }
 
 

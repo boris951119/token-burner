@@ -794,9 +794,9 @@ def route_models(
 ) -> tuple[str, str, str]:
     """按难度分为三个角色选模型（确定性规则，程序职责；总则 D.1）。
 
-    路由规则（v0.4.md M3-1）：
-    - 难度 1-3 → 全轻量；4-6 → 主力+轻量混合（主 LLM 主力档、副评审轻量档）；
-      7-10 → 全旗舰；
+    路由规则（v0.4.md M3-1；M12-6 分档阈值进 config，默认 7/4 行为不变）：
+    - 难度 < route_main_threshold → 全轻量；≥ 主力阈值 → 主力+轻量混合
+      （主 LLM 主力档、副评审轻量档）；≥ 旗舰阈值 → 全旗舰；
     - 档位为空或候选已被占用时按 轻量→主力→旗舰 方向回退，
       始终保证三模型互异且均在 settings.models（3.3 校验不变）；
     - 保守策略：宁可多花一点 token 也不明显降低质量（质量底线 v0.3.1）。
@@ -806,14 +806,14 @@ def route_models(
     main = [m for m in settings.model_tier_main if m in models]
     light = [m for m in settings.model_tier_light if m in models]
 
-    if difficulty_score >= 7:
+    if difficulty_score >= settings.route_flagship_threshold:
         # 全旗舰；旗舰候选不足时向下回退（质量优先：先主力后轻量）
         prefs = (
             [flagship, main, light],
             [flagship, main, light],
             [flagship, main, light],
         )
-    elif difficulty_score >= 4:
+    elif difficulty_score >= settings.route_main_threshold:
         # 主力+轻量混合：主 LLM 主力档，副 LLM 评审轻量档（评审不需要最强）
         prefs = (
             [main, flagship, light],
@@ -842,6 +842,22 @@ def route_models(
         chosen.append(pick)
         result.append(pick)
     return result[0], result[1], result[2]
+
+
+def tier_map(settings: Settings) -> dict[str, str]:
+    """模型 → 档位名映射（M12-9 路由明细；跨档重复时旗舰优先）。
+
+    确定性程序职责：档位归属只查 config 三档列表，不做任何推断。
+    """
+    mapping: dict[str, str] = {}
+    for tier_name, models in (
+        ("旗舰", settings.model_tier_flagship),
+        ("主力", settings.model_tier_main),
+        ("轻量", settings.model_tier_light),
+    ):
+        for name in models:
+            mapping.setdefault(name, tier_name)
+    return mapping
 
 
 def assessment_model(settings: Settings) -> str:
