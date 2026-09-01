@@ -1,0 +1,32 @@
+DBG tm_root= C:\Users\admin\AppData\Local\Temp\pytest-of-admin\pytest-273\test_running_state_marked_canc0\projects is_dir= True
+DBG glob= []
+DBG tmp_projects= C:\Users\admin\AppData\Local\Temp\pytest-of-admin\pytest-273\test_running_state_marked_canc0\projects True
+DBG FS: C:\Users\admin\AppData\Local\Temp\pytest-of-admin\pytest-273\test_running_state_marked_canc0\projects\projects
+DBG FS: C:\Users\admin\AppData\Local\Temp\pytest-of-admin\pytest-273\test_running_state_marked_canc0\projects\projects\僵尸项目_20260901_105049
+DBG FS: C:\Users\admin\AppData\Local\Temp\pytest-of-admin\pytest-273\test_running_state_marked_canc0\projects\projects\僵尸项目_20260901_105049\changelog
+DBG FS: C:\Users\admin\AppData\Local\Temp\pytest-of-admin\pytest-273\test_running_state_marked_canc0\projects\projects\僵尸项目_20260901_105049\code
+DBG FS: C:\Users\admin\AppData\Local\Temp\pytest-of-admin\pytest-273\test_running_state_marked_canc0\projects\projects\僵尸项目_20260901_105049\code\.env.example
+DBG FS: C:\Users\admin\AppData\Local\Temp\pytest-of-admin\pytest-273\test_running_state_marked_canc0\projects\projects\僵尸项目_20260901_105049\code\_shared
+DBG FS: C:\Users\admin\AppData\Local\Temp\pytest-of-admin\pytest-273\test_running_state_marked_canc0\projects\projects\僵尸项目_20260901_105049\code\README.md
+DBG FS: C:\Users\admin\AppData\Local\Temp\pytest-of-admin\pytest-273\test_running_state_marked_canc0\projects\projects\僵尸项目_20260901_105049\conftest.py
+DBG FS: C:\Users\admin\AppData\Local\Temp\pytest-of-admin\pytest-273\test_running_state_marked_canc0\projects\projects\僵尸项目_20260901_105049\interfaces.json
+DBG FS: C:\Users\admin\AppData\Local\Temp\pytest-of-admin\pytest-273\test_running_state_marked_canc0\projects\projects\僵尸项目_20260901_105049\logs
+DBG FS: C:\Users\admin\AppData\Local\Temp\pytest-of-admin\pytest-273\test_running_state_marked_canc0\projects\projects\僵尸项目_20260901_105049\logs\session_001.log
+DBG FS: C:\Users\admin\AppData\Local\Temp\pytest-of-admin\pytest-273\test_running_state_marked_canc0\projects\projects\僵尸项目_20260901_105049\modules
+DBG FS: C:\Users\admin\AppData\Local\Temp\pytest-of-admin\pytest-273\test_running_state_marked_canc0\projects\projects\僵尸项目_20260901_105049\sessions
+DBG FS: C:\Users\admin\AppData\Local\Temp\pytest-of-admin\pytest-273\test_running_state_marked_canc0\projects\projects\僵尸项目_20260901_105049\sessions\requirements.md
+DBG FS: C:\Users\admin\AppData\Local\Temp\pytest-of-admin\pytest-273\test_running_state_marked_canc0\projects\projects\僵尸项目_20260901_105049\sessions\task_state.json
+DBG FS: C:\Users\admin\AppData\Local\Temp\pytest-of-admin\pytest-273\test_running_state_marked_canc0\projects\projects\僵尸项目_20260901_105049\spec.md
+DBG FS: C:\Users\admin\AppData\Local\Temp\pytest-of-admin\pytest-273\test_running_state_marked_canc0\projects\projects\僵尸项目_20260901_105049\tests
+F
+================================== FAILURES ===================================
+_______ TestZombieSweep.test_running_state_marked_cancelled_on_startup ________
+tests\test_task_cancel.py:177: in test_running_state_marked_cancelled_on_startup
+    assert data.get("status") == "cancelled", (
+E   AssertionError: HTTP 404, body={"detail": "任务不存在: zombie-running"}
+E   assert None == 'cancelled'
+E    +  where None = <built-in method get of dict object at 0x000001F547A65080>('status')
+E    +    where <built-in method get of dict object at 0x000001F547A65080> = {'detail': '任务不存在: zombie-running'}.get
+=========================== short test summary info ===========================
+FAILED tests/test_task_cancel.py::TestZombieSweep::test_running_state_marked_cancelled_on_startup
+1 failed in 1.81s

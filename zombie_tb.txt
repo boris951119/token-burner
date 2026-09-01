@@ -1,0 +1,47 @@
+FF.                                                                      [100%]
+================================== FAILURES ===================================
+_______ TestZombieSweep.test_running_state_marked_cancelled_on_startup ________
+
+self = <test_task_cancel.TestZombieSweep object at 0x000002512AC8C1D0>
+client = (<starlette.testclient.TestClient object at 0x000002512ACCC9E0>, WindowsPath('C:/Users/admin/AppData/Local/Temp/pytest-of-admin/pytest-271/test_running_state_marked_canc0'))
+tmp_path = WindowsPath('C:/Users/admin/AppData/Local/Temp/pytest-of-admin/pytest-271/test_running_state_marked_canc0')
+
+    def test_running_state_marked_cancelled_on_startup(self, client, tmp_path):
+        self._make_zombie(tmp_path / "projects", "zombie-running", "running")
+        # client fixture 已在 create_app 中执行清扫
+        tc, _ = client
+        resp = tc.get("/api/tasks/zombie-running")
+        data = resp.json()
+>       assert data.get("status") == "cancelled", (
+            f"HTTP {resp.status_code}, body={json.dumps(data, ensure_ascii=False)[:300]}"
+        )
+E       AssertionError: HTTP 404, body={"detail": "任务不存在: zombie-running"}
+E       assert None == 'cancelled'
+E        +  where None = <built-in method get of dict object at 0x000002512ACF9B80>('status')
+E        +    where <built-in method get of dict object at 0x000002512ACF9B80> = {'detail': '任务不存在: zombie-running'}.get
+
+tests\test_task_cancel.py:168: AssertionError
+_______ TestZombieSweep.test_pending_state_marked_cancelled_on_startup ________
+
+self = <test_task_cancel.TestZombieSweep object at 0x000002512ACB3230>
+client = (<starlette.testclient.TestClient object at 0x000002512ACFD970>, WindowsPath('C:/Users/admin/AppData/Local/Temp/pytest-of-admin/pytest-271/test_pending_state_marked_canc0'))
+tmp_path = WindowsPath('C:/Users/admin/AppData/Local/Temp/pytest-of-admin/pytest-271/test_pending_state_marked_canc0')
+
+    def test_pending_state_marked_cancelled_on_startup(self, client, tmp_path):
+        self._make_zombie(tmp_path / "projects", "zombie-pending", "pending")
+        tc, _ = client
+        resp = tc.get("/api/tasks/zombie-pending")
+        data = resp.json()
+>       assert data.get("status") == "cancelled", (
+            f"HTTP {resp.status_code}, body={json.dumps(data, ensure_ascii=False)[:300]}"
+        )
+E       AssertionError: HTTP 404, body={"detail": "任务不存在: zombie-pending"}
+E       assert None == 'cancelled'
+E        +  where None = <built-in method get of dict object at 0x000002512BD85A40>('status')
+E        +    where <built-in method get of dict object at 0x000002512BD85A40> = {'detail': '任务不存在: zombie-pending'}.get
+
+tests\test_task_cancel.py:178: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_task_cancel.py::TestZombieSweep::test_running_state_marked_cancelled_on_startup
+FAILED tests/test_task_cancel.py::TestZombieSweep::test_pending_state_marked_cancelled_on_startup
+2 failed, 1 passed in 1.32s
