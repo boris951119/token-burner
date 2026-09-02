@@ -9,6 +9,9 @@
   6. 本地：复用 sync_local 链式重建提交（含签名提交），同步本地 main
 
 用法（沙箱外）：
+    # 方式一（推荐）：token 写入项目根 .env（已 gitignore，不入库）
+    #   .env 增加：GITHUB_TOKEN=ghp_xxx
+    # 方式二：临时环境变量
     $env:GITHUB_TOKEN = "<PAT>"
     python scripts/git_push_api.py https://github.com/<用户名>/<仓库名>
 """
@@ -27,6 +30,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # 复用 git_init_repo 的过滤规则
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / ".vendor"))
+
+from dotenv import load_dotenv  # noqa: E402
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")  # GITHUB_TOKEN 优先走 .env
 
 from git_init_repo import is_ignored, load_gitignore  # noqa: E402
 
