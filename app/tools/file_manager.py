@@ -178,16 +178,39 @@ class FileManager:
     ) -> Path:
         """写入公共层文件 code/_shared/<filename>（12.7：公共依赖集中归口）。
 
+        M14-1 符号级合并守卫：已有旧版时，新版静默丢失的顶层符号自动保留
+        （v0.5 实测覆盖事故根因修复）；显式删除须 `# DELETED: <name>` 标记；
+        语法解析失败回退整文件覆盖（接口门禁兜底）。
         内容相同则不重写（mtime 稳定，变更检测以内容为准）。
         """
         handle = self._require_project(project_id)
         self._check_filename(filename)
         path = handle.root / "code" / "_shared" / filename
-        if not (path.is_file() and path.read_text(encoding="utf-8") == content):
-            _write_text(path, content)
+        effective = content
+        merge_note = ""
+        if path.is_file():
+            old = path.read_text(encoding="utf-8")
+            if old != content:
+                from app.utils.shared_merge import merge_shared_source
+
+                merged, report = merge_shared_source(old, content)
+                effective = merged
+                if report.fallback_overwrite:
+                    merge_note = "（语法回退：整文件覆盖）"
+                elif report.merged:
+                    merge_note = (
+                        f"（合并守卫：保留 {report.kept_symbols}"
+                        f" 变更 {report.updated_symbols}"
+                        f" 删除 {report.deleted_symbols}）"
+                    )
+        if not (path.is_file() and path.read_text(encoding="utf-8") == effective):
+            _write_text(path, effective)
         # 交付物可运行性：_shared 包标记（from _shared.<file> import <符号>）
         _write_text(path.parent / "__init__.py", "")
-        self._log(handle, "写入公共层文件", path.relative_to(handle.root).as_posix())
+        self._log(
+            handle, "写入公共层文件",
+            path.relative_to(handle.root).as_posix() + merge_note,
+        )
         return path
 
     def shared_signature(self, project_id: str) -> str:

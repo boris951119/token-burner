@@ -133,6 +133,8 @@ class DevLoopEngine:
         # M4-3：_shared 上下文缓存（同任务跨模块复用，不重复读盘；
         # None = 未缓存。_split_shared 写入新公共块时失效）
         self._shared_ctx_cache: str | None = None
+        # M14-2：链接门禁符号索引（同任务跨模块/跨修复轮复用，mtime 增量）
+        self._link_index = None
 
     # ------------------------------------------------------------------
 
@@ -288,6 +290,38 @@ class DevLoopEngine:
                 failure_report = "静态门禁失败：" + "; ".join(static.issues)
                 gate_passed = False
             else:
+                # M14-2 全局链接门禁：跨模块/_shared import 符号必须存在
+                # （含 FROZEN 模块——交付物仍会 import 它们；v0.5 断裂缺口）
+                from app.utils.link_check import (
+                    _SymbolIndex,
+                    check_links,
+                    format_link_issues,
+                )
+
+                code_root = None
+                if project_id:
+                    handle = self.file_manager.get_project(project_id)
+                    if handle is not None:
+                        code_root = handle.root / "code"
+                if code_root is not None:
+                    # 索引按项目惰性创建并跨轮复用（mtime/size 增量缓存）
+                    if self._link_index is None or self._link_index._code_root != code_root:  # noqa: SLF001
+                        self._link_index = _SymbolIndex(code_root)
+                    link = check_links(
+                        code_root,
+                        pending_module=module,
+                        pending_code=code,
+                        index=self._link_index,
+                    )
+                    if not link.passed:
+                        failure_report = format_link_issues(link.issues)
+                        gate_passed = False
+                    else:
+                        gate_passed = True
+                else:
+                    gate_passed = True
+
+            if gate_passed:
                 # 前置门禁：接口契约差异校验（14.2 严重度表：
                 # missing/extra 阻断；signature_mismatch 仅警告）
                 iface_issues = check_implementation(module, code, contract)
