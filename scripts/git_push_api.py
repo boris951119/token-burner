@@ -175,6 +175,11 @@ def main() -> int:
     print(f"推送完成: https://github.com/{owner_repo}/commit/{new_sha[:12]}")
 
     # 7. 本地同步：复用 sync_local 的链式重建（含签名提交/时区候选）
+    #    SKIP_LOCAL_SYNC=1 跳过——链式重建会覆盖工作区文件（曾致 README
+    #    落回循环）；本地 git 历史本就是提交源头，默认跳过更安全
+    if os.environ.get("SKIP_LOCAL_SYNC"):
+        log("跳过本地同步（SKIP_LOCAL_SYNC=1）")
+        return 0
     try:
         sys.path.insert(0, str(Path(__file__).resolve().parent))
         from sync_local import sync  # noqa: E402
