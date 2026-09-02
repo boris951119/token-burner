@@ -50,6 +50,19 @@ _m95_check.txt
 # Embedding 缓存（M4-1，含 sqlite journal/wal）
 .embedding_cache.db*
 
+# Researcher 调研缓存（M10-4，运行时产物）
+.research_cache.db*
+
+# 论点库持久化（M4-2，含讨论文本）
+.loop_arguments.json
+
+# 商业汇报材料（不公开入库；经 scripts/make_*.py 本地生成）
+investor_docs/
+token-burner_投资人汇报*.pptx
+token-burner_可行性研究报告.docx
+token-burner_产品介绍.docx
+token-burner_竞品对比分析报告.docx
+
 # Python 缓存
 __pycache__/
 *.pyc

@@ -13,23 +13,30 @@ spec 确认 → 模块拆分 → 逐模块「写码 → 测试 → 执行」循�
 - **多智能体团队流程**：评估主 LLM 三分类路由（直答 / 简单编程直出 / 完整团队流程），
   三个角色模型互异；方案讨论 PM + 双评审（轮数/循环/收敛五层护栏）；
   难度 ≥5 或预估文件 ≥6 自动模块化拆分 + 接口契约
+
 - **双模式意图识别**：轻量模型快判（闲聊/无意义直接拒答省 token），
   低置信自动升级全量评估（`fast_triage_enabled`，缺省关）
+
 - **智能模型路由**：难度分 → 旗舰/主力/轻量三档分发（阈值与档位列表均可进
   `config.json` 自定义；`model_routing_enabled` 缺省关）
+
 - **Researcher Agent**（缺省关）：陌生技术栈可在开发前生成四段式结构化摘要
   （来源/版本/用法示例/坑点）注入 Dev/Test 提示词；支持联网搜索
   （duckduckgo 免 key / tavily，`researcher_web_enabled` 缺省关，失败自动回退
   用户资料注入）；独立预算 20k + SQLite 缓存（TTL 7 天）
+
 - **双执行模式**：安全模式（默认，不执行生成代码，交付后由你本地验证）/
   自动验证模式（真实执行，Docker 容器沙箱：资源配额/只读/无网络/非 root，
   Docker 不可用自动降级进程模式）
+
 - **成本治理**：六层护栏（预算总闸 → 讨论轮数 → 循环检测 → 修复上限 →
   spec 收敛 → 输出截断）；`logs/cost_report.json` 全程审计；
   成本看板含档位路由明细与旗舰假设成本对比（`model_prices` 价目表可配置）；
   Embedding 缓存与 Researcher 缓存节省量统计
+
 - **可恢复与可取消**：中断后恢复续跑（已完成模块自动跳过）；运行中任务
   协作式取消 + 僵尸任务启动清扫
+
 - **可视化**：Web 工作台实时监控（阶段耗时 / token 曲线 / 模块全景）、
   对话流图、模式推荐、深浅主题、分类设置页
 
@@ -91,18 +98,18 @@ npm run compile        # 产物在 out/；消息协议契约测试：npm test
 
 ## 关键配置（config.json 覆盖 `Settings` 默认值）
 
-| 配置 | 默认 | 说明 |
-|---|---|---|
-| `max_task_tokens` | 200000 | 单任务预算总闸（自动验证模式 ×2.5） |
-| `model_routing_enabled` | false | 难度分三档智能路由 |
-| `model_tier_flagship` / `_main` / `_light` | 预设 | 三档模型列表（须 ⊆ models） |
-| `route_flagship_threshold` / `_main_threshold` | 7 / 4 | 分档难度阈值（可自定义） |
-| `fast_triage_enabled` | false | System-1 快判前置 |
-| `researcher_enabled` | false | Researcher 前置调研 |
-| `researcher_web_enabled` | false | 联网搜索（供应商 `duckduckgo`/`tavily`） |
-| `docker_executor_enabled` | false | 自动模式容器级沙箱 |
-| `enable_git` | true | 生成项目本地 git 版本管理 |
-| `model_prices` | 近似价 | 各模型 $/Mtok 单价（看板成本对比口径） |
+| 配置                                             | 默认     | 说明                              |
+| ---------------------------------------------- | ------ | ------------------------------- |
+| `max_task_tokens`                              | 200000 | 单任务预算总闸（自动验证模式 ×2.5）            |
+| `model_routing_enabled`                        | false  | 难度分三档智能路由                       |
+| `model_tier_flagship` / `_main` / `_light`     | 预设     | 三档模型列表（须 ⊆ models）              |
+| `route_flagship_threshold` / `_main_threshold` | 7 / 4  | 分档难度阈值（可自定义）                    |
+| `fast_triage_enabled`                          | false  | System-1 快判前置                   |
+| `researcher_enabled`                           | false  | Researcher 前置调研                 |
+| `researcher_web_enabled`                       | false  | 联网搜索（供应商 `duckduckgo`/`tavily`） |
+| `docker_executor_enabled`                      | false  | 自动模式容器级沙箱                       |
+| `enable_git`                                   | true   | 生成项目本地 git 版本管理                 |
+| `model_prices`                                 | 近似价    | 各模型 $/Mtok 单价（看板成本对比口径）         |
 
 完整参数见 `app/config.py`（每个字段都有注释与缺省值）。
 
@@ -129,6 +136,7 @@ npm run compile        # 产物在 out/；消息协议契约测试：npm test
 
 - 用户需求文本、用户反馈（运行结果/报错日志）、LLM 生成代码的输出、
   Researcher 摘要与联网抓取文本；
+
 - 自动模式的代码执行：默认 Docker 容器沙箱（内存 512m / cpus 1.0 /
   pids 128 / tmpfs 64m / 只读文件系统 / 无网络 / 非 root / 超时熔断），
   Docker 未安装自动降级进程模式（危险 API 黑名单预扫描仍生效）；
@@ -150,7 +158,12 @@ pytest 全量回归 → PyInstaller 构建 → 产物体积检查（≤80MB）�
 ## 文档
 
 - [CHANGELOG.md](CHANGELOG.md) — 版本历史（v0.5.0-beta 全量交付清单）
+
 - [v0.5.md](v0.5.md) / [v0.5-workplan.md](v0.5-workplan.md) — Beta 任务清单与批次计划
+
 - [v0.4.md](v0.4.md) — Alpha 规格（双模式意图 / Docker 沙箱 / 并发架构）
+
 - [v0.3.1 合并版规格](Token消耗器_AI多智能体项目团队系统_开发规格文档_v0.3.1_合并版.md) — 核心流程与护栏设计
+
 - [文档目录.md](文档目录.md) — 全部文档索引
+

@@ -1,5 +1,43 @@
 # Changelog
 
+## v0.5.0-beta · 验收闭环（2026-09-01 补录，同日完成全部遗留项）
+
+> 对 v0.5 Done 定义逐项实测验收（脚本 `scripts/_accept_*.py`，证据可复跑）。
+
+### 验收结果
+
+- **M11-3 模式推荐回放**：3 个历史项目需求回放，推荐与实际模式一致率 **3/3 = 100%**（KPI ≥80% 达标）；推荐理由引用真实历史数据（3 样本、safe 成功 2/3、均值 182,329 token → 预算 219k = 均值 ×1.2）；冷启动（不相似需求）缺省 safe 并说明理由
+
+- **M12-3 Docker 未装降级路径**：`/api/docker/status` 三态正确（未装 → 明确提示 + 降级 process + 安装指引）；`build_executor('auto')` 自动降级 LocalExecutor；服务健康不受影响（Docker 沙箱 <5s 计时顺延——本机未装 Docker，需有 Docker 的环境复测）
+
+- **M13-2 exe 产物复验**：体积 **75.2MB ≤ 80MB 达标**；冷启动实测 \~17s 未达 <2s——归因：安全软件（火绒）对未签名 exe 解压出的 5,580 个文件逐个实时扫描（\_MEI 目录时间戳证据：目录创建后 14.6s 最后一个文件才落盘，子进程随即出现）；改进路径：代码签名证书 / onedir 模式 / 用户信任区
+
+- **M10 Researcher 真实链路**（陌生技术栈=标准库 cmd 模块 + 用户资料注入，auto 模式真实 LLM 全流程）：
+
+  - `sessions/research_brief.md` 落盘，四段式（来源/版本/用法示例/坑点）关键词 4/4 命中
+
+  - **PM 初始方案直接消费研究内容**（方案文本采用 cmd.Cmd/do\_\* 正确用法）；交付代码 `command_handler.py`、`book_manager.py` 均基于 cmd API 实现
+
+  - 模块化拆分 8 模块全部交付（终态见下方质量发现）
+
+- **M11-2 对话流图数据源**：`GET /api/project/{id}/messages` 返回结构化消息（role/model/round/content，PM 方案 + dev\_review 结构化打分 8/7/6）；events 阶段事件流正常
+
+- **中断恢复（意外真实触发）**：首跑因 45 分钟验收脚本上限退出 → `interruption.md` 中断快照自动落盘 → `kind=resume` 续跑自动跳过已完成模块、续建剩余模块——断点续跑机制在真实链路验证通过
+
+### 遗留项完成（同日，API 余额恢复后）
+
+- **最后模块续跑完成**：模型余额分型号耗尽（glm-4-plus/air 不可用、4.5-air/4.6v/flash 可用）→ 快照模型替换为可用组合（主 glm-4.5-air / 开发 glm-4.6v / 测试 glm-4-flash，三模型互异保持）→ resume 续跑 **succeeded**：8/8 模块 + 8 份测试文件交付，interruption.md 按完成语义清除，cost\_report 终态落盘（本轮续跑 37,483 token：开发 35k + 测试 2.5k）
+
+- **A/B 真实报告归档**（`logs/ab_reports/ab_20260901_181857.json`，20 条标准诉求 × 双模式）：单模式 18,133 token / 21 调用 / 0 误判；双模式 42,892 token / 53 调用 / 1 误判 / 快判承接 10/20（50%）。**结论：以 glm-4.5-flash 作快判时双模式反而多耗 136% token**（快判模型相对主力不够便宜 + 低置信升级路径翻倍调用）——KPI 未达（承接 ≥60% ❌ / 误判 <5% ❌ 边缘），**验证 fast\_triage 缺省关闭的设计决策**；正式启用需先换更廉价快判模型复测
+
+### 真实质量发现（验收的意外收获，供 v1.0 参考）
+
+- **接口门禁收敛率低**：cmd 图书管理项目 8 模块全部 FROZEN（各修复 5 轮达上限）；跨项目统计（todo-cli 7/7、contacts 5/7 FROZEN）显示冻结是常态。典型失败模式：**契约声明函数式 API（read\_file 等）而 LLM 坚持生成类式实现（FileManager 等）**，5 轮修复不收敛。门禁「宁严勿松、绝不静默放行」符合设计哲学，且冻结模块均落盘已知问题与降级方案；但提示两条改进线：① 模块拆分阶段的接口契约提示词强化（对齐 LLM 的实现偏好）；② 考虑契约风格可配置（函数式/类式）
+
+- **\_shared 覆盖破坏**（真实缺口）：book\_validator 依赖 `_shared.utils.validate_isbn`，后续模块重写 `_shared/utils.py` 时丢失该函数 → 跨模块 import 断裂。「共享库变更整包回归」机制在该链路未拦截——需排查 shared\_check 的触发条件（疑似 resume 路径或重写判定盲区），建议 v1.0 修复
+
+- **平台可移植性**：file\_utils 生成代码使用 Unix-only 的 `fcntl`（Windows 不可用）——该模块已冻结未放行，但提示提示词应注入目标平台约束（本项目交付环境为 Windows）
+
 ## v0.5.0-beta（2026-09-01）
 
 > v0.5 Beta 全量交付：Researcher 降级版闭环 + 联网调研、可视化升级、运维与生态（镜像预热/主题/设置页/路由明细）、发布流水线。基线 v0.4.0-alpha（500+ 测试）→ 813+ 测试。
@@ -7,47 +45,65 @@
 ### 新增（M10-5 联网调研 · V5 批次）
 
 - **M10-5** 联网调研通道（`app/agents/web_research.py`）：可配置供应商 duckduckgo（免 key）/ tavily（`TAVILY_API_KEY`），搜索结果确定性拼装为调研资料后进入 Researcher 生成环节（纯 urllib 零新依赖）；任何失败返回空串 → 自动回退用户资料注入模式（降级链路单一，任务不阻塞）
+
 - 新配置：`researcher_web_enabled`（缺省 False）/ `research_web_provider` / `research_web_max_results` / `research_web_timeout`（供应商白名单校验，拼写错误尽早失败）
+
 - 抓取文本沿用 `sanitize_untrusted` 治理（`Researcher._one_pass` 统一入口，M7-6 同构）
 
 ### 新增（M12 运维与生态 · V3/V4 批次）
 
 - **M12-2** 镜像预热：`app/execution/prewarm.py` + `POST /api/prewarm`——python/node 镜像缓存校验（命中跳过 pull），报告逐镜像耗时与总耗时；client.html Docker 可用时提供「预热镜像」入口
+
 - **M12-3** Docker 检测引导：`GET /api/docker/status` 三态（配置关闭 / 可用 / 未装降级）；client.html 可关闭横幅——未装显示安装指引并保持进程模式，可用显示预热入口
+
 - **M12-4** 插件配置页：VS Code settings 新增 `tokenBurner.budgetTokens`（任务预算总闸覆盖）与 `tokenBurner.defaultModels`（三角色默认模型），设置变更即时生效；`defaults` 消息下发面板默认值（M12-10 契约测试发现并修复 webview 缺失 case 的协议缺口）
+
 - **M12-6** 自定义路由策略：分档阈值从 orchestrator 硬编码迁入 config（`route_flagship_threshold`/`route_main_threshold`），config.json 可覆盖，非法值尽早失败
+
 - **M12-7** 设置页重设计：新增「⚙ 设置」页签，四组分类（🎨 外观 / 🤖 模型 / 💰 预算 / 🛡️ 安全）；外观主题三选即时生效，安全组 auto 模式二次确认开关
+
 - **M12-8** 深浅主题切换：浅色 token 双套（19 配色 + 2 阴影覆盖）+ `system→dark→light` 循环（顶栏 🌓）+ `prefers-color-scheme` 跟随系统实时切换
-- **M12-9** 模型路由明细：call_log 档位标注（`tier_map` 旗舰/主力/轻量）→ cost_report 与实时看板新增 `by_tier`、逐调用档位列、实际成本 vs 旗舰假设成本对比（`model_prices` 价目表可配置，缺价 `available=false` 不误导）
+
+- **M12-9** 模型路由明细：call\_log 档位标注（`tier_map` 旗舰/主力/轻量）→ cost\_report 与实时看板新增 `by_tier`、逐调用档位列、实际成本 vs 旗舰假设成本对比（`model_prices` 价目表可配置，缺价 `available=false` 不误导）
+
 - **M12-10** 插件消息协议契约测试（`vscode-extension/tests/contract.test.mjs`，Node 内置 runner 零依赖）：双侧源码提取 command 集合做闭合性断言
 
-### 新增（M10-1~10-4 · V0 批次）
+### 新增（M10-1\~10-4 · V0 批次）
 
 - **M10-1** Researcher 角色骨架（四段式结构化摘要 + JSON 契约程序校验，sources/versions 强制非空）
+
 - **M10-2** 触发器三条件（显式指定 / 陌生技术栈信号词 / 修复 ≥2 轮建议不自动激活）
+
 - **M10-3** 知识注入链路（`sanitize_untrusted` 边界治理 → Dev/Test 全部提示词；`sessions/research_brief.md` 留档，resume 重读注入）
+
 - **M10-4** 独立预算与缓存（`research_budget_tokens` 默认 20k 独立 BudgetGuard；`ResearchCache` SQLite TTL 7 天）
+
 - 新配置：`researcher_enabled`（缺省 False，关闭态行为与 v0.4 完全一致）；API 新增 `research` / `research_material` 透传
 
 ### 新增（M11 可视化 · V1 批次）
 
 - **M11-1** 实时监控面板：阶段耗时条形、token 累积曲线（SVG）、模块状态全景
+
 - **M11-2** Agent 对话流图：讨论消息结构化记录 + `GET /api/project/{id}/messages` + 纵向节点链渲染
+
 - **M11-3** 模式智能推荐：`GET /api/recommend` 确定性统计历史项目（词袋相似度，成功率优先 → 平均成本 → 保守缺省，零 LLM 参与）
 
 ### 新增（M12-1/M12-5 · V2 批次）
 
 - **M12-1** 任务取消与僵尸清理：`DELETE /api/tasks/{id}` 协作式取消 + `recover_zombies()` 启动清扫
+
 - **M12-5** A/B 框架产品化：`--cases` 外置诉求集 + 报告归档 `logs/ab_reports/`
 
 ### 新增（M13 发布 · V5 批次）
 
 - **M13-1** GitHub Actions 发布流水线（`.github/workflows/release.yml`）：push `v*` 标签 → pytest 全量回归 → PyInstaller 构建 → 产物体积检查（≤80MB）→ Release 附 EXE
+
 - **M13-2** 版本号 `app.__version__` 升至 `0.5.0-beta`；本条目即发布 CHANGELOG
 
 ### 测试
 
 - 新增：`test_researcher.py`（30）/ `test_discussion.py`（5）/ `test_task_cancel.py`（11）/ `test_recommender.py`（10）/ `test_ab_triage_eval.py`（+9）/ `test_api_server.py`（+6）/ `test_v3.py`（9）/ `test_v4.py`（25）/ `test_v5.py`（13）/ 插件契约测试（4）
+
 - 全量回归：813 passed / 7 skipped（v0.4 基线 500+ → 813+）
 
 ## v0.4.0-alpha（2026-08-31）
@@ -57,58 +113,96 @@
 ### 新增
 
 #### M9 双模式意图识别（System-1 / System-2）
+
 - **M9-1/9-2** 快判契约与 FastTriage 前置接入 TaskRouter：轻量模型快判 `{intent, confidence, reason}`；高置信闲聊/无意义 → declined、基础 → 直答；编程/研究·分析/低置信/边界信号 → 升级 System-2；任何异常静默降级（失败方向单一）
+
 - **M9-3** declined 出口语义：附友好文案，CLI / API / client.html 三端适配
+
 - **M9-5** System-2 评估调用固定降档主力档（复用 M3-1 分层）
+
 - **M9-4** 快慢双模式 A/B 评测框架（`scripts/ab_triage_eval.py`：标准诉求集 20 条，token / 误判率 / 延迟三维对比 + KPI 判定；真实运行 `--real` 需密钥）
+
 - 新配置：`fast_triage_enabled`（缺省 False，行为与 v0.3.1 一致）/ `fast_triage_model` / `fast_triage_confidence_threshold`
 
 #### M8 服务端并发架构
+
 - **M8-1/8-2** ModelClient 任务级隔离（`ModelClientFactory` 每任务独立实例）+ `ProjectLockManager` 项目级锁（替代全局串行锁）
-- **M8-3** 异步任务 API：`POST /api/tasks`（kind=run/resume/feedback）提交即返回 task_id；`GET /api/tasks/{id}` 状态查询；任务状态落盘 `sessions/task_state.json`（服务重启可恢复）；线程池并发 ≥4
+
+- **M8-3** 异步任务 API：`POST /api/tasks`（kind=run/resume/feedback）提交即返回 task\_id；`GET /api/tasks/{id}` 状态查询；任务状态落盘 `sessions/task_state.json`（服务重启可恢复）；线程池并发 ≥4
+
 - **M8-4** SSE 进度事件流：`GET /api/tasks/{id}/events`（首帧快照 + 增量事件 + 心跳保活，断线重连）
+
 - **M8-5** 全局 LLM 限流器：令牌桶按供应商排队；429 退避复用 9 章重试
 
 #### M2 Docker 沙箱
+
 - **M2-1/2-2/2-3** DockerExecutor：卷挂载传输、超时熔断、只读文件系统、无网络（可配置）、非 root 运行；Docker 不可用自动降级进程模式（safe 模式完全不受影响）
+
 - **M2-4** 资源配额：`--memory/--memory-swap/--cpus/--pids-limit` + tmpfs 磁盘上限；超限 exit 137 → FAILED 语义
+
 - **M2-5** 多语言镜像：Node.js 运行时（`node:20-slim` + 内置 `node --test`，TS 支持预热）；`language` 配置参数与 `docker_node_image` 配置项
 
 #### M1 VS Code 插件
+
 - **M1-1/1-2** 插件脚手架 + 任务发起面板（需求/模型/模式选择，服务未启动时终端一键引导）
+
 - **M1-3** 实时进度：SSE 事件流消费 + 轮询兜底（阶段/进度条/执行日志）
+
 - **M1-4** 生成代码预览与应用：diff 预览、应用全部/逐文件（Workspace Edit API，可 Undo）
+
 - **M1-5** 成本统计：预算进度条（≥90% 转红）、按模型明细、节省量指标
+
 - **M1-6** 历史任务列表：「项目」Tab（需求摘要/模式徽章/token/更新时间）
+
 - **M1-7** 中断恢复：中断标识 + 一键续跑（异步任务通道）
 
 #### M3/M4 智能路由与上下文缓存
+
 - **M3-1/3-2** 三档模型分层（旗舰/主力/轻量）+ 按难度动态选模（`model_routing_enabled` 缺省关）
+
 - **M4-1** Embedding 缓存层（SQLite，键 = 内容 hash + 模型 + 维度，7 天过期）
+
 - **M4-2/4-3/4-4** 论点库持久化、`_shared` 公共模块缓存、缓存命中率看板
 
 #### M5 桌面端 UI（client.html）
+
 - **M5-1** 设计规范与组件库：design tokens 全套（配色/字体/间距/圆角/阴影/动效/焦点环）+ 通用组件 class（按钮/卡片/进度条/徽章/气泡/弹窗/日志区），旧类名兼容别名零破坏
+
 - **M5-2** 工作台/项目库双视图：快速模板、历史项目列表（继续续跑/看板回填）；新增 `GET /api/projects` 端点
+
 - **M5-3** 执行页切异步任务 API：SSE 事件驱动时间线 + 实时日志区 + token 实时面板
 
 #### M6/M7 成本与工程质量
+
 - **M6-1** 成本看板新增「已节省 Token / 节省比例 / 缓存命中率」
+
 - **M7-1** 集成测试：4 路并发压测（`tests/test_integration.py`：提交隔离/终态/续跑语义）
+
 - **M7-2** 性能基线脚本（`scripts/perf_baseline.py`：标准任务集 × 固定剧本，token/耗时/成功率可复现对比）
+
 - **M7-3** PyInstaller 打包 spec 就绪（含 `app/prompts` datas 同步）；EXE 构建与体积/冷启动验收须在用户环境执行 `pip install pyinstaller && pyinstaller token-burner.spec`
+
 - **M7-6** 需求注入面防护：`_sanitize_untrusted` 公共模块接入全部 requirement 插值点 + 注入回归用例
 
 ### 变更
+
 - 执行器工厂 `build_executor` 支持多语言参数（缺省 python 行为不变）
+
 - 服务端新增只读端点：`GET /api/projects`、`GET /api/project/{id}/files|file`
+
 - 旧同步 API（/api/route、/api/run）保留兼容
 
 ### 已知边界
+
 - 快判的 JS 静态扫描属 v0.5 TS 支持范围（node 运行时首道防线为容器级隔离）
+
 - M8-6 任务取消 / M2-6 镜像预热 / M2-7 Docker 桌面引导 / M3-3 路由 A/B 框架 / M3-4 自定义路由 / M5-4/5-5 / M6-2 / M7-5 发布流水线（P2）顺延
 
 ### 升级说明
+
 - 从 v0.3.1 升级：无需数据迁移；全部新能力缺省关闭，行为与 v0.3.1 完全一致
+
 - 启用新能力：`fast_triage_enabled` / `docker_executor_enabled` / `model_routing_enabled`（建议先跑各自回归验证再灰度）
+
 - VS Code 插件：`vscode-extension/` 目录 sideload 安装，需本地 `python -m app.server` 运行（≥ 本版本，支持异步任务 API）
+
