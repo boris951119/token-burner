@@ -90,12 +90,15 @@ class DockerExecutor(Executor):
         tmpfs_size: str | None = None,
         language: str = "python",
         node_image: str = "node:20-slim",
+        platform: str = "any",
     ):
         if language not in ("python", "node"):
             raise ValueError(
                 f"language 仅支持 python / node（M2-5 预热），当前: {language!r}"
             )
         self.language = language
+        # M14-4：交付目标平台（危险预扫描的平台黑名单口径）
+        self.platform = platform
         # M2-5：node 运行时解析到 Node.js 镜像；python 保持原镜像不变
         self.image = node_image if language == "node" else image
         self.network_enabled = network_enabled
@@ -125,7 +128,7 @@ class DockerExecutor(Executor):
         # M2-5 边界：黑名单是 Python AST——JS 源码 parse 失败会被静默放行
         #（语法错误交上层静态门禁），node 运行时的首道防线暂为容器级隔离
         #（只读 fs/无网/非 root）；JS 静态扫描属 v0.5 TS 支持范围。
-        issues = scan_dangerous(code, tests)
+        issues = scan_dangerous(code, tests, platform=self.platform)
         if issues:
             return ExecutionResult(
                 status=ExecutionStatus.BLOCKED,

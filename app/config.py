@@ -49,6 +49,9 @@ MODEL_ENV_KEYS: tuple[tuple[str, str], ...] = (
 
 VALID_EXECUTION_MODES: tuple[str, ...] = ("safe", "auto")
 
+# M14-3/M14-4：交付目标平台（提示词约束 + 危险扫描平台黑名单同源）
+VALID_TARGET_PLATFORMS: tuple[str, ...] = ("windows", "linux", "macos", "any")
+
 
 @dataclass
 class Settings:
@@ -82,6 +85,10 @@ class Settings:
     # ---- 3.6 节 双模执行 ----
     default_execution_mode: str = "safe"       # MVP 默认安全审阅模式
     sandbox_timeout_seconds: int = 30          # 3.6.3：沙箱 30s 超时熔断（Alpha v0.4）
+
+    # ---- M14-3/M14-4 交付目标平台（v1.0：平台可移植性）----
+    # windows=本机交付环境（v0.5 实测教训：生成代码含 Unix-only fcntl 直接 ImportError）
+    target_platform: str = "windows"           # windows | linux | macos | any
 
     # ---- 产出目录（CLI / 服务端 / 桌面端三端统一）----
     # 空 = 缺省「启动命令时所在目录 / projects」；配置绝对路径后
@@ -326,6 +333,12 @@ class Settings:
             raise ValueError(
                 "自动模式预算倍数必须落在 ×2~3（3.6.3 节），"
                 f"当前值: {self.auto_mode_budget_multiplier!r}"
+            )
+
+        if self.target_platform not in VALID_TARGET_PLATFORMS:
+            raise ValueError(
+                f"target_platform 必须为 {VALID_TARGET_PLATFORMS} 之一，"
+                f"当前值: {self.target_platform!r}"
             )
 
         if self.default_execution_mode not in VALID_EXECUTION_MODES:

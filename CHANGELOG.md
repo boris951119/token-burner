@@ -1,37 +1,40 @@
 # Changelog
 
-## v1.0 · V0 批次（2026-09-02）：机制堵漏——_shared 合并守卫 + 全局链接门禁
+## v1.0 · V0 批次（2026-09-02）：机制堵漏——\_shared 合并守卫 + 全局链接门禁
 
 > v1.0 Release 质量收敛第一步（规格 v1.0.md M14-1/M14-2）。
-> 修复 v0.5 真实验收暴露的「_shared 覆盖破坏」缺口，双重防线 + 端到端取证。
+> 修复 v0.5 真实验收暴露的「\_shared 覆盖破坏」缺口，双重防线 + 端到端取证。
 
 ### 新增
 
-- **M14-1 _shared 符号级合并守卫**（`app/utils/shared_merge.py`）：
+- **M14-1 \_shared 符号级合并守卫**（`app/utils/shared_merge.py`）：
   `write_shared_file` 落盘前 AST 符号级合并——新版静默丢失的既有顶层符号
   （函数/类/常量，含多目标/解包赋值）自动保留；同名内容变更采用新版
   （LLM 修改意图优先）；显式删除须 `# DELETED: <name>` 注释标记
   （大小写不敏感、逗号批量）；语法解析失败回退整文件覆盖（门禁兜底）。
   合并动作写入项目日志（审计可查）。
+
 - **M14-2 全局链接门禁**（`app/utils/link_check.py`）：
   门禁链新增第三层（静态 → **链接** → 接口 → 执行）——对全部已落盘模块
   （**含 FROZEN**，交付物仍会 import）+ 待验模块内存态，解析项目内
   import（`from <module>/<pkg>/_shared.<f> import <sym>`、`import <module>`）
-  的符号存在性；包级 `__init__.py` star 重导出自动展开（file_manager 约定）；
+  的符号存在性；包级 `__init__.py` star 重导出自动展开（file\_manager 约定）；
   缺失 → 阻断并输出「引用方文件+符号+来源+修复指引」精确清单。
   符号索引 mtime/size 增量缓存，DevLoopEngine 跨模块/跨修复轮复用。
 
 ### 修复（v0.5 验收真实缺口）
 
-- **validate_isbn 断裂事故根因消除**：v0.5 中后续模块重写 `_shared/utils.py`
-  丢掉 `validate_isbn`/`validate_date` → book_validator import 断裂静默流入
+- **validate\_isbn 断裂事故根因消除**：v0.5 中后续模块重写 `_shared/utils.py`
+  丢掉 `validate_isbn`/`validate_date` → book\_validator import 断裂静默流入
   交付物。现双重防线：合并守卫落盘即补救（覆盖写入不再丢符号）；链接门禁
   确定性兜底（守卫失效也拦截，含 FROZEN 模块断裂）。
 
 ### 测试
 
 - 新增 `test_shared_merge.py`（14）/ `test_link_check.py`（10）
+
 - 端到端取证脚本 `scripts/_v0_evidence.py`（v0.5 事故链路重放：双防线全过）
+
 - 全量回归：**850 passed / 7 skipped / 0 failed**（基线 826 → 850，+24）
 
 ## v0.5.0-beta · 验收闭环（2026-09-01 补录，同日完成全部遗留项）

@@ -55,11 +55,16 @@ _FORBIDDEN_BUILTINS: frozenset[str] = frozenset({
 })
 
 
-def scan_dangerous(code: str, tests: str = "") -> list[str]:
+def scan_dangerous(code: str, tests: str = "", platform: str = "any") -> list[str]:
     """AST 预扫描：返回危险操作描述列表（空列表 = 放行）。
 
     扫描代码与测试两段文本（被测代码干净但测试里发起网络请求同样拦截）。
+    M14-4：platform 指定交付目标平台时，平台不可用模块（如 windows 上的
+    fcntl）同样拦截——导入即 ImportError，宁可误报绝不放过。
     """
+    from app.utils.platform_policy import unavailable_modules
+
+    platform_mods = unavailable_modules(platform)
     issues: list[str] = []
     for label, text in (("代码", code), ("测试", tests)):
         if not text.strip():
@@ -70,22 +75,34 @@ def scan_dangerous(code: str, tests: str = "") -> list[str]:
             # 语法错误交给静态门禁（run_static_check）报告，此处不重复
             continue
         for node in ast.walk(tree):
-            issues.extend(_scan_node(node, label))
+            issues.extend(_scan_node(node, label, platform_mods))
     return issues
 
 
-def _scan_node(node: ast.AST, label: str) -> list[str]:
-    """单节点扫描：import 黑名单 + 危险属性调用 + 危险内建。"""
+def _scan_node(
+    node: ast.AST, label: str, platform_mods: frozenset[str] = frozenset(),
+) -> list[str]:
+    """单节点扫描：import 黑名单 + 平台不可用模块 + 危险属性调用 + 危险内建。"""
     issues: list[str] = []
     if isinstance(node, ast.Import):
         for alias in node.names:
             root = alias.name.split(".")[0]
             if root in _FORBIDDEN_MODULES:
                 issues.append(f"{label}禁止导入 {alias.name}（系统命令/网络/动态加载）")
+            elif root in platform_mods:
+                issues.append(
+                    f"{label}禁止导入 {alias.name}"
+                    f"（目标平台不存在该模块，导入即 ImportError）"
+                )
     elif isinstance(node, ast.ImportFrom):
         root = (node.module or "").split(".")[0]
         if root in _FORBIDDEN_MODULES:
             issues.append(f"{label}禁止从 {node.module} 导入（系统命令/网络/动态加载）")
+        elif root in platform_mods:
+            issues.append(
+                f"{label}禁止从 {node.module} 导入"
+                f"（目标平台不存在该模块，导入即 ImportError）"
+            )
     elif isinstance(node, ast.Call):
         func = node.func
         # os.xxx / shutil.xxx 危险属性
@@ -126,8 +143,14 @@ def _parse_pytest_summary(stdout: str) -> dict:
 class LocalExecutor(Executor):
     """自动验证模式：危险预扫描 + 本地子进程真实执行。"""
 
-    def __init__(self, project_code_dir: Path | str | None = None):
+    def __init__(
+        self,
+        project_code_dir: Path | str | None = None,
+        platform: str = "any",
+    ):
         self.project_code_dir = Path(project_code_dir) if project_code_dir else None
+        # M14-4：交付目标平台（平台不可用模块拦截；any = 不检查）
+        self.platform = platform
 
     def run(
         self,
@@ -138,7 +161,7 @@ class LocalExecutor(Executor):
         module: str = "",
     ) -> ExecutionResult:
         # 3.6.3：执行前危险预扫描（宁可误报，绝不放过）
-        issues = scan_dangerous(code, tests)
+        issues = scan_dangerous(code, tests, platform=self.platform)
         if issues:
             return ExecutionResult(
                 status=ExecutionStatus.BLOCKED,
