@@ -2,25 +2,25 @@
   "cases": 20,
   "cases_file": "内置标准集",
   "single": {
-    "llm_tokens": 6300,
+    "llm_tokens": 18133,
     "llm_calls": 21,
     "misclassified": 0,
     "misjudge_rate": 0.0,
-    "avg_elapsed_ms": 0.8
+    "avg_elapsed_ms": 15359.7
   },
   "dual": {
-    "llm_tokens": 3800,
-    "llm_calls": 32,
-    "misclassified": 0,
-    "triage_rate": 0.45,
-    "misjudge_rate": 0.0,
-    "avg_elapsed_ms": 0.0
+    "llm_tokens": 42892,
+    "llm_calls": 53,
+    "misclassified": 1,
+    "triage_rate": 0.5,
+    "misjudge_rate": 0.05,
+    "avg_elapsed_ms": 52195.7
   },
-  "token_saved": 2500,
-  "token_saved_ratio": 0.3968,
+  "token_saved": -24759,
+  "token_saved_ratio": -1.3654,
   "kpi": {
     "triage_rate_ge_60pct": false,
-    "misjudge_rate_lt_5pct": true
+    "misjudge_rate_lt_5pct": false
   },
   "per_case": {
     "single": [
@@ -30,7 +30,7 @@
         "expect": "direct_output",
         "actual": "direct_output",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 53171
       },
       {
         "cat": "闲聊",
@@ -38,7 +38,7 @@
         "expect": "direct_output",
         "actual": "direct_output",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 5437
       },
       {
         "cat": "闲聊",
@@ -46,7 +46,7 @@
         "expect": "direct_output",
         "actual": "direct_output",
         "misclassified": false,
-        "elapsed_ms": 16
+        "elapsed_ms": 6734
       },
       {
         "cat": "闲聊",
@@ -54,7 +54,7 @@
         "expect": "direct_output",
         "actual": "direct_output",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 10670
       },
       {
         "cat": "闲聊",
@@ -62,7 +62,7 @@
         "expect": "direct_output",
         "actual": "direct_output",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 12172
       },
       {
         "cat": "基础问答",
@@ -70,7 +70,7 @@
         "expect": "direct_output",
         "actual": "direct_output",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 26313
       },
       {
         "cat": "基础问答",
@@ -78,7 +78,7 @@
         "expect": "direct_output",
         "actual": "direct_output",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 14327
       },
       {
         "cat": "基础问答",
@@ -86,7 +86,7 @@
         "expect": "direct_output",
         "actual": "direct_output",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 6641
       },
       {
         "cat": "基础问答",
@@ -94,7 +94,7 @@
         "expect": "direct_output",
         "actual": "direct_output",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 8656
       },
       {
         "cat": "基础问答",
@@ -102,7 +102,7 @@
         "expect": "direct_output",
         "actual": "direct_output",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 5764
       },
       {
         "cat": "简单编程",
@@ -110,7 +110,7 @@
         "expect": "direct_simple_coding",
         "actual": "direct_simple_coding",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 9282
       },
       {
         "cat": "简单编程",
@@ -118,7 +118,7 @@
         "expect": "direct_simple_coding",
         "actual": "direct_simple_coding",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 9217
       },
       {
         "cat": "简单编程",
@@ -126,7 +126,7 @@
         "expect": "direct_simple_coding",
         "actual": "direct_simple_coding",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 10594
       },
       {
         "cat": "简单编程",
@@ -134,7 +134,7 @@
         "expect": "direct_simple_coding",
         "actual": "direct_simple_coding",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 7796
       },
       {
         "cat": "简单编程",
@@ -142,7 +142,7 @@
         "expect": "direct_simple_coding",
         "actual": "direct_simple_coding",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 18266
       },
       {
         "cat": "复杂编程",
@@ -150,7 +150,7 @@
         "expect": "team_flow",
         "actual": "team_flow",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 26828
       },
       {
         "cat": "复杂编程",
@@ -158,7 +158,7 @@
         "expect": "team_flow",
         "actual": "team_flow",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 9593
       },
       {
         "cat": "复杂编程",
@@ -166,7 +166,7 @@
         "expect": "team_flow",
         "actual": "team_flow",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 10015
       },
       {
         "cat": "复杂编程",
@@ -174,7 +174,7 @@
         "expect": "team_flow",
         "actual": "team_flow",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 29250
       },
       {
         "cat": "复杂编程",
@@ -182,7 +182,7 @@
         "expect": "team_flow",
         "actual": "team_flow",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 26468
       }
     ],
     "dual": [
@@ -192,7 +192,7 @@
         "expect": "declined",
         "actual": "declined",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 63297
       },
       {
         "cat": "闲聊",
@@ -200,7 +200,7 @@
         "expect": "declined",
         "actual": "declined",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 52593
       },
       {
         "cat": "闲聊",
@@ -208,7 +208,7 @@
         "expect": "declined",
         "actual": "declined",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 34467
       },
       {
         "cat": "闲聊",
@@ -216,7 +216,7 @@
         "expect": "declined",
         "actual": "declined",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 44859
       },
       {
         "cat": "闲聊",
@@ -224,7 +224,7 @@
         "expect": "declined",
         "actual": "declined",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 28797
       },
       {
         "cat": "基础问答",
@@ -232,7 +232,7 @@
         "expect": "direct_output",
         "actual": "direct_output",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 117906
       },
       {
         "cat": "基础问答",
@@ -240,7 +240,7 @@
         "expect": "direct_output",
         "actual": "direct_output",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 40577
       },
       {
         "cat": "基础问答",
@@ -248,7 +248,7 @@
         "expect": "direct_output",
         "actual": "direct_output",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 22733
       },
       {
         "cat": "基础问答",
@@ -256,7 +256,7 @@
         "expect": "direct_output",
         "actual": "direct_output",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 18234
       },
       {
         "cat": "基础问答",
@@ -264,7 +264,7 @@
         "expect": "direct_output",
         "actual": "direct_output",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 25047
       },
       {
         "cat": "简单编程",
@@ -272,7 +272,7 @@
         "expect": "direct_simple_coding",
         "actual": "direct_simple_coding",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 37436
       },
       {
         "cat": "简单编程",
@@ -280,7 +280,7 @@
         "expect": "direct_simple_coding",
         "actual": "direct_simple_coding",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 32672
       },
       {
         "cat": "简单编程",
@@ -288,7 +288,7 @@
         "expect": "direct_simple_coding",
         "actual": "direct_simple_coding",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 59797
       },
       {
         "cat": "简单编程",
@@ -296,15 +296,15 @@
         "expect": "direct_simple_coding",
         "actual": "direct_simple_coding",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 42750
       },
       {
         "cat": "简单编程",
         "text": "帮我把 CSV 的两列互换位置",
         "expect": "direct_simple_coding",
-        "actual": "direct_simple_coding",
-        "misclassified": false,
-        "elapsed_ms": 0
+        "actual": "direct_output",
+        "misclassified": true,
+        "elapsed_ms": 42936
       },
       {
         "cat": "复杂编程",
@@ -312,7 +312,7 @@
         "expect": "team_flow",
         "actual": "team_flow",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 125907
       },
       {
         "cat": "复杂编程",
@@ -320,7 +320,7 @@
         "expect": "team_flow",
         "actual": "team_flow",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 38765
       },
       {
         "cat": "复杂编程",
@@ -328,7 +328,7 @@
         "expect": "team_flow",
         "actual": "team_flow",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 46530
       },
       {
         "cat": "复杂编程",
@@ -336,7 +336,7 @@
         "expect": "team_flow",
         "actual": "team_flow",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 100657
       },
       {
         "cat": "复杂编程",
@@ -344,7 +344,7 @@
         "expect": "team_flow",
         "actual": "team_flow",
         "misclassified": false,
-        "elapsed_ms": 0
+        "elapsed_ms": 67953
       }
     ]
   }
