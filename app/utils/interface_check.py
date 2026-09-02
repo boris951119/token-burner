@@ -29,6 +29,8 @@ class InterfaceIssue:
     detail: str
     # 14.2 严重度表：自创接口（extra）/缺失实现（missing）阻断；签名不匹配警告
     severity: str = "blocking"
+    # M15-2：修改指导（修复 LLM 一看即知怎么改；空串 = 无额外指导）
+    guidance: str = ""
 
 
 # public_api 签名形如 "login(user_id, password) -> bool" 或裸名 "session_data"
@@ -98,6 +100,11 @@ def check_implementation(
     defs = extract_public_defs(code)
 
     declared: dict[str, tuple[str, ...] | None] = {}
+    api_sigs: dict[str, str] = {}
+    for api in contract.get("public_api", []):
+        parsed = parse_api_signature(str(api))
+        if parsed:
+            api_sigs[parsed[0]] = str(api).strip()
     for export in contract.get("exports", []):
         parsed = parse_api_signature(str(export))
         if parsed is None:
@@ -107,8 +114,27 @@ def check_implementation(
 
     for name, declared_params in declared.items():
         if name not in defs:
+            # M15-2：missing 附签名模板（优先 public_api 原文，含返回标注）
+            template = api_sigs.get(name)
+            if template:
+                guide = (
+                    f"请在模块顶层补上：def {template}（实现体自行补全）；"
+                    f"禁止封装成类或类方法——门禁按顶层符号校验"
+                )
+            elif declared_params is not None:
+                params = ", ".join(declared_params)
+                guide = (
+                    f"请在模块顶层补上：def {name}({params}): ...；"
+                    f"禁止封装成类或类方法——门禁按顶层符号校验"
+                )
+            else:
+                guide = f"请在模块顶层定义常量 {name} = ..."
             issues.append(
-                InterfaceIssue("missing", module, f"契约声明导出 {name!r} 但代码未实现")
+                InterfaceIssue(
+                    "missing", module,
+                    f"契约声明导出 {name!r} 但代码未实现",
+                    guidance=guide,
+                )
             )
         elif declared_params is not None and defs[name] != declared_params:
             issues.append(
@@ -117,13 +143,25 @@ def check_implementation(
                     module,
                     f"{name} 签名不一致：契约 {declared_params} vs 代码 {defs[name]}",
                     severity="warning",  # 14.2：签名不符为警告，不阻断门禁
+                    guidance=f"建议对齐契约签名：def {api_sigs.get(name, name + str(declared_params))}",
                 )
             )
 
-    for name in defs:
+    for name, params in defs.items():
         if name not in declared:
+            # M15-2：extra 附处置指引（二选一：补声明或删实现）
+            kind_hint = "函数" if params else "常量/类"
             issues.append(
-                InterfaceIssue("extra", module, f"代码实现 {name!r} 但契约未声明导出")
+                InterfaceIssue(
+                    "extra", module,
+                    f"代码实现 {name!r} 但契约未声明导出",
+                    guidance=(
+                        f"处置二选一：① 若 {name}（{kind_hint}）是对外能力，"
+                        f"请将其加入契约 exports/public_api；"
+                        f"② 若只是内部辅助，请重命名为 _{name}（下划线私有，"
+                        f"门禁只校验公开符号）或删除"
+                    ),
+                )
             )
     return issues
 

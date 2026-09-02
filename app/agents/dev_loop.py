@@ -135,6 +135,11 @@ class DevLoopEngine:
         self._shared_ctx_cache: str | None = None
         # M14-2：链接门禁符号索引（同任务跨模块/跨修复轮复用，mtime 增量）
         self._link_index = None
+        # M14-3：平台约束提示词段（按 target_platform 预生成一次；
+        # any → 空串，行为与 v0.5 一致）
+        from app.utils.platform_policy import prompt_constraint
+
+        self._platform_prompt = prompt_constraint(settings.target_platform)
 
     # ------------------------------------------------------------------
 
@@ -333,9 +338,15 @@ class DevLoopEngine:
                     if warnings else ""
                 )
                 if blockers:
-                    failure_report = "接口门禁失败：" + "; ".join(
-                        f"[{i.kind}] {i.detail}" for i in blockers
-                    )
+                    # M15-2：报告附修改指导（签名模板/处置二选一），
+                    # 修复 LLM 一看即知怎么改（v0.5 风格冲突 5 轮不收敛根因）
+                    parts = []
+                    for i in blockers:
+                        part = f"[{i.kind}] {i.detail}"
+                        if i.guidance:
+                            part += f"——修改指导: {i.guidance}"
+                        parts.append(part)
+                    failure_report = "接口门禁失败：" + "; ".join(parts)
                     gate_passed = False
                 else:
                     gate_passed = True
@@ -414,7 +425,8 @@ class DevLoopEngine:
         response = self.llm.chat(
             self.dev_model,
             [
-                {"role": "system", "content": WRITE_CODE_SYSTEM},
+                # M14-3：平台约束注入（windows 缺省禁 fcntl 等）
+                {"role": "system", "content": WRITE_CODE_SYSTEM + self._platform_prompt},
                 {"role": "user", "content": self._prompt_with_shared(
                     WRITE_CODE_USER.format(
                         module=module, responsibility=responsibility or module
@@ -428,7 +440,8 @@ class DevLoopEngine:
         response = self.llm.chat(
             self.test_model,
             [
-                {"role": "system", "content": WRITE_TESTS_SYSTEM},
+                # M14-3：测试同样受平台约束（测试 import fcntl 同样炸）
+                {"role": "system", "content": WRITE_TESTS_SYSTEM + self._platform_prompt},
                 {"role": "user", "content": WRITE_TESTS_USER.format(
                     module=module, code=code
                 )},
@@ -440,7 +453,8 @@ class DevLoopEngine:
         response = self.llm.chat(
             self.dev_model,
             [
-                {"role": "system", "content": FIX_CODE_SYSTEM},
+                # M14-3：修复时保持平台约束（防修复又引入 fcntl）
+                {"role": "system", "content": FIX_CODE_SYSTEM + self._platform_prompt},
                 {"role": "user", "content": self._prompt_with_shared(
                     FIX_CODE_USER.format(
                         module=module, code=code, tests=tests,
