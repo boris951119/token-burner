@@ -1,0 +1,15 @@
+{
+  "id": "T1",
+  "category": "CLI 工具",
+  "difficulty_target": 5,
+  "status": "failed",
+  "kind": null,
+  "project_dir": "",
+  "modules": {},
+  "modules_total": 0,
+  "modules_passed": 0,
+  "pass_rate": 0.0,
+  "tokens_used": 53820,
+  "cost": {},
+  "error": "UnicodeDecodeError: 'utf-8' codec can't decode byte 0xcb in position 0: invalid continuation byte\n           ^^^^^^^^^^^^\n  File \"E:\\token-burner\\app\\agents\\dev_loop.py\", line 462, in _drive\n    code = self._fix_code(module, code, tests, failure_report)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"E:\\token-burner\\app\\agents\\dev_loop.py\", line 512, in _fix_code\n    {\"role\": \"user\", \"content\": self._prompt_with_shared(\n                                ^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"E:\\token-burner\\app\\agents\\dev_loop.py\", line 179, in _prompt_with_shared\n    shared = self._shared_context()\n             ^^^^^^^^^^^^^^^^^^^^^^\n  File \"E:\\token-burner\\app\\agents\\dev_loop.py\", line 172, in _shared_context\n    content = self.file_manager.read_file(pid, rel) or \"\"\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"E:\\token-burner\\app\\tools\\file_manager.py\", line 254, in read_file\n    return path.read_text(encoding=\"utf-8\")\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"C:\\Users\\admin\\AppData\\Local\\Programs\\Python\\Python312\\Lib\\pathlib.py\", line 1028, in read_text\n    return f.read()\n           ^^^^^^^^\n  File \"<frozen codecs>\", line 322, in decode\nUnicodeDecodeError: 'utf-8' codec can't decode byte 0xcb in position 0: invalid continuation byte\n"
+}

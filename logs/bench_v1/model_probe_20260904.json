@@ -1,0 +1,23 @@
+{
+  "date": "2026-09-04",
+  "purpose": "bench_v1 语法腐蚀根因探针：print(\"A\nB\") 逐模型验证",
+  "result": {
+    "openai/glm-4.5-air": {
+      "escape_ok": true,
+      "raw": "print(\"A\nB\")"
+    },
+    "openai/glm-4.6v": {
+      "escape_ok": false,
+      "raw": "print(\"A\nB\") 内 \n 输出为真实换行"
+    },
+    "openai/glm-4-flash": {
+      "escape_ok": true,
+      "raw": "print(\"A\nB\")"
+    },
+    "openai/glm-4.5-flash": {
+      "escape_ok": true,
+      "raw": "print(\"A\nB\")"
+    }
+  },
+  "conclusion": "glm-4.6v（视觉模型）将字符串内 \n 转义输出为真实换行，产出代码必然语法腐蚀；running 候选池移除该模型（round-2b 起生效），建议 v1.1 增加模型能力标注/过滤。"
+}

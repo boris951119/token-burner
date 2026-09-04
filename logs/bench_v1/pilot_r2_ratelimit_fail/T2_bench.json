@@ -1,0 +1,15 @@
+{
+  "id": "T2",
+  "category": "数据处理",
+  "difficulty_target": 6,
+  "status": "failed",
+  "kind": null,
+  "project_dir": "",
+  "modules": {},
+  "modules_total": 0,
+  "modules_passed": 0,
+  "pass_rate": 0.0,
+  "tokens_used": 39157,
+  "cost": {},
+  "error": "RuntimeError: LLM 调用失败（openai/glm-4.5-flash，已重试 3 次）: litellm.RateLimitError: RateLimitError: OpenAIException - 您的账户已达到速率限制，请您控制请求频率\n\\task_manager.py\", line 204, in _run\n    result = job()\n             ^^^^^\n  File \"E:\\token-burner\\app\\server.py\", line 409, in job\n    return _result_dict(pipeline.run(\n                        ^^^^^^^^^^^^^\n  File \"E:\\token-burner\\app\\pipeline.py\", line 428, in run\n    result = self._develop_and_deliver(\n             ^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"E:\\token-burner\\app\\pipeline.py\", line 509, in _develop_and_deliver\n    module_results[name] = dev_loop.run_module(\n                           ^^^^^^^^^^^^^^^^^^^^\n  File \"E:\\token-burner\\app\\agents\\dev_loop.py\", line 216, in run_module\n    tests = self._write_tests(module, code)\n            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"E:\\token-burner\\app\\agents\\dev_loop.py\", line 493, in _write_tests\n    response = self.llm.chat(\n               ^^^^^^^^^^^^^^\n  File \"E:\\token-burner\\app\\utils\\model_client.py\", line 238, in chat\n    response = self._call_with_retry(\n               ^^^^^^^^^^^^^^^^^^^^^^\n  File \"E:\\token-burner\\app\\utils\\model_client.py\", line 192, in _call_with_retry\n    raise RuntimeError(\nRuntimeError: LLM 调用失败（openai/glm-4.5-flash，已重试 3 次）: litellm.RateLimitError: RateLimitError: OpenAIException - 您的账户已达到速率限制，请您控制请求频率\n"
+}

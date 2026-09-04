@@ -273,3 +273,40 @@ class TestContinuationJoin:
         assert resp.content == "part1part2"
         assert resp.input_tokens == 20
         assert resp.output_tokens == 10
+
+
+class TestTransientDecodeErrors:
+    """网关返回乱码错误页（GBK body → json 解析抛 UnicodeDecodeError）
+    须按瞬态处理参与退避重试，而非直接谋杀任务（bench_v1 round-2 取证）。"""
+
+    def test_unicode_decode_error_is_transient(self, gpt_key):
+        from app.utils.model_client import _is_transient
+        assert _is_transient(UnicodeDecodeError(
+            "utf-8", b"\xcb\xeb", 0, 1, "invalid continuation byte"))
+
+    def test_json_decode_error_is_transient(self, gpt_key):
+        import json as _json
+        from app.utils.model_client import _is_transient
+        try:
+            _json.loads(b"\xcb\xeb")
+        except ValueError as exc:
+            assert _is_transient(exc)
+
+    def test_decode_error_retried_then_succeeds(self, gpt_key):
+        class FlakyThenOk:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, model, messages, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    raise UnicodeDecodeError(
+                        "utf-8", b"\xcb\xeb", 0, 1, "invalid continuation byte")
+                return make_response(content="recovered")
+
+        client = ModelClient(
+            Settings(models=["gpt-4o"], retry_backoff_base=0),
+            completion_fn=FlakyThenOk(),
+        )
+        resp = client.chat("gpt-4o", [{"role": "user", "content": "a"}])
+        assert resp.content == "recovered"

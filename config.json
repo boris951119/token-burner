@@ -1,8 +1,9 @@
 {
   "models": [
     "openai/glm-4.5-air",
-    "openai/glm-4.6v",
     "openai/glm-4-flash",
     "openai/glm-4.5-flash"
-  ]
+  ],
+  "llm_max_retries": 5,
+  "retry_backoff_base": 15.0
 }
