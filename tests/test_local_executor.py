@@ -51,6 +51,20 @@ class TestDangerScan:
         issues = scan_dangerous(code)
         assert issues, f"应检出危险操作: {code!r}"
 
+    def test_fs_deletion_allowed_in_tests_blocked_in_code(self):
+        # bench_v1 round-2e 取证：测试用 os.unlink/shutil.rmtree 清理临时
+        # 产物是标准写法（执行环境为一次性 tmp 目录），测试侧放行；
+        # 模块代码侧维持拦截（规格安全边界不变）
+        tests = (
+            "import os\nimport shutil\n"
+            "def test_cleanup(tmp_path):\n"
+            "    os.unlink(tmp_path / 'x')\n"
+            "    shutil.rmtree(tmp_path)\n"
+        )
+        assert scan_dangerous("def f():\n    return 1\n", tests=tests) == []
+        issues = scan_dangerous(tests, tests="")
+        assert issues and any("os.unlink" in i or "shutil.rmtree" in i for i in issues)
+
     def test_clean_code_passes(self):
         code = "def add(a, b):\n    return a + b\n\n\nprint(add(1, 2))\n"
         assert scan_dangerous(code) == []
