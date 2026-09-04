@@ -1,0 +1,93 @@
+{
+  "generated_at": "2026-09-04 18:56:10",
+  "round": 1,
+  "note": "V2 基准试跑（续写拼接修复前基线）：T1 失败于续写调用超时（基础设施抖动）；T2/T3 succeeded 但模块全冻结。主导失败类=续写换行腐蚀（unterminated string literal），次失败类=接口门禁 extra/missing 不收敛。修复与重跑见 round 2。",
+  "tasks_file": "scripts/bench_tasks.json",
+  "ids": [
+    "T1",
+    "T2",
+    "T3"
+  ],
+  "per_task": [
+    {
+      "id": "T1",
+      "category": "CLI 工具",
+      "difficulty_target": 5,
+      "status": "failed",
+      "kind": null,
+      "project_dir": "projects\\开发一个命令行密码生成与强度评估工具_passmint_支持随机密码生成_可指定_20260904_152642",
+      "modules": {
+        "password_evaluator": "FROZEN",
+        "weak_password_blacklist": "FROZEN"
+      },
+      "modules_total": 2,
+      "modules_passed": 0,
+      "pass_rate": 0.0,
+      "tokens_used": 161377,
+      "cost": {},
+      "error": "RuntimeError: LLM 续写调用失败（openai/glm-4.6v，已重试 3 次）: litellm.Timeout: APITimeoutError - Request timed out. Error_str: Request timed out."
+    },
+    {
+      "id": "T2",
+      "category": "数据处理",
+      "difficulty_target": 6,
+      "status": "succeeded",
+      "kind": "team_flow",
+      "project_dir": "E:\\token-burner\\projects\\开发一个命令行_CSV_销售数据分析工具_salestat_读取销售明细_CSV_20260904_162617",
+      "modules": {
+        "analyzer": "FROZEN",
+        "cli": "FROZEN",
+        "data_reader": "FROZEN",
+        "data_validator": "FROZEN",
+        "report_generator": "FROZEN"
+      },
+      "modules_total": 5,
+      "modules_passed": 0,
+      "pass_rate": 0.0,
+      "tokens_used": 154215,
+      "cost": {
+        "total_tokens": 154215,
+        "budget_tokens": 500000,
+        "over_budget": false
+      },
+      "error": ""
+    },
+    {
+      "id": "T3",
+      "category": "陌生技术栈",
+      "difficulty_target": 5,
+      "status": "succeeded",
+      "kind": "budget_exceeded",
+      "project_dir": "E:\\token-burner\\projects\\基于_Python_标准库_sqlite3_与_tomllib_开发一个库存管理_20260904_170128",
+      "modules": {
+        "alert_service": "FROZEN",
+        "config_manager": "FROZEN",
+        "database": "FROZEN",
+        "exceptions": "FROZEN",
+        "inventory_repository": "FROZEN",
+        "logger": "FROZEN",
+        "models": "FROZEN",
+        "product_repository": "FROZEN",
+        "utils": "FROZEN",
+        "validator": "FROZEN"
+      },
+      "modules_total": 10,
+      "modules_passed": 0,
+      "pass_rate": 0.0,
+      "tokens_used": 502372,
+      "cost": {
+        "total_tokens": 502372,
+        "budget_tokens": 500000,
+        "over_budget": true
+      },
+      "error": ""
+    }
+  ],
+  "modules_total": 17,
+  "modules_passed": 0,
+  "module_pass_rate": 0.0,
+  "task_success_rate": 0.6666666666666666,
+  "over_budget_tasks": 1,
+  "admission_line": 0.5,
+  "admission_passed": false
+}

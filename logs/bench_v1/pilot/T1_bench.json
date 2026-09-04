@@ -1,0 +1,18 @@
+{
+  "id": "T1",
+  "category": "CLI 工具",
+  "difficulty_target": 5,
+  "status": "failed",
+  "kind": null,
+  "project_dir": "projects\\开发一个命令行密码生成与强度评估工具_passmint_支持随机密码生成_可指定_20260904_152642",
+  "modules": {
+    "password_evaluator": "FROZEN",
+    "weak_password_blacklist": "FROZEN"
+  },
+  "modules_total": 2,
+  "modules_passed": 0,
+  "pass_rate": 0.0,
+  "tokens_used": 161377,
+  "cost": {},
+  "error": "RuntimeError: LLM 续写调用失败（openai/glm-4.6v，已重试 3 次）: litellm.Timeout: APITimeoutError - Request timed out. Error_str: Request timed out."
+}

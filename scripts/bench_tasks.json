@@ -1,0 +1,67 @@
+{
+  "version": "bench_v1",
+  "note": "M17-1 标准需求集（v1.0.md）：覆盖 CLI 工具/数据处理/文件操作/第三方库调用/陌生技术栈，目标难度 4-7。全部离线可执行（无网络依赖），默认 windows 目标平台。pilot = T1/T2/T3。",
+  "pilot_ids": ["T1", "T2", "T3"],
+  "tasks": [
+    {
+      "id": "T1",
+      "category": "CLI 工具",
+      "difficulty_target": 5,
+      "requirement": "开发一个命令行密码生成与强度评估工具 passmint：支持随机密码生成（可指定长度、是否包含大小写字母/数字/符号）、基于长度与字符多样性的强度评分（含常见弱密码黑名单扣分）、生成历史保存到 JSON 文件并支持列出与清空历史，使用 Python 标准库实现，附完整单元测试。"
+    },
+    {
+      "id": "T2",
+      "category": "数据处理",
+      "difficulty_target": 6,
+      "requirement": "开发一个命令行 CSV 销售数据分析工具 salestat：读取销售明细 CSV（列：日期、商品、数量、单价），支持按月汇总营收、输出销量 Top-N 商品排行、用 IQR 四分位法检测异常订单、将全部统计结果导出为 JSON 报表，使用 Python 标准库 csv/statistics 实现，附完整单元测试。"
+    },
+    {
+      "id": "T3",
+      "category": "陌生技术栈",
+      "difficulty_target": 5,
+      "requirement": "基于 Python 标准库 sqlite3 与 tomllib 开发一个库存管理命令行工具 stockpile：支持商品入库、出库、按名称查询库存、低库存预警（预警阈值从 TOML 配置文件读取），库存数据持久化到 SQLite 数据库，附完整单元测试。"
+    },
+    {
+      "id": "T4",
+      "category": "文件操作",
+      "difficulty_target": 5,
+      "requirement": "开发一个日志轮转分析命令行工具 logscan：扫描指定目录下全部 .log 文件，统计每个文件的 ERROR/WARN/INFO 行数、提取 ERROR 时间线、汇总生成一份 Markdown 分析报告，使用 Python 标准库实现，附完整单元测试。"
+    },
+    {
+      "id": "T5",
+      "category": "文件操作",
+      "difficulty_target": 4,
+      "requirement": "开发一个 Markdown 转 HTML 命令行转换器 md2html：支持标题、段落、粗体/斜体、无序与有序列表、代码块的转换，支持输入单文件或目录批量转换并指定输出目录，使用 Python 标准库实现，附完整单元测试。"
+    },
+    {
+      "id": "T6",
+      "category": "第三方库调用",
+      "difficulty_target": 5,
+      "requirement": "基于 pydantic 开发一个用户资料数据校验模块 profile_schema：支持邮箱格式校验、手机号校验、年龄区间校验、嵌套地址结构，能从 JSON 文件加载并校验数据、校验失败输出中文字段错误信息，附完整单元测试。"
+    },
+    {
+      "id": "T7",
+      "category": "第三方库调用",
+      "difficulty_target": 6,
+      "requirement": "基于 rich 开发一个命令行系统信息展示工具 sysview：采集 CPU 核数、内存与磁盘使用情况，用 rich 表格美化为面板输出、超阈值行红色高亮、支持 --json 输出机器可读结果（核心采集与阈值逻辑须可脱离 rich 单独测试），附完整单元测试。"
+    },
+    {
+      "id": "T8",
+      "category": "数据处理",
+      "difficulty_target": 7,
+      "requirement": "开发一个 JSONL 结构化日志聚合分析工具 logroll：解析多个 JSONL 日志文件（每行含 timestamp、service、level、latency_ms 字段），支持按服务聚合请求量与错误率、按时间窗计算 P95 延迟、对比两个时间窗指标变化并输出聚合报告 JSON，使用 Python 标准库实现，附完整单元测试。"
+    },
+    {
+      "id": "T9",
+      "category": "CLI 工具",
+      "difficulty_target": 6,
+      "requirement": "开发一个间隔重复记忆卡片命令行工具 memcard：支持卡片的增删改查、基于 SM-2 简化算法的复习调度（答对间隔加倍、答错重置为 1 天）、列出今日应复习卡片、学习进度统计保存到 JSON 文件，使用 Python 标准库实现，附完整单元测试。"
+    },
+    {
+      "id": "T10",
+      "category": "陌生技术栈",
+      "difficulty_target": 6,
+      "requirement": "基于 Python 标准库 asyncio 开发一个 DAG 任务调度模拟器 taskflow：从 JSON 定义解析任务依赖关系构成有向无环图、检测环依赖、用 asyncio.gather 加信号量模拟带并发上限的任务执行、输出关键路径与总耗时统计，附完整单元测试。"
+    }
+  ]
+}

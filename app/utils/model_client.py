@@ -270,10 +270,18 @@ class ModelClient:
             continuation = self._build_response(
                 model, response, json_mode=json_mode, messages=kwargs["messages"]
             )
+            # bench_v1 试跑取证（2026-09-04）：句中截断（原文不以换行结尾）时，
+            # GLM 续写响应以真实换行开头而非接着输出原行——裸拼接在拼接点产生
+            # 未闭合字符串（unterminated string literal），且修复轮重新生成再次
+            # 截断续写，5 轮不收敛。故句中截断剥掉续写头部的换行（截断位置是
+            # 行内坐标，续写须原位接上）；原文本就结束在行尾则保持续写原样。
+            head = continuation.content
+            if result.content and not result.content.endswith("\n"):
+                head = head.lstrip("\r\n")
             # 合并：内容拼接、用量累计
             result = LLMResponse(
                 model=model,
-                content=result.content + continuation.content,
+                content=result.content + head,
                 input_tokens=result.input_tokens + continuation.input_tokens,
                 output_tokens=result.output_tokens + continuation.output_tokens,
                 truncated=continuation.truncated,
