@@ -1,0 +1,30 @@
+{
+  "id": "T3",
+  "category": "陌生技术栈",
+  "difficulty_target": 5,
+  "status": "succeeded",
+  "kind": "budget_exceeded",
+  "project_dir": "E:\\token-burner\\projects\\基于_Python_标准库_sqlite3_与_tomllib_开发一个库存管理_20260904_170128",
+  "modules": {
+    "alert_service": "FROZEN",
+    "config_manager": "FROZEN",
+    "database": "FROZEN",
+    "exceptions": "FROZEN",
+    "inventory_repository": "FROZEN",
+    "logger": "FROZEN",
+    "models": "FROZEN",
+    "product_repository": "FROZEN",
+    "utils": "FROZEN",
+    "validator": "FROZEN"
+  },
+  "modules_total": 10,
+  "modules_passed": 0,
+  "pass_rate": 0.0,
+  "tokens_used": 502372,
+  "cost": {
+    "total_tokens": 502372,
+    "budget_tokens": 500000,
+    "over_budget": true
+  },
+  "error": ""
+}
