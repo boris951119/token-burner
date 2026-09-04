@@ -246,10 +246,18 @@ def check_links(
             for sym in symbols:
                 if sym == "*":
                     continue  # import 存在性已由 _is_project_key 保证
-                if sym not in src_symbols:
-                    result.issues.append(LinkIssue(
-                        importer=importer, symbol=sym, source=module_key,
-                    ))
+                if sym in src_symbols:
+                    continue
+                # bench_v1 round-2d 取证：`from _shared import log_config`
+                # 是**子模块导入**（log_config.py 文件存在即合法，空
+                # __init__.py 不影响运行时），不得按「符号缺失」误杀——
+                # 该误报曾致 4 模块连续 5 轮不收敛全部冻结
+                if (code_root / module_key.replace(".", "/")
+                        / (sym + ".py")).is_file():
+                    continue
+                result.issues.append(LinkIssue(
+                    importer=importer, symbol=sym, source=module_key,
+                ))
 
     result.files_checked = len(to_check)
     result.passed = not result.issues
