@@ -208,3 +208,34 @@ class TestDevLoopGateIntegration:
         # 断链未修复 → 冻结（修复轮耗尽），且从未进入执行
         assert calls["fix"] >= 1           # 修复循环被触发
         assert "链接" in result.message or "FROZEN" in str(result.status)
+
+
+class TestSubmoduleImport:
+    """bench_v1 round-2d 事故回归：`from _shared import log_config` 是
+    子模块导入（_shared/log_config.py 存在即合法，空 __init__.py 不影响
+    运行时）。旧逻辑按符号缺失误杀，4 模块连续 5 轮不收敛全部冻结。"""
+
+    def test_from_pkg_import_submodule_passes(self, tmp_path):
+        fm = FileManager(projects_root=tmp_path / "projects")
+        pid = fm.create_project("passmint").project_id
+        # file_manager 约定：write_shared_file 会把 __init__.py 覆写为空
+        fm.write_shared_file(pid, "log_config.py",
+                             "def configure_logging():\n    return 1\n")
+        fm.write_code_file(pid, "error_handler", "error_handler.py",
+                           "from _shared import log_config\n\n"
+                           "def boot():\n    return log_config.configure_logging()\n")
+        handle = fm.get_project(pid)
+        result = check_links(handle.root / "code")
+        assert result.passed, format_link_issues(result.issues)
+
+    def test_from_pkg_import_true_missing_still_blocked(self, tmp_path):
+        fm = FileManager(projects_root=tmp_path / "projects")
+        pid = fm.create_project("passmint").project_id
+        fm.write_shared_file(pid, "log_config.py",
+                             "def configure_logging():\n    return 1\n")
+        fm.write_code_file(pid, "error_handler", "error_handler.py",
+                           "from _shared import log_config, nonexistent_thing\n")
+        handle = fm.get_project(pid)
+        result = check_links(handle.root / "code")
+        assert not result.passed
+        assert any(i.symbol == "nonexistent_thing" for i in result.issues)
