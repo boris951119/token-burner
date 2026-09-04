@@ -1,5 +1,35 @@
 # Changelog
 
+## v1.0 · V2.6（2026-09-05）：测试侧绑定门禁——round-3「测试漏 import」冻结根因修复
+
+> bench_v1 round-3 取证（T2，logs/bench_v1/pilot_r3/）：六个模块中三个
+> （analytics/cli/export）冻结于同一签名——测试文件只 import pytest/mock
+> 等第三方库，裸调用被测函数，执行必 `NameError`；修复循环只修代码不修
+> 测试，代码侧永远无从修复，5 轮震荡后冻结。
+
+- **根因**：M15-5 契约注入解决了「函数名发明」，但 glm-4.5-flash 连
+  `from <module> import ...` 语句本身都漏写——属同一「测试侧缺陷、
+  代码侧不可修」家族的第二种症状。
+
+- **修复（M15-6）**：新模块 `app/utils/test_check.py`——`check_test_bindings`
+  AST 解析测试文件，收集全部绑定名（import/def/class/赋值/参数，保守超集
+  防误报），契约符号「**被实际引用却未绑定**」→ 阻断并给出精确修复指令
+  （只拦必炸 NameError 的引用，测试只覆盖契约子集属合法，不强制全量绑定）；
+  测试文件语法错误同样阻断。接入 `dev_loop._drive` 门禁链（逻辑审查之后、
+  执行之前）：命中 → 修复轮**只重新生成测试**（提示词携带缺陷清单），代码
+  不动。无契约时门禁空转（行为兼容）。
+
+- **测试**：新增 `test_test_gate.py` 9 项（裸引用/合规 import/star import/
+  无契约空转/语法错误/内建不误报/public_api 首名提取/再生分支路由/一次通过）；
+  既有 `test_write_tests_contract`、`test_logic_review` 桩测试随门禁收紧同步
+  修正（桩测试补 from-import）；全量回归 **1005 → 1014 passed / 7 skipped /
+  0 failed**。
+
+- **运营记录**：round-3 T1 死于网关 Timeout（5 次重试耗尽，41,841 tokens）；
+  T2/T3 任务级 succeeded 但模块 0/12 非冻结（执行失败类 3 + 接口门禁不收敛
+  类 3/模块）。接口门禁不收敛类（config/core/utils：flash 模型不理会
+  M15-2 改名指导）留待观察——非本轮修复对象，属基座模型能力层。
+
 ## v1.0 · V2.5（2026-09-05）：写测试注入接口契约——round-2f 三模块同签名冻结根因修复
 
 > bench_v1 round-2f 取证（T1，logs/bench_v1/pilot_r2/）：password_generator /

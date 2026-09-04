@@ -104,7 +104,13 @@ class TestContractInjection:
 
     def test_run_module_routes_contract_to_testgen_not_codegen(self, tmp_path):
         fm = FileManager(projects_root=tmp_path / "p")
-        llm = CapturingLLM([CODE, "TEST_CODE"])
+        # M15-6 起，桩测试须绑定契约符号才能通过测试导入门禁
+        test_code = (
+            "from strength_evaluator import evaluate_password_strength, is_password_strong\n"
+            "def test_ok():\n"
+            "    assert evaluate_password_strength('a') == 1\n"
+        )
+        llm = CapturingLLM([CODE, test_code])
         engine = make_engine(llm, fm)
         project_id = fm.create_project("demo").project_id
         engine.run_module("strength_evaluator", project_id=project_id, contract=CONTRACT)
