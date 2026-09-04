@@ -185,7 +185,7 @@ class TestDriveIntegration:
         result = engine._drive(
             module="calc", project_id=pid,
             code=GOOD_CODE,
-            tests="def test_add():\n    assert add(1, 2) == 3\n",
+            tests="from calc import add\ndef test_add():\n    assert add(1, 2) == 3\n",
             fix_attempts=0, user_feedback="",
             contract=CONTRACT, project_modules={"calc"},
             feedback_pending=False,
@@ -212,7 +212,7 @@ class TestDriveIntegration:
         result = engine._drive(
             module="calc", project_id=pid,
             code=GOOD_CODE,
-            tests="def test_add():\n    assert add(1, 2) == 3\n",
+            tests="from calc import add\ndef test_add():\n    assert add(1, 2) == 3\n",
             fix_attempts=0, user_feedback="",
             contract=CONTRACT, project_modules={"calc"},
             feedback_pending=False,

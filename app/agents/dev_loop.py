@@ -404,6 +404,19 @@ class DevLoopEngine:
                     failure_report = review_fail
                     gate_passed = False
 
+            # M15-6：测试侧绑定门禁——契约符号被测试裸引用却未 import
+            # （round-3 取证：flash 测试 LLM 漏写 from <module> import ...，
+            # 执行必 NameError，且修复循环只修代码，测试缺陷无从修复）。
+            # 命中 → 修复轮只重新生成测试（携带缺陷清单），代码不动。
+            tests_gate_failed = False
+            if gate_passed:
+                from app.utils.test_check import check_test_bindings
+                test_issues = check_test_bindings(tests, module, contract)
+                if test_issues:
+                    gate_passed = False
+                    tests_gate_failed = True
+                    failure_report = "测试导入门禁（M15-6）：" + "; ".join(test_issues)
+
             if gate_passed:
                 result = self.executor.run(
                     code=code,
@@ -460,7 +473,13 @@ class DevLoopEngine:
                 self.budget_guard.ensure_allowed()
 
             fix_attempts += 1
-            code = self._fix_code(module, code, tests, failure_report)
+            if tests_gate_failed:
+                # M15-6：测试侧缺陷 → 只重新生成测试（携带缺陷清单），代码不动
+                tests = self._write_tests(
+                    module, code, contract=contract, defect_note=failure_report,
+                )
+            else:
+                code = self._fix_code(module, code, tests, failure_report)
             self._persist_fix(project_id, module, fix_attempts, failure_report)
 
     def run_batch(
@@ -490,7 +509,10 @@ class DevLoopEngine:
         )
         return self._split_shared(_extract_code(response.content))
 
-    def _write_tests(self, module: str, code: str, contract: dict | None = None) -> str:
+    def _write_tests(
+        self, module: str, code: str, contract: dict | None = None,
+        defect_note: str = "",
+    ) -> str:
         user = WRITE_TESTS_USER.format(module=module, code=code)
         # M15-5：接口契约注入——测试调用必须按契约名称与签名，不得发明
         # 契约之外的函数名。round-2f 三模块同签名冻结根因：测试 LLM 凭
@@ -503,6 +525,9 @@ class DevLoopEngine:
                 "\n\n## 模块接口契约（测试必须严格按以下名称与签名调用，"
                 "不得调用契约之外的函数或方法）\n" + "\n".join(api_lines)
             )
+        # M15-6：上一版测试的门禁缺陷清单（再生时定向修正）
+        if defect_note:
+            user += "\n\n## 上一版测试缺陷（本轮必须修正）\n" + defect_note
         response = self.llm.chat(
             self.test_model,
             [
