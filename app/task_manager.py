@@ -208,9 +208,13 @@ class TaskManager:
             self._cancel_flags.pop(task_id, None)
             return
         except Exception as exc:  # noqa: BLE001 —— 任务失败转终态（可观测）
+            # bench_v1 round-2 取证教训：仅记异常串无法定位崩溃点（如
+            # UnicodeDecodeError 无 traceback），附截尾调用栈供归因
+            import traceback as _tb
+
             self._update(
                 state, status=TaskStatus.FAILED,
-                error=f"{type(exc).__name__}: {exc}",
+                error=f"{type(exc).__name__}: {exc}\n{_tb.format_exc()[-1200:]}",
             )
             self._broadcast(task_id, {
                 "type": "done", "status": TaskStatus.FAILED.value,

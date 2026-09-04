@@ -57,14 +57,17 @@ class TestTruncationContinuation:
         )
 
     def test_length_triggers_continuation_and_concatenates(self):
-        # 首次 length 截断 → 续写一次，内容拼接完整
+        # 首次 length 截断 → 续写一次，内容拼接完整。
+        # v1.0 V2.1（bench_v1 取证）：句中截断时续写头部的真实换行被剥除
+        # （GLM 续写惯以换行开头，裸拼接产生 unterminated string literal），
+        # 拼接结果不再含该换行——原期望「前半\n# 后半部分」随之修正。
         completion = _ScriptedCompletion([
             _resp_dict("def foo():\n    pass\n# 前半", finish="length"),
             _resp_dict("\n# 后半部分", finish="stop"),
         ])
         client = self._client(completion)
         result = client.chat("gpt-4o", [{"role": "user", "content": "写代码"}])
-        assert result.content == "def foo():\n    pass\n# 前半\n# 后半部分"
+        assert result.content == "def foo():\n    pass\n# 前半# 后半部分"
         assert not result.truncated  # 续写后完整
         assert len(completion.calls) == 2
 

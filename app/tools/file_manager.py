@@ -251,10 +251,22 @@ class FileManager:
         path = self._resolve(handle, relative_path)
         if not path.is_file():
             return None
-        return path.read_text(encoding="utf-8")
+        try:
+            return path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            # bench_v1 round-2c 取证：执行测试会把 _shared 编译进
+            # __pycache__/*.pyc（Python 3.12 pyc magic 0xCB 开头），二进制
+            # 产物按「无文本」处理而非炸掉整个任务（list_files 已过滤，
+            # 此处为纵深防御）
+            return None
 
     def list_files(self, project_id: str, subdir: str) -> list[str]:
-        """列出项目内某子目录下的文件（相对项目根的 posix 路径）。"""
+        """列出项目内某子目录下的文件（相对项目根的 posix 路径）。
+
+        排除运行时产物（__pycache__、*.pyc 等）：auto 模式执行测试时
+        Python 会把交付代码编译进 __pycache__，这些二进制文件不是交付物，
+        列入会导致下游 read_text 崩溃（bench_v1 round-2c 事故根因）。
+        """
         handle = self._require_project(project_id)
         base = self._resolve(handle, subdir)
         if not base.is_dir():
@@ -262,7 +274,7 @@ class FileManager:
         return sorted(
             p.relative_to(handle.root).as_posix()
             for p in base.rglob("*")
-            if p.is_file()
+            if p.is_file() and not _is_runtime_artifact(p)
         )
 
     # ------------------------------------------------------------------
@@ -305,6 +317,18 @@ class FileManager:
 def _write_text(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+# 运行时产物（非交付物）：执行测试产生的字节码缓存等，禁止进入文件清单
+_RUNTIME_ARTIFACT_DIR = "__pycache__"
+_RUNTIME_ARTIFACT_SUFFIXES = frozenset({".pyc", ".pyo", ".pyd"})
+
+
+def _is_runtime_artifact(p: Path) -> bool:
+    return (
+        _RUNTIME_ARTIFACT_DIR in p.parts
+        or p.suffix.lower() in _RUNTIME_ARTIFACT_SUFFIXES
+    )
 
 
 def _glob_escape(segment: str) -> str:

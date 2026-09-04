@@ -35,6 +35,10 @@ _TRANSIENT_MARKERS: tuple[str, ...] = (
     "429", "rate limit", "ratelimit", "too many requests",
     "temporarily", "overloaded", "unavailable",
     "502", "503", "504", "internal server error",
+    # bench_v1 round-2 取证：GLM 网关偶发返回 GBK 编码错误页，litellm 侧
+    # json 解析响应体抛 UnicodeDecodeError/JSONDecodeError——响应乱码属
+    # 网关瞬态故障，重试即可恢复（此前直接上谋杀整个任务）
+    "unicodedecodeerror", "jsondecodeerror",
 )
 
 
