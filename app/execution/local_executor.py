@@ -49,6 +49,13 @@ _FORBIDDEN_OS_ATTRS: frozenset[str] = frozenset({
 
 _FORBIDDEN_SHUTIL_ATTRS: frozenset[str] = frozenset({"rmtree", "move"})
 
+# fs 删除族：模块代码侧维持拦截（规格安全边界），测试侧放行——
+# 测试用 unlink/rmtree 清理临时产物是标准写法，执行环境为一次性 tmp
+# 目录；一刀切曾致文件类功能测试全数 BLOCKED 直接冻结（bench_v1 取证）
+_FS_DELETION_OS_ATTRS: frozenset[str] = frozenset({
+    "remove", "unlink", "rmdir", "removedirs", "renames",
+})
+
 # 禁止的内建函数
 _FORBIDDEN_BUILTINS: frozenset[str] = frozenset({
     "eval", "exec", "compile", "__import__",
@@ -108,9 +115,15 @@ def _scan_node(
         # os.xxx / shutil.xxx 危险属性
         if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
             if func.value.id == "os" and func.attr in _FORBIDDEN_OS_ATTRS:
-                issues.append(f"{label}禁止调用 os.{func.attr}()")
+                if label == "测试" and func.attr in _FS_DELETION_OS_ATTRS:
+                    pass  # 测试清理 tmp 产物（见 _FS_DELETION_OS_ATTRS 注）
+                else:
+                    issues.append(f"{label}禁止调用 os.{func.attr}()")
             elif func.value.id == "shutil" and func.attr in _FORBIDDEN_SHUTIL_ATTRS:
-                issues.append(f"{label}禁止调用 shutil.{func.attr}()")
+                if label == "测试":
+                    pass  # rmtree/move 同上：测试清理 tmp 产物放行
+                else:
+                    issues.append(f"{label}禁止调用 shutil.{func.attr}()")
         # eval/exec/__import__ 内建
         elif isinstance(func, ast.Name) and func.id in _FORBIDDEN_BUILTINS:
             issues.append(f"{label}禁止调用 {func.id}()（动态执行）")
