@@ -410,8 +410,14 @@ class DevLoopEngine:
             # 命中 → 修复轮只重新生成测试（携带缺陷清单），代码不动。
             tests_gate_failed = False
             if gate_passed:
-                from app.utils.test_check import check_test_bindings
-                test_issues = check_test_bindings(tests, module, contract)
+                # 增强非硬门禁（同 M14-7 哲学）：门禁自身异常降级放行，
+                # 绝不因校验器缺陷杀死任务（round-4 T3 取证：ClassDef 分支
+                # AttributeError 曾在 29 万 token 深处炸死整任务）。
+                try:
+                    from app.utils.test_check import check_test_bindings
+                    test_issues = check_test_bindings(tests, module, contract)
+                except Exception:
+                    test_issues = []
                 if test_issues:
                     gate_passed = False
                     tests_gate_failed = True

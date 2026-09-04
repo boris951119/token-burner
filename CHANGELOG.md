@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.0 · V2.7（2026-09-05）：round-4 热修——门禁自炸防护 + 测试竞态根除 + 网关参数硬化
+
+> bench_v1 round-4 取证：T1/T2 死于免费档网关 Timeout/RateLimit；**T3 死于
+> V2.6 门禁自身缺陷**——测试代码含 class 定义时 `ClassDef` 误入函数分支访问
+> `.args` 抛 AttributeError，在 29 万 token 深处炸死整任务。
+
+- **M15-6 热修**（`test_check.py`）：`ClassDef` 从函数签名分支拆出（只绑定
+  类名）；`dev_loop` 门禁调用包 try/except **异常降级放行**（同 M14-7
+  「增强非硬门禁」哲学：校验器自身缺陷绝不杀任务）。新增 3 项回归
+  （class 定义不炸/类内调用不误报/门禁异常降级放行路径）。
+
+- **既有偶发测试根除**（`test_async_tasks.py`）：`test_events_update_state_
+  broadcast_and_persist` 实为竞态——job_factory 在 submit 时同步调用且原
+  写法返回 dict（非 callable），worker 内 `job()` TypeError 后异步发
+  done(FAILED) 帧，与主线程 4 个事件抢队列顺序（本机复现 4/5 失败）。
+  修正为 factory 返回阻塞到事件发完的 job，done 必然最后；单次 10.5s →
+  0.5s，6/6 稳定绿。
+
+- **网关参数硬化**（config.json，延续 V2.2 方向）：`llm_timeout_seconds`
+  120 → 240、`llm_max_retries` 5 → 6——T1 连续两轮死于同一位置的 ~120s
+  超时线，免费档高峰存在分钟级停顿，需更长单次等待窗口。
+
+- 全量回归：**1014 → 1017 passed / 7 skipped / 0 failed**。
+
 ## v1.0 · V2.6（2026-09-05）：测试侧绑定门禁——round-3「测试漏 import」冻结根因修复
 
 > bench_v1 round-3 取证（T2，logs/bench_v1/pilot_r3/）：六个模块中三个

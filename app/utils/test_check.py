@@ -47,7 +47,7 @@ def _bound_names(tree: ast.AST, module: str) -> tuple[set[str], bool]:
                 star_from_module = True
             for alias in node.names:
                 bound.add(alias.asname or alias.name)
-        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             bound.add(node.name)
             args = node.args
             for a in (*args.args, *args.kwonlyargs, *args.posonlyargs):
@@ -56,6 +56,8 @@ def _bound_names(tree: ast.AST, module: str) -> tuple[set[str], bool]:
                 bound.add(args.vararg.arg)
             if args.kwarg:
                 bound.add(args.kwarg.arg)
+        elif isinstance(node, ast.ClassDef):
+            bound.add(node.name)
         elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
             bound.add(node.id)
         elif isinstance(node, ast.Global) or isinstance(node, ast.Nonlocal):
