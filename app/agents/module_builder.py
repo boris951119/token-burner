@@ -23,6 +23,9 @@ from app.tools.prompt_templates import (
 )
 from app.utils.parse import parse_json
 
+# M15-3：契约风格约束段（接口生成侧）
+from app.utils.contract_style import interface_style_prompt
+
 _MODULE_NAME = re.compile(r"^[a-z][a-z0-9_]{0,30}$")
 
 # 保留名：与项目系统目录冲突的模块名（真实运行回归：LLM 为「附单元测试」
@@ -170,7 +173,13 @@ class ModuleBuilder:
             response = self.llm.chat(
                 self.main_model,
                 [
-                    {"role": "system", "content": INTERFACE_SYSTEM},
+                    # M15-3：风格约束段按 contract_style 运行时拼接
+                    # （function 缺省 = M15-1 原文；class 类式；auto 弱引导）
+                    {
+                        "role": "system",
+                        "content": INTERFACE_SYSTEM
+                        + interface_style_prompt(self.settings.contract_style),
+                    },
                     {
                         "role": "user",
                         "content": INTERFACE_USER.format(
