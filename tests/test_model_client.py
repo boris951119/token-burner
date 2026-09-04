@@ -185,3 +185,91 @@ class TestTokenAccumulation:
         assert log["json_mode"] is True
         assert log["input_tokens"] == 10
         assert log["output_tokens"] == 5
+
+
+# ---------------------------------------------------------------------------
+# 11.2 续写拼接：句中截断时续写头部的真实换行须剥除（bench_v1 试跑取证修复）
+# ---------------------------------------------------------------------------
+def _length_response(content: str, input_tokens: int = 10, output_tokens: int = 5) -> dict:
+    """构造 finish_reason=length 的截断响应。"""
+    return {
+        "choices": [{"message": {"content": content}, "finish_reason": "length"}],
+        "usage": {"prompt_tokens": input_tokens, "completion_tokens": output_tokens},
+    }
+
+
+class TestContinuationJoin:
+    """finish_reason=length 续写拼接（v1.0 V2 试跑发现的换行腐蚀缺陷）。
+
+    事故特征：句中截断 + GLM 续写以真实换行开头 → 拼接点未闭合字符串
+    （unterminated string literal）→ 语法门禁拦截 → 修复轮重新生成再次
+    截断续写 → 5 轮不收敛 FROZEN。
+    """
+
+    def _run(self, responses, gpt_key):
+        fake = FakeCompletion(responses=responses)
+        client = ModelClient(Settings(models=["gpt-4o"]), completion_fn=fake)
+        return client.chat("gpt-4o", [{"role": "user", "content": "写代码"}]), fake
+
+    def test_midline_cut_strips_continuation_leading_newline(self, gpt_key):
+        """句中截断：续写开头的真实换行被剥除，字符串原位闭合。"""
+        resp, _ = self._run(
+            [
+                _length_response('f.write("张三,28'),
+                make_response(content='\n")\n'),
+            ],
+            gpt_key,
+        )
+        assert resp.content == 'f.write("张三,28")\n'
+        compile(resp.content, "<bench>", "exec")  # 拼接结果须为合法 Python
+
+    def test_midline_cut_strips_multiple_leading_newlines(self, gpt_key):
+        resp, _ = self._run(
+            [
+                _length_response('x = "abc'),
+                make_response(content='\r\n\r\n"'),
+            ],
+            gpt_key,
+        )
+        assert resp.content == 'x = "abc"'
+
+    def test_eol_cut_keeps_continuation_verbatim(self, gpt_key):
+        """原文结束在行尾：续写内容原样保留（含其自带换行语义）。"""
+        resp, _ = self._run(
+            [
+                _length_response("a = 1\n"),
+                make_response(content="\nb = 2\n"),
+            ],
+            gpt_key,
+        )
+        assert resp.content == "a = 1\n\nb = 2\n"
+
+    def test_literal_escape_sequence_not_stripped(self, gpt_key):
+        """续写以字面反斜杠-n（转义序列文本）开头：不受剥除影响。"""
+        resp, _ = self._run(
+            [
+                _length_response('f.write("data'),
+                make_response(content=r'\n")'),
+            ],
+            gpt_key,
+        )
+        assert resp.content == r'f.write("data\n")'
+
+    def test_no_continuation_when_finish_stop(self, gpt_key):
+        """正常结束（finish_reason 缺失/stop）：单次调用，无续写。"""
+        resp, fake = self._run([make_response(content="done")], gpt_key)
+        assert resp.content == "done"
+        assert len(fake.calls) == 1
+
+    def test_continuation_usage_accumulates(self, gpt_key):
+        """续写用量并入总用量（10+10 / 5+5）。"""
+        resp, _ = self._run(
+            [
+                _length_response("part1"),
+                make_response(content="part2", input_tokens=10, output_tokens=5),
+            ],
+            gpt_key,
+        )
+        assert resp.content == "part1part2"
+        assert resp.input_tokens == 20
+        assert resp.output_tokens == 10
