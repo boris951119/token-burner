@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.0 · V2.5（2026-09-05）：写测试注入接口契约——round-2f 三模块同签名冻结根因修复
+
+> bench_v1 round-2f 取证（T1，logs/bench_v1/pilot_r2/）：password_generator /
+> blacklist_checker / strength_evaluator 三模块同签名 FROZEN——接口门禁通过
+> 但执行期 `ImportError: cannot import name ...`。
+
+- **根因**：`_write_tests` 只喂模块名与代码，测试 LLM（glm-4.5-flash）凭需求
+  语义发明契约之外的函数名（calculate_strength / is_weak_password /
+  generate_batch_passwords）；执行失败后修复循环只修代码不修测试，改代码凑
+  测试名 → 接口门禁拦截 → 改回契约名 → 测试再失败，震荡 5 轮冻结。此为
+  潜伏缺陷：此前各轮模块均死于更早环节（限流/pyc/链接误报/fs 误拦），从未
+  大规模到达执行阶段，v1.0 门禁链修通后首次暴露。
+
+- **修复（M15-5）**：`dev_loop._write_tests` 新增 contract 参数，契约
+  public_api（缺省回退 exports）以「模块接口契约」段注入用户提示词，测试
+  调用强制按契约签名；`run_module` 透传契约。无契约时提示词与修复前逐字节
+  一致（行为兼容）。
+
+- **测试**：新增 `test_write_tests_contract.py` 5 项（注入/无契约不变/
+  空契约不变/exports 回退/调用路由——写代码调用不含契约段、写测试调用必须含）；
+  全量回归 **1000 → 1005 passed / 7 skipped / 0 failed**。
+
+- **运营记录**：T1 于 2026-09-04 23:58 死于 GLM 账户级限流（5 次重试耗尽，
+  V2.2 任务级 traceback 完整落盘）；跑批进程随旧会话窗口关闭被连带终止，
+  T2/T3 未执行——round-2f 数据归档供对照，round-3 携本修复重跑。
+
 ## v1.0 · V2 回炉修复批次（V2.1–V2.4，2026-09-04）：基准试跑取证修复链
 
 > bench_v1 pilot 试跑（M17-1 中期准入线）驱动的四个运营韧性/误报修复批次，

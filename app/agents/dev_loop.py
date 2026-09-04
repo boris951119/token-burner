@@ -213,7 +213,8 @@ class DevLoopEngine:
         """
         self._active_project_id = project_id
         code = self._write_code(module, responsibility)
-        tests = self._write_tests(module, code)
+        # M15-5：契约同步传给测试生成（测试调用必须按契约签名）
+        tests = self._write_tests(module, code, contract=contract)
         return self._drive(
             module, project_id, code, tests, fix_attempts=0,
             user_feedback=user_feedback, contract=contract,
@@ -489,15 +490,25 @@ class DevLoopEngine:
         )
         return self._split_shared(_extract_code(response.content))
 
-    def _write_tests(self, module: str, code: str) -> str:
+    def _write_tests(self, module: str, code: str, contract: dict | None = None) -> str:
+        user = WRITE_TESTS_USER.format(module=module, code=code)
+        # M15-5：接口契约注入——测试调用必须按契约名称与签名，不得发明
+        # 契约之外的函数名。round-2f 三模块同签名冻结根因：测试 LLM 凭
+        # 需求语义命名（如 calculate_strength），执行期 ImportError 后
+        # 修复循环只修代码不修测试，与接口门禁来回震荡至冻结。
+        api = (contract or {}).get("public_api") or (contract or {}).get("exports") or []
+        api_lines = [f"- {item}" for item in api]
+        if api_lines:
+            user += (
+                "\n\n## 模块接口契约（测试必须严格按以下名称与签名调用，"
+                "不得调用契约之外的函数或方法）\n" + "\n".join(api_lines)
+            )
         response = self.llm.chat(
             self.test_model,
             [
                 # M14-3：测试同样受平台约束（测试 import fcntl 同样炸）
                 {"role": "system", "content": WRITE_TESTS_SYSTEM + self._platform_prompt},
-                {"role": "user", "content": WRITE_TESTS_USER.format(
-                    module=module, code=code
-                )},
+                {"role": "user", "content": user},
             ],
         )
         return _extract_code(response.content)
