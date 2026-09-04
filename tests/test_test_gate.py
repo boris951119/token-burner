@@ -141,3 +141,50 @@ class TestTestGateInDrive:
         )
         assert result.status == ModuleStatus.SUCCESS
         assert [c["model"] for c in llm.calls] == ["dev-model", "test-model"]
+
+
+CLASS_TESTS = (
+    "import pytest\n"
+    "class TestEval:\n"
+    "    def test_inner(self):\n"
+    "        assert True\n"
+    "def test_bare_call():\n"
+    "    assert evaluate_password_strength('a') == 80\n"
+)
+
+
+class TestRound4Regression:
+    def test_classdef_does_not_crash(self):
+        """round-4 T3 取证：ClassDef 分支曾 AttributeError 炸死任务。"""
+        issues = check_test_bindings(CLASS_TESTS, "evaluate_check", CONTRACT)
+        # 类定义不崩溃；裸调用的契约符号仍被精确拦截
+        assert len(issues) == 1
+        assert "evaluate_password_strength" in issues[0]
+
+    def test_class_only_tests_clean(self):
+        tests = (
+            "from evaluate_check import evaluate_password_strength\n"
+            "class TestEval:\n"
+            "    def test_inner(self):\n"
+            "        assert evaluate_password_strength('a') == 80\n"
+        )
+        assert check_test_bindings(tests, "evaluate_check", CONTRACT) == []
+
+    def test_gate_exception_degrades_open(self, tmp_path, monkeypatch):
+        """门禁自身异常 → 降级放行（不杀任务，不进测试再生）。"""
+        import app.utils.test_check as tc
+
+        def boom(*a, **kw):
+            raise RuntimeError("gate internal error")
+
+        monkeypatch.setattr(tc, "check_test_bindings", boom)
+        fm = FileManager(projects_root=tmp_path / "p")
+        llm = ScriptedLLM([CODE, BAD_TESTS])
+        engine = make_engine(llm, fm)
+        project_id = fm.create_project("demo").project_id
+        result = engine.run_module(
+            "evaluate_check", project_id=project_id, contract=CONTRACT,
+        )
+        # 门禁炸了也照常走执行（FakeExecutor SUCCESS），无再生调用
+        assert result.status == ModuleStatus.SUCCESS
+        assert [c["model"] for c in llm.calls] == ["dev-model", "test-model"]
