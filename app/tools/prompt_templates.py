@@ -86,6 +86,10 @@ WRITE_TESTS_USER = _load("write_tests_user")
 FIX_CODE_SYSTEM = _load("fix_code_system")
 FIX_CODE_USER = _load("fix_code_user")
 
+# M14-7（v1.0）：safe 模式 LLM 逻辑审查（规格 3.6.2 三件套补全）
+LOGIC_REVIEW_SYSTEM = _load("logic_review_system")
+LOGIC_REVIEW_USER = _load("logic_review_user")
+
 # ---------------------------------------------------------------------------
 # M10 Researcher（v0.5 Beta）：结构化技术摘要（四段式：来源/版本/示例/坑点）
 # ---------------------------------------------------------------------------

@@ -36,6 +36,7 @@ from app.execution.executor import ExecutionResult, ExecutionStatus, Executor
 from app.execution.local_executor import (
     _parse_pytest_summary,
     scan_dangerous,
+    scan_dangerous_js,
 )
 
 # runner: (cmd, timeout) -> CompletedProcess；TimeoutExpired 表示超时
@@ -124,11 +125,14 @@ class DockerExecutor(Executor):
         expected_output: str = "",
         module: str = "",
     ) -> ExecutionResult:
-        # 第一道防线：AST 危险预扫描（与 LocalExecutor 同一黑名单）。
-        # M2-5 边界：黑名单是 Python AST——JS 源码 parse 失败会被静默放行
-        #（语法错误交上层静态门禁），node 运行时的首道防线暂为容器级隔离
-        #（只读 fs/无网/非 root）；JS 静态扫描属 v0.5 TS 支持范围。
-        issues = scan_dangerous(code, tests, platform=self.platform)
+        # 第一道防线：危险预扫描（与 LocalExecutor 同一黑名单）。
+        # M16-1：node 链路切换 JS 黑名单（require/import/eval 族）；
+        # node_check 关闭——语法权威在镜像内 node，宿主版本漂移不应误拦，
+        # 残余语法错误由容器执行非零退出暴露。
+        if self.language == "node":
+            issues = scan_dangerous_js(code, tests, node_check=False)
+        else:
+            issues = scan_dangerous(code, tests, platform=self.platform)
         if issues:
             return ExecutionResult(
                 status=ExecutionStatus.BLOCKED,
@@ -158,7 +162,11 @@ class DockerExecutor(Executor):
                     tests, encoding="utf-8"
                 )
                 if self.language == "node":
-                    argv = ["node", "--test", f"test_{module_name}.{ext}"]
+                    # M16-1：显式 tap reporter——node 缺省 spec 格式无
+                    # 「# pass N」汇总行，_parse_node_tap 解析不到（潜伏
+                    # bug：live 测试无 Docker 环境从未暴露）
+                    argv = ["node", "--test", "--test-reporter=tap",
+                            f"test_{module_name}.{ext}"]
                 else:
                     argv = ["python", "-m", "pytest", f"test_{module_name}.{ext}",
                             "-q", "--no-header"]

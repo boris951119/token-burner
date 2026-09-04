@@ -112,6 +112,34 @@ class CostDashboard:
             )
         return dashboard
 
+    def merge_history(self, report: dict) -> int:
+        """M14-6：并入历史会话的 cost_report 聚合（项目级累计审计口径）。
+
+        resume 场景：call_log 只含本次会话（factory 每任务新建实例），
+        历史消耗以 cost_report.json 的聚合值并入——by_model 精确还原，
+        input/output 细分历史未按模型拆分（全记 input，注释可查），
+        stage 统一标「历史会话」。
+
+        Returns: 并入的历史 total_tokens（0 = 无历史/空报告）。
+        """
+        by_model = report.get("by_model") or {}
+        history_total = int(report.get("total_tokens", 0) or 0)
+        if history_total <= 0:
+            return 0
+        if by_model:
+            for model, tokens in by_model.items():
+                self.record(
+                    model=str(model), stage="历史会话",
+                    input_tokens=int(tokens or 0), output_tokens=0,
+                    kind="history",
+                )
+        else:  # 老版报告无 by_model：单条聚合
+            self.record(
+                model="历史（未拆分）", stage="历史会话",
+                input_tokens=history_total, output_tokens=0, kind="history",
+            )
+        return history_total
+
     # ------------------------------------------------------------------
 
     @property

@@ -1,5 +1,71 @@
 # Changelog
 
+## v1.0 · V2 批次（2026-09-04）：自适应与扫描——M14-5/6/7 + M15-3/4 + M16-1
+
+> v1.0 Release 质量收敛第三批（规格 v1.0.md，含 2026-09-03 组件评审追加项）。
+> 主题：safe 模式门禁全覆盖 + 自适应契约风格 + JS 首道防线补全。
+
+### 新增
+
+- **M14-5 平台黑名单上移门禁链**（`app/agents/dev_loop.py`）：平台/危险预扫描
+  此前仅在执行器层（auto 模式）生效，safe 是默认模式却零覆盖——fcntl 代码
+  静默通过全部门禁。现门禁链升级为「语法 → 静态 → 链接 → **平台** → 接口 →
+  逻辑审查」，双模式统一覆盖；命中进修复循环（LLM 换平台可用方案）而非冻结。
+
+- **M14-6 resume 预算恢复**（`app/agents/pipeline` + `app/dashboard`）：resume 时
+  从项目 `logs/cost_report.json` 读历史 total\_tokens 注入新 BudgetGuard，
+  看板预算口径同步累计——多次 resume 不再稀释「单任务总预算」语义。
+
+- **M14-7 safe 模式 LLM 逻辑审查**（`dev_loop._logic_review` + 新提示词
+  `logic_review_system/user.md`）：规格 3.6.2 三件套补全（AST 静态 + LLM 审查 +
+  手动反馈）。契约函数级审查（控成本）；verdict=fail 进修复循环；
+  LLM 调用/解析失败降级放行（增强非硬门禁）；auto 模式不审（有真实执行反馈）；
+  新配置 `logic_review_enabled` 缺省开。
+
+- **M15-3 契约风格可配置**（新模块 `app/utils/contract_style.py`）：配置
+  `contract_style: function | class | auto`（缺省 function 与 M15-1 一致）；
+  auto = 首轮实现到达接口门禁时按实际代码顶层符号一次性反推回写契约
+  （确定性零 LLM，审计落盘 `sessions/style_adaptation.jsonl`，同模块防震荡）；
+  类式契约门禁按顶层类符号校验（`extract_public_defs` 去 self）。
+
+- **M15-4 修复循环上下文增强**（`dev_loop._fix_context`）：修复轮提示词拼接
+  ① 接口地图全文（全部模块契约，改动须保持兼容）+ ② 已通过依赖方对本模块
+  API 的真实调用示例（每文件 ≤12 行 / ≤8 文件，防提示词膨胀）；无项目/契约/
+  依赖方时行为与增强前完全一致。
+
+- **M16-1 JS 静态危险扫描**（`local_executor` / `docker_executor`）：新增
+  `scan_dangerous_js`——require/import 黑名单（child\_process/net/http/vm/
+  worker\_threads 等）+ fs 删除改名类方法拦截 + eval/`new Function`/动态
+  require 检测；JS 源码不再因「非 Python 语法」静默放行（清偿 M2-5 技术债）；
+  Docker 链 node --test 改用显式 tap reporter（spec 格式无 `# pass N` 汇总行）。
+
+### 测试
+
+- 新增 `test_platform_policy`（门禁链接入 8 项）/ `test_budget_resume.py`（12）/
+  `test_logic_review.py`（15）/ `test_contract_style.py`（22）/
+  `test_fix_context.py`（10）/ `test_js_scan.py`（28）；既有并发/接口/
+  Docker 测试随行为升级同步修正（逻辑审查 +1 次调用计数等）
+
+- 全量回归：**874 → 986 passed / 7 skipped / 0 failed**（+112，目标 ≥880 已达成）
+
+- 清理空残留文件 `app/utils/platform_policy.py.b64`
+
+## v1.0 · V1 批次（2026-09-02，补录）：收敛手段——M14-3/4 + M15-1/2
+
+> v1.0 Release 质量收敛第二批（规格 v1.0.md M14-3/M14-4/M15-1/M15-2）。
+
+- **M14-3 平台约束注入**：`Settings.target_platform`（缺省 windows）+
+  `platform_policy` 单一数据源，write\_code / fix\_code / write\_tests 提示词
+  注入平台约束段
+- **M14-4 危险扫描平台黑名单**：`scan_dangerous` 平台不可用模块清单
+  （windows: fcntl/termios/pwd/grp/resource…），命中 BLOCKED，双执行器 +
+  工厂透传
+- **M15-1 拆分阶段契约风格约束**：interface/write\_code 提示词 API 风格约定
+  （顶层可调用导出 + 正反示例）
+- **M15-2 门禁报告修改指导**：`InterfaceIssue.guidance`——missing 附签名模板、
+  extra 附处置二选一，门禁报告拼接指导
+- 测试：**850 → 874 passed**（+24），0 回归
+
 ## v1.0 · V0 批次（2026-09-02）：机制堵漏——\_shared 合并守卫 + 全局链接门禁
 
 > v1.0 Release 质量收敛第一步（规格 v1.0.md M14-1/M14-2）。

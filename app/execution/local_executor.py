@@ -118,6 +118,143 @@ def _scan_node(
 
 
 # ---------------------------------------------------------------------------
+# M16-1：JS 静态危险扫描（require/import 黑名单 + eval 族 + node --check）
+# ---------------------------------------------------------------------------
+
+# 禁止整包引入的 Node 模块（子进程/网络/动态执行/集群——对齐 Python
+# _FORBIDDEN_MODULES 的类别口径）
+_JS_FORBIDDEN_MODULES: frozenset[str] = frozenset({
+    "child_process", "cluster", "net", "dgram", "tls",
+    "http", "https", "http2", "dns", "vm", "worker_threads",
+})
+
+# fs 允许引入（文件读写是合法能力），但删除/改名类方法调用拦截
+#（对齐 Python os.remove/unlink/rmdir/renames 的黑名单粒度）
+_JS_FORBIDDEN_FS_METHODS: frozenset[str] = frozenset({
+    "rm", "rmSync", "unlink", "unlinkSync",
+    "rmdir", "rmdirSync", "rename", "renameSync",
+})
+
+# require('mod') / import x from 'mod' / import 'mod' / import('mod')
+# / export {x} from 'mod'（再导出同样触发模块加载）
+_JS_MODULE_RE = re.compile(
+    r"""require\s*\(\s*['"]([^'"]+)['"]\s*\)
+      |import\s+(?:[\w*{},\s]+?\s+from\s+)?['"]([^'"]+)['"]
+      |import\s*\(\s*['"]([^'"]+)['"]\s*\)
+      |export\s+[\w*{},\s]+?\s+from\s+['"]([^'"]+)['"]""",
+    re.VERBOSE,
+)
+
+# eval 族（动态执行）：eval( / new Function( / 裸 Function( 构造器调用
+_JS_EVAL_RE = re.compile(
+    r"\beval\s*\(|\bnew\s+Function\s*\(|(?<![\w.])Function\s*\("
+)
+
+# 危险 fs 方法调用（任意接收者——宁可误报）
+_JS_FS_CALL_RE = re.compile(
+    r"\.\s*(" + "|".join(sorted(_JS_FORBIDDEN_FS_METHODS)) + r")\s*\("
+)
+
+# 动态 require（非字面量参数——路径拼接/变量注入的常见载体）
+_JS_DYNAMIC_REQUIRE_RE = re.compile(r"\brequire\s*\(\s*(?!['\"\)])")
+
+
+def _strip_js_comments(src: str) -> str:
+    """剥离注释（降低注释中黑名单词的误报；引号内的 // 不受影响）。"""
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.DOTALL)
+    out: list[str] = []
+    for line in src.splitlines():
+        quote = None
+        cut = len(line)
+        i = 0
+        while i < len(line):
+            ch = line[i]
+            if quote:
+                if ch == "\\":
+                    i += 2
+                    continue
+                if ch == quote:
+                    quote = None
+            elif ch in "'\"":
+                quote = ch
+            elif line.startswith("//", i):
+                cut = i
+                break
+            i += 1
+        out.append(line[:cut])
+    return "\n".join(out)
+
+
+def _node_syntax_issues(code: str, tests: str) -> list[str]:
+    """node --check 语法核验（宿主无 node → 跳过，执行阶段兜底）。"""
+    import shutil
+
+    node = shutil.which("node")
+    if node is None:
+        return []
+    issues: list[str] = []
+    for label, text in (("代码", code), ("测试", tests)):
+        if not text.strip():
+            continue
+        with tempfile.TemporaryDirectory(prefix="token_burner_jscheck_") as tmp:
+            f = Path(tmp) / "check.js"
+            f.write_text(text, encoding="utf-8")
+            try:
+                proc = subprocess.run(
+                    [node, "--check", str(f)],
+                    capture_output=True, text=True, timeout=10,
+                    encoding="utf-8", errors="replace",
+                )
+            except (subprocess.TimeoutExpired, OSError):
+                continue  # check 自身故障不阻塞（执行阶段非零退出兜底）
+        if proc.returncode != 0:
+            lines = (proc.stderr or proc.stdout or "").strip().splitlines()
+            detail = lines[0][:120] if lines else "未知语法错误"
+            issues.append(f"{label}JS 语法错误（node --check）: {detail}")
+    return issues
+
+
+def scan_dangerous_js(
+    code: str, tests: str = "", node_check: bool = True
+) -> list[str]:
+    """M16-1：JS 静态危险预扫描（返回危险操作描述列表，空 = 放行）。
+
+    三道防线（与 Python 版 scan_dangerous 同位互补）：
+    1. require/import/export-from 黑名单（child_process/net/vm 等
+       ——子进程/网络/动态执行，含 node: 前缀变体）；
+    2. eval 族 + 危险 fs 方法（rm/unlink/rmdir/rename，对齐 Python
+       os.* 黑名单粒度）+ 动态 require（非字面量模块名）；
+    3. node --check 语法核验（仅 node_check=True 时）——供独立调用方
+       （如上层静态门禁）使用；执行器接线一律 node_check=False：
+       语法错误属可修复类，语义归执行 FAILED（修复循环）而非
+       BLOCKED（冻结），对齐 Python 版「语法错误交给静态门禁」原则。
+
+    无 JS 解析器依赖（宁缺毋滥），正则 + 注释剥离实现；
+    姿态与 Python 版一致：宁可误报绝不放过。
+    """
+    issues: list[str] = []
+    for label, text in (("代码", code), ("测试", tests)):
+        if not text.strip():
+            continue
+        src = _strip_js_comments(text)
+        for m in _JS_MODULE_RE.finditer(src):
+            mod = next(g for g in m.groups() if g)
+            root = mod.split("node:")[-1].split("/")[0]
+            if root in _JS_FORBIDDEN_MODULES:
+                issues.append(f"{label}禁止引入 {mod}（系统命令/网络/动态执行）")
+        if _JS_EVAL_RE.search(src):
+            issues.append(f"{label}禁止 eval/Function 动态执行")
+        for m in _JS_FS_CALL_RE.finditer(src):
+            issues.append(
+                f"{label}禁止调用 fs.{m.group(1)}()（删除/改名类文件操作）")
+        if _JS_DYNAMIC_REQUIRE_RE.search(src):
+            issues.append(f"{label}禁止动态 require（非字面量模块名）")
+    if node_check and (code.strip() or tests.strip()):
+        issues.extend(_node_syntax_issues(code, tests))
+    return issues
+
+
+# ---------------------------------------------------------------------------
 # pytest 输出解析（test_results 填充）
 # ---------------------------------------------------------------------------
 
@@ -141,16 +278,26 @@ def _parse_pytest_summary(stdout: str) -> dict:
 
 
 class LocalExecutor(Executor):
-    """自动验证模式：危险预扫描 + 本地子进程真实执行。"""
+    """自动验证模式：危险预扫描 + 本地子进程真实执行。
+
+    M16-1：language="node" 时切换 JS 链路——scan_dangerous_js 预扫描
+    + node --test / node 执行（宿主需有 node；缺失时明确 FAILED）。
+    """
 
     def __init__(
         self,
         project_code_dir: Path | str | None = None,
         platform: str = "any",
+        language: str = "python",
     ):
         self.project_code_dir = Path(project_code_dir) if project_code_dir else None
         # M14-4：交付目标平台（平台不可用模块拦截；any = 不检查）
         self.platform = platform
+        if language not in ("python", "node"):
+            raise ValueError(
+                f"language 仅支持 python / node，当前: {language!r}"
+            )
+        self.language = language
 
     def run(
         self,
@@ -160,8 +307,14 @@ class LocalExecutor(Executor):
         expected_output: str = "",
         module: str = "",
     ) -> ExecutionResult:
-        # 3.6.3：执行前危险预扫描（宁可误报，绝不放过）
-        issues = scan_dangerous(code, tests, platform=self.platform)
+        # 3.6.3：执行前危险预扫描（宁可误报，绝不放过）。
+        # M16-1：node 链路用 JS 黑名单；node_check=False——语法错误属
+        # 可修复类，语义归执行 FAILED（修复循环）而非 BLOCKED（冻结），
+        # 对齐 Python 版「语法错误交给静态门禁」原则。
+        if self.language == "node":
+            issues = scan_dangerous_js(code, tests, node_check=False)
+        else:
+            issues = scan_dangerous(code, tests, platform=self.platform)
         if issues:
             return ExecutionResult(
                 status=ExecutionStatus.BLOCKED,
@@ -170,10 +323,11 @@ class LocalExecutor(Executor):
             )
 
         module_name = module or "_module_"
+        ext = "js" if self.language == "node" else "py"
         started = time.time()
         with tempfile.TemporaryDirectory(prefix="token_burner_exec_") as tmp:
             tmp_dir = Path(tmp)
-            (tmp_dir / f"{module_name}.py").write_text(code, encoding="utf-8")
+            (tmp_dir / f"{module_name}.{ext}").write_text(code, encoding="utf-8")
 
             env = dict(os.environ)
             # 依赖解析顺序：当前模块（临时目录）优先，其次项目 code/ 目录
@@ -185,12 +339,21 @@ class LocalExecutor(Executor):
             )
 
             if tests.strip():
-                (tmp_dir / f"test_{module_name}.py").write_text(
+                (tmp_dir / f"test_{module_name}.{ext}").write_text(
                     tests, encoding="utf-8"
                 )
+                # M16-1：node 链路 → node --test（内置 runner，无 npm 依赖；
+                # 显式 tap reporter 保证 # pass/# fail 汇总行可解析——
+                # node 缺省 spec 格式无此行，Docker 版同修）
+                if self.language == "node":
+                    argv = ["node", "--test", "--test-reporter=tap",
+                            f"test_{module_name}.{ext}"]
+                else:
+                    argv = [sys.executable, "-m", "pytest",
+                            f"test_{module_name}.{ext}", "-q", "--no-header"]
                 try:
                     proc = subprocess.run(
-                        [sys.executable, "-m", "pytest", f"test_{module_name}.py", "-q", "--no-header"],
+                        argv,
                         cwd=tmp_dir, env=env, timeout=timeout,
                         capture_output=True, text=True, encoding="utf-8", errors="replace",
                     )
@@ -201,26 +364,47 @@ class LocalExecutor(Executor):
                         duration_ms=int((time.time() - started) * 1000),
                         message=f"测试执行超时（>{timeout}s 熔断，3.6.3）",
                     )
+                except FileNotFoundError:
+                    return ExecutionResult(
+                        status=ExecutionStatus.FAILED,
+                        exit_code=None,
+                        duration_ms=int((time.time() - started) * 1000),
+                        message="Node.js 运行时不可用（PATH 中无 node，"
+                                "无法执行 JS 代码）",
+                    )
                 duration = int((time.time() - started) * 1000)
-                test_results = [_parse_pytest_summary(proc.stdout)]
+                if self.language == "node":
+                    from app.execution.docker_executor import _parse_node_tap
+
+                    test_results = [_parse_node_tap(proc.stdout)]
+                    ok_msg = f"node --test 通过（{test_results[0]['passed']} 项）"
+                    fail_msg = "node --test 未通过"
+                else:
+                    test_results = [_parse_pytest_summary(proc.stdout)]
+                    ok_msg = f"pytest 通过（{test_results[0]['passed']} 项）"
+                    fail_msg = "pytest 未通过"
                 if proc.returncode == 0:
                     return ExecutionResult(
                         status=ExecutionStatus.SUCCESS,
                         exit_code=0, stdout=proc.stdout, stderr=proc.stderr,
                         test_results=test_results, duration_ms=duration,
-                        message=f"pytest 通过（{test_results[0]['passed']} 项）",
+                        message=ok_msg,
                     )
                 return ExecutionResult(
                     status=ExecutionStatus.FAILED,
                     exit_code=proc.returncode, stdout=proc.stdout, stderr=proc.stderr,
                     test_results=test_results, duration_ms=duration,
-                    message="pytest 未通过",
+                    message=fail_msg,
                 )
 
-            # 无测试：直接运行模块（__main__）
+            # 无测试：直接运行模块（__main__ / 入口脚本）
+            if self.language == "node":
+                argv = ["node", f"{module_name}.{ext}"]
+            else:
+                argv = [sys.executable, f"{module_name}.{ext}"]
             try:
                 proc = subprocess.run(
-                    [sys.executable, f"{module_name}.py"],
+                    argv,
                     cwd=tmp_dir, env=env, timeout=timeout,
                     capture_output=True, text=True, encoding="utf-8", errors="replace",
                 )
@@ -230,6 +414,14 @@ class LocalExecutor(Executor):
                     exit_code=None,
                     duration_ms=int((time.time() - started) * 1000),
                     message=f"执行超时（>{timeout}s 熔断，3.6.3）",
+                )
+            except FileNotFoundError:
+                return ExecutionResult(
+                    status=ExecutionStatus.FAILED,
+                    exit_code=None,
+                    duration_ms=int((time.time() - started) * 1000),
+                    message="Node.js 运行时不可用（PATH 中无 node，"
+                            "无法执行 JS 代码）",
                 )
             duration = int((time.time() - started) * 1000)
             if proc.returncode != 0:
