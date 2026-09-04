@@ -143,7 +143,19 @@ class TestTaskManagerUnit:
 
     def test_events_update_state_broadcast_and_persist(self, tmp_path):
         mgr = TaskManager(projects_root=tmp_path)
-        task_id = mgr.submit("run", lambda tid: {"kind": "team_flow"})
+        # submit 的 job_factory 在 submit 时同步调用，其返回的 callable 才是
+        # 线程池执行的 job。原写法 factory 直接返回 dict → worker 内 job()
+        # TypeError → done(FAILED) 帧与主线程事件竞速插队（高负载必现）。
+        # 正确语义：job 阻塞到主线程发完 4 个事件再结束，done 必然最后。
+        release = threading.Event()
+
+        def _factory(tid):
+            def _job():
+                release.wait(timeout=10)
+                return {"kind": "team_flow"}
+            return _job
+
+        task_id = mgr.submit("run", _factory)
         q = mgr.subscribe(task_id)
         try:
             mgr.on_pipeline_event(task_id, "tokens", {"tokens": 15})
@@ -168,6 +180,7 @@ class TestTaskManagerUnit:
             assert persisted["task_id"] == task_id
             assert persisted["tokens_used"] == 15
         finally:
+            release.set()
             mgr.unsubscribe(task_id, q)
 
     def test_get_loads_from_disk_after_restart(self, tmp_path):
