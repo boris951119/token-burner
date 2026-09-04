@@ -1,5 +1,39 @@
 # Changelog
 
+## v1.0 · V2 回炉修复批次（V2.1–V2.4，2026-09-04）：基准试跑取证修复链
+
+> bench_v1 pilot 试跑（M17-1 中期准入线）驱动的四个运营韧性/误报修复批次，
+> 全部以真实失败取证定位根因（数据归档 `logs/bench_v1/`）。
+
+- **V2.1 续写拼接换行腐蚀**（`model_client` 续写拼接）：max\_response\_tokens
+  截断触发续写时，GLM 续写响应以真实换行开头而非原位接续——裸拼接在拼接点
+  产生 unterminated string literal，5 轮不收敛冻结（pilot round-1 取证：0/17
+  模块通过）。修复：句中截断剥除续写头部换行；新增 TestContinuationJoin 7 项
+  回归。本批同时交付 M17-1 标准需求集（`scripts/bench_tasks.json`，10 任务 × 5
+  类别）与基准跑批脚本 `scripts/bench_v1_run.py`。
+
+- **V2.2 运营韧性三修复**（round-2 取证）：① `list_files` 排除
+  `__pycache__/*.pyc`（pyc 被 read\_text 读出 UnicodeDecodeError 杀死任务的
+  根因），`read_file` 对不可解码二进制纵深防御返回 None；② GLM 网关偶发 GBK
+  错误页（UnicodeDecodeError/JSONDecodeError）归入瞬态退避重试，重试硬化
+  3×1s → 5×15s（免费档分钟级限流窗口）；③ 任务失败附截尾 traceback；
+  候选池移除 glm-4.6v（探针证实 `\n` 转义输出为真实换行，
+  `logs/bench_v1/model_probe_20260904.json`）。
+
+- **V2.3 链接门禁子模块导入误报**（round-2d 取证）：`from _shared import
+  log_config` 为合法子模块导入（`_shared/log_config.py` 存在），旧逻辑只在
+  `__init__.py` 符号集里找 → 误报 missing → LLM 代码本身正确无从改起，4 模块
+  连续冻结。修复：符号缺失判定前先验证 `pkg/sym.py` 子模块文件存在性。
+
+- **V2.4 危险扫描测试侧放行 fs 删除族**（round-2e 取证）：生成的测试以
+  os.unlink/shutil.rmtree 清理临时产物（标准写法）被危险扫描一刀切 BLOCKED
+  → 按 3.6.3 直接冻结。修复：测试侧放行 fs 删除/改名族（执行环境为一次性
+  tmp 目录）；进程控制类、eval 族、危险 import 对测试仍全禁；模块代码侧
+  黑名单不变（维持宁可误报绝不放过）。
+
+- 全量回归：**986 → 1000 passed / 7 skipped / 0 failed**（2026-09-04 复验）
+  ；round-1/2/2c/2d/2e 各失败批次数据均归档 `logs/bench_v1/` 供对照。
+
 ## v1.0 · V2 批次（2026-09-04）：自适应与扫描——M14-5/6/7 + M15-3/4 + M16-1
 
 > v1.0 Release 质量收敛第三批（规格 v1.0.md，含 2026-09-03 组件评审追加项）。
