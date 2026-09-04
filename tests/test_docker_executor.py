@@ -251,8 +251,10 @@ class TestDockerNodeLanguage:
         assert result.test_results == [{"passed": 3, "failed": 0}]
         assert "node --test 通过（3 项）" in result.message
         cmd = fake.calls_of("run")[0]
-        # cmd 尾部 = [镜像, *argv]：node 镜像 + 内置 test runner
-        assert cmd[-4:] == ["node:20-slim", "node", "--test", "test_m.js"]
+        # cmd 尾部 = [镜像, *argv]：node 镜像 + 内置 test runner +
+        # 显式 tap reporter（缺省 spec 格式无 # pass N 汇总行，M16-1 修正）
+        assert cmd[-5:] == ["node:20-slim", "node", "--test",
+                            "--test-reporter=tap", "test_m.js"]
 
     def test_node_test_failure_maps_failed(self):
         executor, _ = _make_executor(
@@ -279,17 +281,30 @@ class TestDockerNodeLanguage:
                      "--memory", "--memory-swap", "--cpus", "--pids-limit"):
             assert flag in cmd, f"node 容器缺少旗标 {flag}"
 
-    def test_node_js_source_passes_prescan_without_crash(self):
-        # M2-5 边界固化：JS 源码非 Python 语法 → 预扫描静默放行（不崩溃），
-        # 首道防线为容器级隔离；JS 静态扫描属 v0.5 TS 支持范围
+    def test_node_js_dangerous_source_now_blocked(self):
+        # M16-1：JS 危险源码不再静默放行——child_process 在预扫描层拦截
+        #（M2-5 时代 JS 非 Python 语法 → 静默放行，首道防线只剩容器隔离，
+        # 该技术债由 scan_dangerous_js 清偿）
         executor, fake = _make_executor(
             language="node",
             run_result=subprocess.CompletedProcess([], 0, stdout="hi", stderr=""),
         )
         result = executor.run("const cp = require('child_process')\n",
                               "", timeout=30, module="m")
+        assert result.status is ExecutionStatus.BLOCKED
+        assert fake.calls_of("run") == []  # 容器启动前拦截
+
+    def test_node_js_clean_source_passes_prescan(self):
+        # 干净 JS 放行到容器执行（node_check 关闭——语法权威在镜像内 node）
+        executor, fake = _make_executor(
+            language="node",
+            run_result=subprocess.CompletedProcess([], 0, stdout="hi", stderr=""),
+        )
+        result = executor.run("const fs = require('fs')\n"
+                              "console.log(fs.readFileSync('x', 'utf-8'))\n",
+                              "", timeout=30, module="m")
         assert result.status is ExecutionStatus.SUCCESS
-        assert fake.calls_of("run") != []  # 放行到容器执行
+        assert fake.calls_of("run") != []
 
 
 class TestExecutorFactory:

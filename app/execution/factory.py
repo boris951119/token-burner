@@ -44,4 +44,5 @@ def build_executor(
             node_image=settings.docker_node_image,
         )
     # M14-4：平台黑名单透传（windows 缺省拦 fcntl 等）
-    return LocalExecutor(platform=settings.target_platform)
+    # M16-1：语言透传（node → JS 扫描 + node 执行链路）
+    return LocalExecutor(platform=settings.target_platform, language=language)

@@ -136,3 +136,112 @@ class TestExecutorPlatformWiring:
             file_manager=StubFM(), dev_model="d", test_model="t",
         )
         assert engine_any._platform_prompt == ""
+
+
+class TestPlatformViolations:
+    """M14-5 门禁链平台检查（纯函数层）。"""
+
+    def test_fcntl_code_violation(self):
+        from app.utils.platform_policy import platform_violations
+
+        issues = platform_violations(FCNTL_CODE, platform="windows")
+        assert issues and "fcntl" in issues[0]
+        assert "ImportError" in issues[0]
+
+    def test_any_platform_empty(self):
+        from app.utils.platform_policy import platform_violations
+
+        assert platform_violations(FCNTL_CODE, platform="any") == []
+
+    def test_dangerous_api_not_in_scope(self):
+        """危险 API（os.system）不在平台检查范围（保持 3.6.3 executor 冻结语义）。"""
+        from app.utils.platform_policy import platform_violations
+
+        code = "import os\n\n\ndef f():\n    return os.system('x')\n"
+        assert platform_violations(code, platform="windows") == []
+
+    def test_tests_text_also_checked(self):
+        from app.utils.platform_policy import platform_violations
+
+        issues = platform_violations(
+            "def t():\n    pass\n", FCNTL_CODE, platform="windows")
+        assert issues and "测试" in issues[0]
+
+
+class TestM145SafeModeGateIntegration:
+    """M14-5 集成：safe 模式（此前零扫描）下 fcntl 代码被门禁拦截进修复循环。"""
+
+    def test_safe_mode_fcntl_blocked_at_gate(self, tmp_path):
+        from app.agents.dev_loop import DevLoopEngine
+        from app.execution.safe_executor import SafeExecutor
+        from app.tools.file_manager import FileManager
+
+        fm = FileManager(projects_root=tmp_path / "projects")
+        pid = fm.create_project("safe-gate").project_id
+
+        calls = {"fix": 0}
+
+        class StubLLM:
+            def chat(self, model, messages, json_mode=False):
+                calls["fix"] += 1
+                # 修复输出：仍含 fcntl（验证门禁持续拦截直至上限 → 冻结）
+                class R:
+                    content = (
+                        "```python\nimport fcntl\n\n"
+                        "def lock(f):\n    return fcntl.lockf(f)\n```"
+                    )
+                return R()
+
+        engine = DevLoopEngine(
+            llm=StubLLM(), executor=SafeExecutor(),
+            settings=Settings(target_platform="windows"),
+            file_manager=fm, dev_model="d", test_model="t",
+        )
+        result = engine._drive(
+            module="file_lock", project_id=pid,
+            code=FCNTL_CODE,
+            tests="def test_lock():\n    pass\n",
+            fix_attempts=0, user_feedback="",
+            contract=None, project_modules={"file_lock"},
+            feedback_pending=False,
+        )
+        # safe 模式此前静默放行（SKIPPED → AWAITING_FEEDBACK）；
+        # 现在被平台门禁拦截 → 触发修复循环（fix 调用 >0）→ 不收敛冻结
+        assert calls["fix"] >= 1
+        assert result.status.value == "FROZEN"
+        assert "fcntl" in result.message
+
+    def test_safe_mode_platform_fixed_converges(self, tmp_path):
+        """修复 LLM 换平台可用方案（msvcrt）→ 门禁过 → SKIPPED 正常流转。"""
+        from app.agents.dev_loop import DevLoopEngine
+        from app.execution.safe_executor import SafeExecutor
+        from app.tools.file_manager import FileManager
+
+        fm = FileManager(projects_root=tmp_path / "projects")
+        pid = fm.create_project("safe-fix").project_id
+
+        class StubLLM:
+            def chat(self, model, messages, json_mode=False):
+                class R:
+                    content = (
+                        "```python\nimport msvcrt\n\n"
+                        "def lock(f):\n    return msvcrt.locking(f.fileno(), 1, 1)\n```"
+                    )
+                return R()
+
+        engine = DevLoopEngine(
+            llm=StubLLM(), executor=SafeExecutor(),
+            settings=Settings(target_platform="windows"),
+            file_manager=fm, dev_model="d", test_model="t",
+        )
+        result = engine._drive(
+            module="file_lock", project_id=pid,
+            code=FCNTL_CODE,
+            tests="def test_lock():\n    pass\n",
+            fix_attempts=0, user_feedback="",
+            contract=None, project_modules={"file_lock"},
+            feedback_pending=False,
+        )
+        # 修复后门禁过 → safe SKIPPED → 无反馈 → AWAITING_FEEDBACK（正常态）
+        assert result.status.value == "AWAITING_FEEDBACK"
+        assert "fcntl" not in result.code

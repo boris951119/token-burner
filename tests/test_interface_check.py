@@ -30,7 +30,8 @@ class TestExtractPublicDefs:
     def test_classes_extracted_with_init_params(self):
         code = "class Store:\n    def __init__(self, path):\n        pass\n"
         defs = extract_public_defs(code)
-        assert defs == {"Store": ("self", "path")}
+        # M15-3：类 __init__ 参数去 self（self 是实现器物非 API 面）
+        assert defs == {"Store": ("path",)}
 
     def test_variables_extracted(self):
         code = "session_data = {}\nVERSION = '1.0'\n_private_var = 1\n"

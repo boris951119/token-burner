@@ -188,7 +188,8 @@ class TestServerConcurrency:
         monkeypatch.chdir(tmp_path)
         # 无状态桩：按 system 提示词确定性响应（并发下脚本序列会互相错位）。
         # 难度 4 → 空白带 TEAM_FLOW、单模块直出（不触发拆分/接口调用），
-        # 全流程 7 次调用：评估/初始方案/双评审/收敛/写码/写测试。
+        # 全流程 8 次调用：评估/初始方案/双评审/收敛/写码/写测试/
+        # M14-7 逻辑审查（safe 缺省 + logic_review_enabled 缺省开）。
         stats = {"cur": 0, "max": 0}
         stats_lock = threading.Lock()
         requirements = ("帮我写一段自我介绍", "帮我把这句话翻译成英文")
@@ -214,6 +215,12 @@ class TestServerConcurrency:
                 return _resp("# SPEC\n单模块规格")
             if "初始" in system:
                 return _resp("# 初始方案")
+            if "代码审查员" in system:
+                # M14-7：safe 模式逻辑审查（须在「测试副 LLM」前匹配，
+                # 该提示词头部亦含此字样）
+                return _resp(json.dumps(
+                    {"verdict": "pass", "issues": [], "warnings": []},
+                    ensure_ascii=False))
             if "开发副 LLM" in system:
                 return _resp("def run():\n    return 1\n")
             if "测试副 LLM" in system:
@@ -239,10 +246,11 @@ class TestServerConcurrency:
         # 并行性证据：两请求至少有一次同时在 LLM 调用中
         # （旧全局 task_lock 下该值恒为 1）
         assert stats["max"] >= 2, f"请求未并行执行（max_concurrent={stats['max']}）"
-        # 预算隔离证据：各自看板只含本任务 7 次调用（7 × 15 token）
+        # 预算隔离证据：各自看板只含本任务 8 次调用（8 × 15 token，
+        # 含 M14-7 逻辑审查）
         for r in results:
             assert r["kind"] == "team_flow"
-            assert r["dashboard"]["total_tokens"] == 105
+            assert r["dashboard"]["total_tokens"] == 120
         # 项目目录互不相同
         dirs = {r["project_dir"] for r in results}
         assert len(dirs) == 2

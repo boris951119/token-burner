@@ -12,6 +12,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from dataclasses import dataclass
@@ -24,6 +25,8 @@ from app.tools.file_manager import FileManager
 from app.tools.prompt_templates import (
     FIX_CODE_SYSTEM,
     FIX_CODE_USER,
+    LOGIC_REVIEW_SYSTEM,
+    LOGIC_REVIEW_USER,
     WRITE_CODE_SYSTEM,
     WRITE_CODE_USER,
     WRITE_TESTS_SYSTEM,
@@ -40,6 +43,10 @@ _RETRYABLE = {ExecutionStatus.FAILED, ExecutionStatus.TIMEOUT}
 _MD_FIX_HEADING = "## 修复记录"
 _MD_STATUS_HEADING = "## 当前状态"
 _MD_DIGEST_LIMIT = 120  # 修复记录失败摘要截断长度（单行可读）
+
+# M15-4 修复轮上下文增强的调用示例上限（防提示词膨胀）
+_USAGE_LINE_LIMIT = 12  # 每个依赖方文件最多展示的引用行数
+_USAGE_FILE_LIMIT = 8   # 最多展示的依赖方文件数
 
 # 12.7/14.4：LLM 输出中的公共层代码标记块（解析后落盘 code/_shared/）
 _SHARED_BLOCK = re.compile(
@@ -140,6 +147,13 @@ class DevLoopEngine:
         from app.utils.platform_policy import prompt_constraint
 
         self._platform_prompt = prompt_constraint(settings.target_platform)
+        # M15-3：契约风格约束段（按 contract_style 预生成一次；
+        # function 缺省 = M15-1 原文，class 类式，auto 弱引导）
+        from app.utils.contract_style import code_style_prompt
+
+        self._style_prompt = code_style_prompt(settings.contract_style)
+        # M15-3：auto 风格已回写模块（一次性防震荡——同引擎内每模块至多回写一次）
+        self._style_adapted: set[str] = set()
 
     # ------------------------------------------------------------------
 
@@ -291,8 +305,22 @@ class DevLoopEngine:
                 code, project_modules=project_modules or set(),
                 declared_deps=set(contract.get("dependencies", [])) if contract else None,
             )
+            # M14-5：平台检查上移门禁链——safe 是默认模式却无任何扫描
+            # （此前仅 Local/DockerExecutor 即 auto 模式执行；v0.5 实测 fcntl
+            # 代码静默通过全部门禁，直到用户手动运行才 ImportError）。双模式
+            # 统一覆盖；只拦平台不可用（可修复 → 修复循环换平台可用方案）；
+            # 危险 API 不在此列——按 3.6.3 保持 executor 层 BLOCKED 直接冻结。
+            from app.utils.platform_policy import platform_violations
+
+            platform_issues = platform_violations(
+                code, tests, platform=self.settings.target_platform,
+            )
             if not static.passed:
                 failure_report = "静态门禁失败：" + "; ".join(static.issues)
+                gate_passed = False
+            elif platform_issues:
+                failure_report = "平台门禁（M14-5）：" + "; ".join(
+                    platform_issues)
                 gate_passed = False
             else:
                 # M14-2 全局链接门禁：跨模块/_shared import 符号必须存在
@@ -327,9 +355,23 @@ class DevLoopEngine:
                     gate_passed = True
 
             if gate_passed:
+                # M15-3：auto 契约风格自适应——首轮实现到达接口门禁时，
+                # 按实际代码顶层符号一次性反推回写契约（确定性零 LLM，
+                # 审计落盘 sessions/style_adaptation.jsonl）。风格=工程
+                # 约束非语义决策；function/class 锁定时本块整体不触发。
+                if (
+                    contract is not None
+                    and self.settings.contract_style == "auto"
+                    and module not in self._style_adapted
+                ):
+                    self._style_adapted.add(module)
+                    self._adapt_contract_style(module, project_id, code, contract)
                 # 前置门禁：接口契约差异校验（14.2 严重度表：
                 # missing/extra 阻断；signature_mismatch 仅警告）
-                iface_issues = check_implementation(module, code, contract)
+                iface_issues = check_implementation(
+                    module, code, contract,
+                    style=self.settings.contract_style,
+                )
                 blockers = [i for i in iface_issues if i.severity == "blocking"]
                 warnings = [i for i in iface_issues if i.severity == "warning"]
                 warning_note = (
@@ -350,6 +392,16 @@ class DevLoopEngine:
                     gate_passed = False
                 else:
                     gate_passed = True
+
+            # M14-7：safe 模式 LLM 逻辑审查（规格 3.6.2 三件套补全——
+            # AST 静态检查 + LLM 逻辑审查 + 手动反馈，此前审查环节缺失）。
+            # 契约函数级（控成本）；fail → 修复循环；异常降级放行；
+            # auto 模式不审（有真实执行反馈，避免冗余调用）。
+            if gate_passed and self._logic_review_due():
+                review_fail = self._logic_review(module, code, contract)
+                if review_fail:
+                    failure_report = review_fail
+                    gate_passed = False
 
             if gate_passed:
                 result = self.executor.run(
@@ -426,7 +478,8 @@ class DevLoopEngine:
             self.dev_model,
             [
                 # M14-3：平台约束注入（windows 缺省禁 fcntl 等）
-                {"role": "system", "content": WRITE_CODE_SYSTEM + self._platform_prompt},
+                # M15-3：契约风格约束注入（function 缺省 / class / auto 弱引导）
+                {"role": "system", "content": WRITE_CODE_SYSTEM + self._platform_prompt + self._style_prompt},
                 {"role": "user", "content": self._prompt_with_shared(
                     WRITE_CODE_USER.format(
                         module=module, responsibility=responsibility or module
@@ -454,17 +507,276 @@ class DevLoopEngine:
             self.dev_model,
             [
                 # M14-3：修复时保持平台约束（防修复又引入 fcntl）
-                {"role": "system", "content": FIX_CODE_SYSTEM + self._platform_prompt},
+                # M15-3：修复时保持契约风格约束（防修复轮改风格再触发门禁）
+                {"role": "system", "content": FIX_CODE_SYSTEM + self._platform_prompt + self._style_prompt},
                 {"role": "user", "content": self._prompt_with_shared(
                     FIX_CODE_USER.format(
                         module=module, code=code, tests=tests,
                         # 问题 8：失败报告/用户反馈为不可信输入，注入前包裹数据边界
                         failure=sanitize_untrusted(failure),
                     )
+                    # M15-4：修复轮上下文增强（接口地图 + 依赖方调用示例）
+                    + self._fix_context(module)
                 )},
             ],
         )
         return self._split_shared(_extract_code(response.content))
+
+    # ------------------------------------------------------------------
+
+    def _fix_context(self, module: str) -> str:
+        """M15-4：修复轮上下文增强——接口地图全文 + 依赖方调用示例。
+
+        v0.5 收敛教训：修复 LLM 只见本模块代码与失败报告，不知道
+        ① 其他模块契约了什么（改动会破坏谁）；② 已定稿模块如何调用
+        本模块 API（哪些符号正被真实消费）。两段上下文让修复「知道
+        改动的波及面」，减少改 A 破 B 的往返循环。
+
+        确定性拼装（零 LLM）；无项目 / 无契约 / 无依赖方 → 返回空串
+        （行为与 v1.0 前完全一致）。
+        """
+        pid = self._active_project_id
+        if not pid:
+            return ""
+        handle = self.file_manager.get_project(pid)
+        if handle is None:
+            return ""
+        parts: list[str] = []
+        # ① 接口地图全文（interfaces.json——全部模块契约）
+        iface_path = handle.root / "interfaces.json"
+        if iface_path.exists():
+            try:
+                interfaces = json.loads(iface_path.read_text(encoding="utf-8"))
+            except ValueError:
+                interfaces = None
+            if isinstance(interfaces, dict) and interfaces:
+                lines = ["## 接口地图（全部模块契约，改动须保持兼容）"]
+                for name, c in sorted(interfaces.items()):
+                    if not isinstance(c, dict):
+                        continue
+                    exports = ", ".join(map(str, c.get("exports", []))) or "无"
+                    apis = "; ".join(map(str, c.get("public_api", []))) or "无"
+                    deps = ", ".join(map(str, c.get("dependencies", []))) or "无"
+                    lines.append(f"### {name}\n- exports: {exports}\n"
+                                 f"- public_api: {apis}\n- dependencies: {deps}")
+                parts.append("\n".join(lines))
+        # ② 已定稿模块对本模块 API 的调用示例
+        usage = self._usage_examples(handle, module)
+        if usage:
+            parts.append(usage)
+        return "\n\n" + "\n\n".join(parts) if parts else ""
+
+    def _usage_examples(self, handle, module: str) -> str:
+        """扫描已定稿模块代码（code/*.py）中对本模块的引用行。
+
+        只取引用行（import + 符号使用行），不整文件注入——上下文
+        有界（每文件至多 _USAGE_LINE_LIMIT 行，防止提示词膨胀）。
+        """
+        import_pattern = re.compile(
+            rf"^\s*(?:from\s+{re.escape(module)}\s+import\s+(.+)"
+            rf"|import\s+{re.escape(module)}\s*(?:as\s+(\w+))?)\s*$"
+        )
+        sections: list[str] = []
+        code_dir = handle.root / "code"
+        if not code_dir.is_dir():
+            return ""
+        for py in sorted(code_dir.glob("*.py")):
+            other = py.stem
+            if other == module:
+                continue
+            try:
+                src_lines = py.read_text(encoding="utf-8").splitlines()
+            except OSError:
+                continue
+            symbols: set[str] = set()
+            import_lines: list[str] = []
+            for line in src_lines:
+                m = import_pattern.match(line)
+                if not m:
+                    continue
+                import_lines.append(line.strip())
+                if m.group(1):  # from <module> import a, b as c
+                    for sym in m.group(1).split(","):
+                        local = sym.split(" as ")[-1].strip()
+                        if local:
+                            symbols.add(local)
+                else:  # import <module> [as alias]
+                    symbols.add(m.group(2) or module)
+            if not symbols:
+                continue
+            usage = []
+            for line in src_lines:
+                s = line.strip()
+                if not s or s.startswith("#") or s in import_lines:
+                    continue
+                if any(re.search(rf"\b{re.escape(sym)}\b", s) for sym in symbols):
+                    usage.append(s)
+            hits = import_lines + usage
+            if not hits:
+                continue
+            shown = hits[:_USAGE_LINE_LIMIT]
+            block = "\n".join(f"  {h}" for h in shown)
+            if len(hits) > _USAGE_LINE_LIMIT:
+                block += f"\n  …（共 {len(hits)} 行，已截断）"
+            sections.append(
+                f"### {other}.py 对本模块 API 的使用\n```python\n{block}\n```"
+            )
+            if len(sections) >= _USAGE_FILE_LIMIT:
+                break
+        if not sections:
+            return ""
+        return (
+            "## 已定稿模块对本模块 API 的调用示例（这些符号正被消费，"
+            "改名/改签名前先对齐它们的用法）\n\n" + "\n\n".join(sections)
+        )
+
+    # ------------------------------------------------------------------
+
+    def _logic_review_due(self) -> bool:
+        """M14-7：是否应执行逻辑审查——safe 模式 + 配置开启。
+
+        auto 模式有真实执行反馈（pytest 结果），不重复审查。
+        """
+        from app.execution.safe_executor import SafeExecutor
+
+        return (
+            self.settings.logic_review_enabled
+            and isinstance(self.executor, SafeExecutor)
+        )
+
+    def _logic_review(
+        self, module: str, code: str, contract: dict | None
+    ) -> str:
+        """M14-7：safe 模式 LLM 逻辑审查（契约函数级，test_model）。
+
+        Returns:
+            "" = 通过（或降级放行——审查是增强非硬门禁，LLM 调用/解析
+            失败不阻塞流程，交给用户手动运行兜底）；
+            非空 = 失败报告（进修复循环，附审查 issues）。
+        """
+        # 契约函数清单（聚焦审查范围；无契约则审全部公开函数）
+        api_list = (
+            list(contract.get("public_api", []))
+            if contract else []
+        )
+        if not api_list:
+            try:
+                from app.utils.interface_check import extract_public_defs
+
+                api_list = sorted(extract_public_defs(code).keys())
+            except Exception:  # noqa: BLE001 —— 提取失败则退化为全文件审查
+                api_list = []
+        contract_api = "\n".join(f"- {a}" for a in api_list) or "（无显式契约，审查全部公开函数）"
+
+        try:
+            response = self.llm.chat(
+                self.test_model,
+                [
+                    {"role": "system", "content": LOGIC_REVIEW_SYSTEM},
+                    {"role": "user", "content": LOGIC_REVIEW_USER.format(
+                        module=module,
+                        contract_api=contract_api,
+                        code=code,
+                    )},
+                ],
+                json_mode=True,
+            )
+            # 复用 15 章四级容错解析（原生/围栏剥离/块提取/程序修复）
+            from app.utils.parse import parse_json
+
+            verdict, _detail = parse_json(
+                response.content, location="logic_review")
+        except Exception:  # noqa: BLE001 —— 降级放行（增强非硬门禁）
+            return ""
+        if not isinstance(verdict, dict):
+            return ""
+        if str(verdict.get("verdict", "")).lower() != "fail":
+            return ""
+        issues = [
+            str(i) for i in (verdict.get("issues") or []) if str(i).strip()
+        ]
+        if not issues:
+            return ""
+        return "逻辑审查失败（M14-7）：" + "; ".join(issues)
+
+    def _adapt_contract_style(
+        self, module: str, project_id: str | None, code: str, contract: dict
+    ) -> None:
+        """M15-3：auto 风格回写（一次性 + 审计落盘 sessions/）。
+
+        确定性反推（extract_public_defs，零 LLM）：契约 exports/public_api
+        重写为实际代码顶层公开符号；imports/dependencies 不动（拆分拓扑
+        仍由程序校验）。契约 dict 就地更新（pipeline interfaces 同引用
+        同步）；interfaces.json（单一事实源）与审计记录同步落盘。
+        异常吞掉——风格对齐是增强非门禁，失败降级为原契约继续校验
+        （最坏回到显式风格门禁行为）。
+        """
+        try:
+            from app.utils.contract_style import infer_style, rewrite_contract
+
+            rewritten = rewrite_contract(code, contract)
+            if rewritten is None:
+                return  # 已对齐（或无公开符号）：零回写
+            record = {
+                "module": module,
+                "adapted_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                "inferred_style": infer_style(code),
+                "original": {
+                    "exports": list(contract.get("exports", [])),
+                    "public_api": list(contract.get("public_api", [])),
+                },
+                "rewritten": {
+                    "exports": list(rewritten["exports"]),
+                    "public_api": list(rewritten["public_api"]),
+                },
+            }
+            contract["exports"] = rewritten["exports"]
+            contract["public_api"] = rewritten["public_api"]
+            handle = (
+                self.file_manager.get_project(project_id) if project_id else None
+            )
+            if handle is None:
+                return  # 无项目落盘上下文（仅内存回写）
+            # interfaces.json 同步（单一事实源；resume/交付共用）
+            iface_path = handle.root / "interfaces.json"
+            data: dict = {}
+            if iface_path.exists():
+                try:
+                    data = json.loads(iface_path.read_text(encoding="utf-8"))
+                except ValueError:
+                    data = {}
+            if not isinstance(data, dict):
+                data = {}
+            data[module] = contract
+            iface_path.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            # 审计：sessions/style_adaptation.jsonl（同模块同回写幂等不重复记，
+            # resume 重放只更新契约不追加行）
+            audit_path = handle.root / "sessions" / "style_adaptation.jsonl"
+            if not self._audit_exists(audit_path, record):
+                audit_path.parent.mkdir(parents=True, exist_ok=True)
+                with audit_path.open("a", encoding="utf-8") as f:
+                    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        except Exception:  # noqa: BLE001 —— 增强非门禁，失败降级放行
+            pass
+
+    @staticmethod
+    def _audit_exists(audit_path: Path, record: dict) -> bool:
+        """审计记录已存在（同模块 + 同回写结果）→ 幂等跳过。"""
+        if not audit_path.exists():
+            return False
+        for line in audit_path.read_text(encoding="utf-8").splitlines():
+            try:
+                rec = json.loads(line)
+            except ValueError:
+                continue
+            if (
+                rec.get("module") == record["module"]
+                and rec.get("rewritten") == record["rewritten"]
+            ):
+                return True
+        return False
 
     def _split_shared(self, content: str) -> str:
         """12.7/14.4：拆分公共层标记块 → 落盘 code/_shared/，返回模块代码。

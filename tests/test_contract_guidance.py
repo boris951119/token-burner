@@ -110,17 +110,50 @@ def delete_file(path) -> bool:
 
 
 class TestStylePromptConstraints:
-    """M15-1：提示词文件含风格约束（拆分/写码双侧对齐）。"""
+    """M15-1/M15-3：风格约束段随 contract_style 运行时拼接（双侧对齐）。
 
-    def test_interface_system_has_style_rule(self):
-        from app.tools.prompt_templates import INTERFACE_SYSTEM
+    v1.0 V2 批次（M15-3）起，风格文本从提示词 .md 文件移至
+    app/utils/contract_style.py 按配置拼接——缺省 function 与
+    M15-1 原文一致（行为不变）。
+    """
 
-        assert "顶层" in INTERFACE_SYSTEM
-        assert "不要封装成类" in INTERFACE_SYSTEM
-        assert "FileManager" in INTERFACE_SYSTEM     # 反例
+    def test_function_style_prompts_match_m15_1(self):
+        """缺省 function：接口/写码两侧约束与 M15-1 原文语义一致。"""
+        from app.utils.contract_style import (
+            code_style_prompt,
+            interface_style_prompt,
+        )
 
-    def test_write_code_system_has_style_rule(self):
-        from app.tools.prompt_templates import WRITE_CODE_SYSTEM
+        iface = interface_style_prompt("function")
+        assert "顶层" in iface
+        assert "不要封装成类" in iface
+        assert "FileManager" in iface                 # 反例
 
-        assert "顶层" in WRITE_CODE_SYSTEM
-        assert "类或类方法" in WRITE_CODE_SYSTEM
+        code = code_style_prompt("function")
+        assert "顶层" in code
+        assert "类或类方法" in code
+
+    def test_class_style_prompts_demand_top_level_class(self):
+        from app.utils.contract_style import (
+            code_style_prompt,
+            interface_style_prompt,
+        )
+
+        iface = interface_style_prompt("class")
+        assert "顶层的公开类" in iface
+        assert "FileManager(root)" in iface            # 正例
+
+        code = code_style_prompt("class")
+        assert "公开类" in code
+        assert "公开方法" in code
+
+    def test_auto_style_prompts_are_weak_guidance(self):
+        from app.utils.contract_style import (
+            code_style_prompt,
+            interface_style_prompt,
+        )
+
+        # auto：不预设风格（函数/类皆可），声明回写机制
+        assert "皆可" in interface_style_prompt("auto")
+        assert "皆可" in code_style_prompt("auto")
+        assert "回写" in interface_style_prompt("auto")

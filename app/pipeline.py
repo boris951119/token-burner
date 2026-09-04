@@ -730,6 +730,12 @@ class Pipeline:
             budget_tokens=team.budget_tokens,
             throttle_threshold=self.settings.budget_throttle_threshold,
         )
+        # M14-6：恢复历史用量（11.0 单任务总预算语义——多次 resume 不再
+        # N×budget 超支；「交用户决定续跑」语义保留：预算仍可被重新配置）
+        history_report = self._read_cost_report(handle.root)
+        history_tokens = int(history_report.get("total_tokens", 0) or 0)
+        if history_tokens > 0:
+            guard.record(history_tokens)
         setattr(self.llm, "budget_guard", guard)
         # M12-1：协作式取消检查点注入（resume 路径同 run）
         if self._cancel_check is not None:
@@ -1036,6 +1042,11 @@ class Pipeline:
         )
         handle = self.file_manager.get_project(project_id)
         if handle is not None:
+            # M14-6：看板累计口径——并入历史会话聚合（resume 后 cost_report
+            # 为项目累计审计报告，与 guard 恢复的预算口径一致）
+            history_report = self._read_cost_report(handle.root)
+            if history_report:
+                dashboard.merge_history(history_report)
             dashboard.attach_routing_costs(
                 prices=self.settings.model_prices,
                 flagship_price=flagship_price,
@@ -1046,6 +1057,19 @@ class Pipeline:
                 flagship_price=flagship_price,
             )
         return dashboard
+
+    def _read_cost_report(self, project_root) -> dict:
+        """M14-6：读项目 logs/cost_report.json（缺失/损坏 → 空字典）。"""
+        import json as _json
+
+        path = project_root / "logs" / "cost_report.json"
+        if not path.is_file():
+            return {}
+        try:
+            data = _json.loads(path.read_text(encoding="utf-8"))
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
 
     # ------------------------------------------------------------------
 

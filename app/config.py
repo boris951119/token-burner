@@ -52,6 +52,9 @@ VALID_EXECUTION_MODES: tuple[str, ...] = ("safe", "auto")
 # M14-3/M14-4：交付目标平台（提示词约束 + 危险扫描平台黑名单同源）
 VALID_TARGET_PLATFORMS: tuple[str, ...] = ("windows", "linux", "macos", "any")
 
+# M15-3：契约风格三态（门禁风格约束与 auto 回写共用）
+VALID_CONTRACT_STYLES: tuple[str, ...] = ("function", "class", "auto")
+
 
 @dataclass
 class Settings:
@@ -89,6 +92,18 @@ class Settings:
     # ---- M14-3/M14-4 交付目标平台（v1.0：平台可移植性）----
     # windows=本机交付环境（v0.5 实测教训：生成代码含 Unix-only fcntl 直接 ImportError）
     target_platform: str = "windows"           # windows | linux | macos | any
+
+    # ---- M15-3 契约风格（v1.0：门禁风格约束可配置）----
+    # function=顶层可调用导出（M15-1 缺省，与 v0.5 后行为一致）；
+    # class=顶层公开类；auto=首轮实现后按实际代码顶层符号一次性回写契约
+    # （确定性反推 + 审计落盘 sessions/style_adaptation.jsonl）
+    contract_style: str = "function"           # function | class | auto
+
+    # ---- M14-7 safe 模式 LLM 逻辑审查（规格 3.6.2 三件套补全）----
+    # 契约函数级审查（test_model）：verdict=fail → 进修复循环；
+    # LLM 调用/解析失败 → 降级放行（增强非硬门禁）。auto 模式不审查
+    # （有真实执行反馈，避免冗余调用）。缺省开 = safe 模式名实相符。
+    logic_review_enabled: bool = True
 
     # ---- 产出目录（CLI / 服务端 / 桌面端三端统一）----
     # 空 = 缺省「启动命令时所在目录 / projects」；配置绝对路径后
@@ -339,6 +354,13 @@ class Settings:
             raise ValueError(
                 f"target_platform 必须为 {VALID_TARGET_PLATFORMS} 之一，"
                 f"当前值: {self.target_platform!r}"
+            )
+
+        # M15-3：契约风格三态（function 缺省 = M15-1 行为不变）
+        if self.contract_style not in VALID_CONTRACT_STYLES:
+            raise ValueError(
+                f"contract_style 必须为 {VALID_CONTRACT_STYLES} 之一，"
+                f"当前值: {self.contract_style!r}"
             )
 
         if self.default_execution_mode not in VALID_EXECUTION_MODES:

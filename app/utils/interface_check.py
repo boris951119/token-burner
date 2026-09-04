@@ -60,9 +60,12 @@ def extract_public_defs(code: str) -> dict[str, tuple[str, ...]]:
                     (n for n in node.body if isinstance(n, ast.FunctionDef) and n.name == "__init__"),
                     None,
                 )
-                defs[node.name] = (
-                    tuple(a.arg for a in init.args.args) if init else ()
-                )
+                params = tuple(a.arg for a in init.args.args) if init else ()
+                # M15-3：类契约口径去 self（self 是实现器物非 API 面，
+                # class 风格契约「ClassName(root)」与代码签名才能对齐比对）
+                if params and params[0] == "self":
+                    params = params[1:]
+                defs[node.name] = params
         elif isinstance(node, ast.Assign):
             for target in node.targets:
                 if isinstance(target, ast.Name) and not target.id.startswith("_"):
@@ -90,9 +93,17 @@ def parse_api_signature(api: str) -> tuple[str, tuple[str, ...] | None] | None:
 
 
 def check_implementation(
-    module: str, code: str, contract: dict | None
+    module: str,
+    code: str,
+    contract: dict | None,
+    style: str = "function",
 ) -> list[InterfaceIssue]:
-    """三类差异判定：实际代码 vs 模块契约。"""
+    """三类差异判定：实际代码 vs 模块契约。
+
+    style（M15-3）：契约风格——决定 missing 指导措辞（function 补顶层
+    函数 / class 补顶层类 / auto 中性）；差异判定本身与风格无关
+    （extract_public_defs 对函数/类统一抽取）。
+    """
     if contract is None:
         return []
 
@@ -114,9 +125,24 @@ def check_implementation(
 
     for name, declared_params in declared.items():
         if name not in defs:
-            # M15-2：missing 附签名模板（优先 public_api 原文，含返回标注）
+            # M15-2：missing 附签名模板（优先 public_api 原文，含返回标注）；
+            # M15-3：class 风格指导补类（防「def 类名」误导），auto 中性
             template = api_sigs.get(name)
-            if template:
+            if style == "class":
+                sig = template or (
+                    f"{name}({', '.join(declared_params)})"
+                    if declared_params is not None else name
+                )
+                guide = (
+                    f"请在模块顶层补上：class {sig}（契约 API 实现为该类的"
+                    f"公开方法，不要以顶层函数替代——门禁按顶层类符号校验）"
+                )
+            elif style == "auto":
+                guide = (
+                    f"请在模块顶层补上契约声明的 {name}"
+                    f"（函数或类按契约签名对齐）"
+                )
+            elif template:
                 guide = (
                     f"请在模块顶层补上：def {template}（实现体自行补全）；"
                     f"禁止封装成类或类方法——门禁按顶层符号校验"
