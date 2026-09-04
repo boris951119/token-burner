@@ -166,3 +166,29 @@ class TestCrossProcessLookup:
     def test_lookup_nonexistent_returns_none(self, tmp_path):
         fm = FileManager(projects_root=tmp_path / "projects")
         assert fm.get_project("不存在的项目_20990101_000000") is None
+
+
+class TestRuntimeArtifactFiltering:
+    """bench_v1 round-2c 事故回归：执行测试产生的 __pycache__/*.pyc
+    （Python 3.12 pyc magic 0xCB 开头）曾让 read_text 崩溃整个任务。"""
+
+    def test_list_files_excludes_pycache(self, fm):
+        project = fm.create_project("缓存过滤")
+        shared = project.root / "code" / "_shared"
+        (shared / "utils.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+        pycache = shared / "__pycache__"
+        pycache.mkdir()
+        (pycache / "utils.cpython-312.pyc").write_bytes(b"\xcb\x0d\x0d\x0a")
+        (shared / "note.pyc").write_bytes(b"\x00\x01")
+
+        files = fm.list_files(project.project_id, "code/_shared")
+        assert "code/_shared/utils.py" in files
+        assert all("__pycache__" not in f for f in files)
+        assert not any(f.endswith(".pyc") for f in files)
+
+    def test_read_file_binary_returns_none_not_crash(self, fm):
+        project = fm.create_project("二进制读取")
+        (project.root / "code" / "_shared" / "blob.pyc").write_bytes(
+            b"\xcb\x0d\x0d\x0a\x00\x01")
+        assert fm.read_file(
+            project.project_id, "code/_shared/blob.pyc") is None
