@@ -1,0 +1,25 @@
+{
+  "id": "T4",
+  "category": "文件操作",
+  "difficulty_target": 5,
+  "status": "succeeded",
+  "kind": "team_flow",
+  "project_dir": "E:\\token-burner\\projects\\开发一个日志轮转分析命令行工具_logscan_扫描指定目录下全部_log_文件_20260905_235513",
+  "modules": {
+    "cli": "FROZEN",
+    "models": "FROZEN",
+    "parser": "SUCCESS",
+    "reporter": "FROZEN",
+    "scanner": "FROZEN"
+  },
+  "modules_total": 5,
+  "modules_passed": 1,
+  "pass_rate": 0.2,
+  "tokens_used": 356083,
+  "cost": {
+    "total_tokens": 356083,
+    "budget_tokens": 500000,
+    "over_budget": false
+  },
+  "error": ""
+}
