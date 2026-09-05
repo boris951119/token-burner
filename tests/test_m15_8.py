@@ -72,19 +72,20 @@ GOOD_CODE2 = "def score_password(password: str) -> int:\n    return 80\n\n\ndef 
 
 
 class TestRound3TestRewrite:
-    def test_assertion_failure_round3_rewrites_tests(self, tmp_path):
-        """exit_code=1 连续 3 轮 → 第 3 修复轮重写测试（M15-8 核心行为）。"""
+    def test_assertion_failure_round2_rewrites_tests(self, tmp_path):
+        """exit_code=1 第 2 修复轮 → 重写测试（M15-8,最终轮提前触发）。"""
         fm = FileManager(projects_root=tmp_path / "p")
-        llm = ScriptedLLM([GOOD_CODE, BAD_TESTS, GOOD_CODE, GOOD_CODE, GOOD_TESTS])
+        FIXED_CODE = GOOD_CODE  # 修复轮输出(仍不满足过度规格断言)
+        llm = ScriptedLLM([GOOD_CODE, BAD_TESTS, FIXED_CODE, GOOD_TESTS])
         engine = make_engine(
-            llm, fm, FakeExecutor(["FAILED", "FAILED", "FAILED", "SUCCESS"]))
+            llm, fm, FakeExecutor(["FAILED", "FAILED", "SUCCESS"]))
         pid = fm.create_project("demo").project_id
         result = engine.run_module("score_pw", project_id=pid, contract=CONTRACT)
         assert result.status is ModuleStatus.SUCCESS
         models = [c["model"] for c in llm.calls]
-        # dev(写码) → test(写测试) → 修复1(dev) → 修复2(dev) → 修复3=重写测试(test)
-        assert models == ["dev", "test", "dev", "dev", "test"]
-        rewrite = user_text(llm.calls[4])
+        # dev(写码) → test(写测试) → 修复1 失败 → 修复2=重写测试(test)
+        assert models == ["dev", "test", "dev", "test"]
+        rewrite = user_text(llm.calls[3])
         assert "过度规格" in rewrite
         assert "禁止断言平台相关行为" in rewrite
         assert "保持契约覆盖不变" in rewrite
