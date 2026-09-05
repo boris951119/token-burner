@@ -115,6 +115,39 @@ class TestContractInjection:
         project_id = fm.create_project("demo").project_id
         engine.run_module("strength_evaluator", project_id=project_id, contract=CONTRACT)
         assert len(llm.calls) == 2
-        # 第一次调用（写代码）不含契约段；第二次（写测试）必须含
-        assert "模块接口契约" not in user_text(llm.calls[0])
+        # M15-7 起，写码与写测试都携带契约段（成对注入）
+        assert "模块接口契约" in user_text(llm.calls[0])
         assert "evaluate_password_strength(password) -> int" in user_text(llm.calls[1])
+
+
+class TestWriteCodeContractInjection:
+    """M15-7：写码提示词注入契约（paid_pilot2 取证：9/15 冻结同根）。"""
+
+    def test_write_code_prompt_contains_contract(self, tmp_path):
+        llm = CapturingLLM(["def evaluate_password_strength(p): return 1"])
+        engine = make_engine(llm, FileManager(projects_root=tmp_path / "p"))
+        engine._write_code("strength_evaluator", "评估强度", contract=CONTRACT)
+        text = user_text(llm.calls[0])
+        assert "模块接口契约" in text
+        assert "evaluate_password_strength(password) -> int" in text
+        assert "私有化" in text  # extra 处置指引前置
+
+    def test_write_code_without_contract_unchanged(self, tmp_path):
+        llm = CapturingLLM(["x = 1"])
+        engine = make_engine(llm, FileManager(projects_root=tmp_path / "p"))
+        engine._write_code("strength_evaluator", "评估强度")
+        assert "模块接口契约" not in user_text(llm.calls[0])
+
+    def test_run_module_routes_contract_to_codegen_and_testgen(self, tmp_path):
+        fm = FileManager(projects_root=tmp_path / "p")
+        test_code = (
+            "from strength_evaluator import evaluate_password_strength\n"
+            "def test_ok():\n    assert evaluate_password_strength('a') == 1\n"
+        )
+        llm = CapturingLLM([CODE, test_code])
+        engine = make_engine(llm, fm)
+        project_id = fm.create_project("demo").project_id
+        engine.run_module("strength_evaluator", project_id=project_id, contract=CONTRACT)
+        # 写码与写测试的 user 提示词都必须携带契约段
+        assert "模块接口契约" in user_text(llm.calls[0])
+        assert "模块接口契约" in user_text(llm.calls[1])
