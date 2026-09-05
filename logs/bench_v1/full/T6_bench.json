@@ -1,0 +1,24 @@
+{
+  "id": "T6",
+  "category": "第三方库调用",
+  "difficulty_target": 5,
+  "status": "succeeded",
+  "kind": "team_flow",
+  "project_dir": "E:\\token-burner\\projects\\基于_pydantic_开发一个用户资料数据校验模块_profile_schem_20260906_005316",
+  "modules": {
+    "error_mapper": "FROZEN",
+    "file_loader": "FROZEN",
+    "profile_api": "SUCCESS",
+    "schema_models": "SUCCESS"
+  },
+  "modules_total": 4,
+  "modules_passed": 2,
+  "pass_rate": 0.5,
+  "tokens_used": 245209,
+  "cost": {
+    "total_tokens": 245209,
+    "budget_tokens": 500000,
+    "over_budget": false
+  },
+  "error": ""
+}

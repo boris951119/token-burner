@@ -1,0 +1,26 @@
+{
+  "id": "T9",
+  "category": "CLI 工具",
+  "difficulty_target": 6,
+  "status": "succeeded",
+  "kind": "team_flow",
+  "project_dir": "E:\\token-burner\\projects\\开发一个间隔重复记忆卡片命令行工具_memcard_支持卡片的增删改查_基于_S_20260906_020740",
+  "modules": {
+    "analytics_engine": "SUCCESS",
+    "card_model": "SUCCESS",
+    "cli_interface": "FROZEN",
+    "persistence_layer": "SUCCESS",
+    "scheduling_logic": "SUCCESS",
+    "ui_formatter": "FROZEN"
+  },
+  "modules_total": 6,
+  "modules_passed": 4,
+  "pass_rate": 0.6666666666666666,
+  "tokens_used": 335844,
+  "cost": {
+    "total_tokens": 335844,
+    "budget_tokens": 500000,
+    "over_budget": false
+  },
+  "error": ""
+}
