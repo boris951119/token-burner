@@ -1,0 +1,94 @@
+{
+  "generated_at": "2026-09-05 21:51:24",
+  "tasks_file": "E:\\token-burner\\scripts\\bench_tasks.json",
+  "ids": [
+    "T1",
+    "T2",
+    "T3"
+  ],
+  "per_task": [
+    {
+      "id": "T1",
+      "category": "CLI 工具",
+      "difficulty_target": 5,
+      "status": "succeeded",
+      "kind": "team_flow",
+      "project_dir": "E:\\token-burner\\projects\\开发一个命令行密码生成与强度评估工具_passmint_支持随机密码生成_可指定_20260905_203834",
+      "modules": {
+        "passmint_cli": "SUCCESS",
+        "passmint_generator": "SUCCESS",
+        "passmint_history": "FROZEN",
+        "passmint_scorer": "FROZEN"
+      },
+      "modules_total": 4,
+      "modules_passed": 2,
+      "pass_rate": 0.5,
+      "tokens_used": 233816,
+      "cost": {
+        "total_tokens": 233816,
+        "budget_tokens": 500000,
+        "over_budget": false
+      },
+      "error": ""
+    },
+    {
+      "id": "T2",
+      "category": "数据处理",
+      "difficulty_target": 6,
+      "status": "succeeded",
+      "kind": "team_flow",
+      "project_dir": "E:\\token-burner\\projects\\开发一个命令行_CSV_销售数据分析工具_salestat_读取销售明细_CSV_20260905_205946",
+      "modules": {
+        "cli_bootstrap": "FROZEN",
+        "csv_parser": "SUCCESS",
+        "json_exporter": "SUCCESS",
+        "stats_engine": "SUCCESS",
+        "unit_tests": "SUCCESS"
+      },
+      "modules_total": 5,
+      "modules_passed": 4,
+      "pass_rate": 0.8,
+      "tokens_used": 215616,
+      "cost": {
+        "total_tokens": 215616,
+        "budget_tokens": 500000,
+        "over_budget": false
+      },
+      "error": ""
+    },
+    {
+      "id": "T3",
+      "category": "陌生技术栈",
+      "difficulty_target": 5,
+      "status": "succeeded",
+      "kind": "team_flow",
+      "project_dir": "E:\\token-burner\\projects\\基于_Python_标准库_sqlite3_与_tomllib_开发一个库存管理_20260905_211927",
+      "modules": {
+        "app_entry": "FROZEN",
+        "cli_iface": "SUCCESS",
+        "config_loader": "FROZEN",
+        "inventory_svc": "SUCCESS",
+        "models_core": "FROZEN",
+        "storage_dao": "SUCCESS",
+        "test_suite": "SUCCESS"
+      },
+      "modules_total": 7,
+      "modules_passed": 4,
+      "pass_rate": 0.5714285714285714,
+      "tokens_used": 361472,
+      "cost": {
+        "total_tokens": 361472,
+        "budget_tokens": 500000,
+        "over_budget": false
+      },
+      "error": ""
+    }
+  ],
+  "modules_total": 16,
+  "modules_passed": 10,
+  "module_pass_rate": 0.625,
+  "task_success_rate": 1.0,
+  "over_budget_tasks": 0,
+  "admission_line": 0.5,
+  "admission_passed": true
+}

@@ -1,9 +1,8 @@
 {
   "models": [
-    "openai/glm-4.5-air",
-    "openai/glm-4.7",
-    "openai/glm-4-flash",
-    "openai/glm-4.5-flash"
+    "openai/qwen3.6-flash",
+    "openai/deepseek-v4-flash",
+    "openai/qwen3-coder-plus"
   ],
   "llm_max_retries": 6,
   "retry_backoff_base": 15.0,
