@@ -1,0 +1,19 @@
+{
+  "id": "T3",
+  "category": "陌生技术栈",
+  "models": "PM=glm-4-flash,dev=glm-4.7,test=glm-4.5-air(V2.8:A+B)",
+  "status": "succeeded",
+  "project_dir": "E:\\token-burner\\projects\\基于_Python_标准库_sqlite3_与_tomllib_开发一个库存管理_20260905_134958",
+  "modules": {
+    "command_line_interface_module": "FROZEN",
+    "config_parser_module": "FROZEN",
+    "database_module": "FROZEN",
+    "inventory_management_module": "FROZEN",
+    "unit_tests_module": "SUCCESS"
+  },
+  "modules_total": 5,
+  "modules_passed": 1,
+  "pass_rate": 0.2,
+  "tokens_used": 382444,
+  "error": ""
+}

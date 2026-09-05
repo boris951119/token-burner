@@ -1,0 +1,20 @@
+{
+  "id": "T2",
+  "category": "数据处理",
+  "models": "PM=glm-4-flash,dev=glm-4.7,test=glm-4.5-air(旧策略)",
+  "status": "succeeded",
+  "project_dir": "E:\\token-burner\\projects\\开发一个命令行_CSV_销售数据分析工具_salestat_读取销售明细_CSV_20260905_095216",
+  "modules": {
+    "anomaly_detector": "FROZEN",
+    "data_processor": "FROZEN",
+    "data_reader": "FROZEN",
+    "report_exporter": "FROZEN",
+    "top_n_ranker": "FROZEN",
+    "unit_tests": "SUCCESS"
+  },
+  "modules_total": 6,
+  "modules_passed": 1,
+  "pass_rate": 0.16666666666666666,
+  "tokens_used": 343122,
+  "error": ""
+}
