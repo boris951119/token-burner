@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.0 · V2.9（2026-09-05）：写码注入模块契约——M15 家族最后一块拼图
+
+> 付费档 paid_pilot2 取证（阿里 MaaS：qwen3.6-flash/deepseek-v4-flash/
+> qwen3-coder-plus,任务级 3/3 但模块 1/16）:15 个冻结中 9 例同根——
+> **写码提示词只有职责描述没有契约**,dev 模型自由起名 → ①接口门禁
+> extra/missing 震荡 5 例;②测试按契约 import(M15-5/6 工作正常)而代码
+> 无此名致 pytest 收集 ImportError 4 例。跨模型家族(glm-4.7 组同款)
+> 复现,证明是系统性提示词缺口而非模型能力。
+
+- **修复（M15-7）**:`_write_code` 新增 contract 参数,契约 public_api
+  (缺省回退 exports)以「必须实现以下全部导出」段注入用户提示词,并
+  前置 extra 处置指引(契约外顶层公开符号会被拦,内部辅助 _ 私有化);
+  `run_module` 透传。与 M15-5(测试侧)成对——**代码与测试现在从同一份
+  契约出发命名**。无契约时提示词与修复前逐字节一致。
+
+- **测试**:新增 `TestWriteCodeContractInjection` 3 项(注入/无契约不变/
+  调用路由双向);既有 M15-5 路由断言随行为升级修正(写码也含契约段);
+  全量回归 **1027 → 1030 passed / 7 skipped / 0 failed**。
+
+- 附带记录:提速换阵实测吞吐(qwen3.6-flash 150 / qwen3-coder-plus 124 /
+  deepseek-v4-flash 76 / deepseek-v3 39 tok/s)——39 tok/s 时全程 6-10h,
+  换阵后 1.5h;`__import__` 硬类 1 例仍直接冻结(提示词已禁但模型违反,
+  属 hard 类语义维持)。
+
 ## v1.0 · M17-1 基准试跑终局（2026-09-05）：三组对照 · 机制收敛证明
 
 > bench_v1 四轮跑批（round-2f/r3/r4/r5）终局,报告 `logs/bench_v1/pilot_r5/

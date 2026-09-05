@@ -217,7 +217,8 @@ class DevLoopEngine:
         均在执行器之前运行——门禁失败不消耗执行预算，直接进修复循环。
         """
         self._active_project_id = project_id
-        code = self._write_code(module, responsibility)
+        # M15-7：契约同步传给写码（实现必须按契约命名）
+        code = self._write_code(module, responsibility, contract=contract)
         # M15-5：契约同步传给测试生成（测试调用必须按契约签名）
         tests = self._write_tests(module, code, contract=contract)
         return self._drive(
@@ -524,18 +525,31 @@ class DevLoopEngine:
 
     # ------------------------------------------------------------------
 
-    def _write_code(self, module: str, responsibility: str) -> str:
+    def _write_code(
+        self, module: str, responsibility: str, contract: dict | None = None,
+    ) -> str:
+        user = WRITE_CODE_USER.format(
+            module=module, responsibility=responsibility or module
+        )
+        # M15-7：模块契约注入——实现必须按契约导出名单与签名命名。paid_pilot2
+        # 取证：写码提示词只有职责描述，dev 模型自由起名 → 接口门禁 extra/
+        # missing 震荡（15 冻结中 9 例同根：门禁 extra 5 + 测试按契约 import
+        # 而代码无此名致收集错误 4）。与 M15-5（测试侧）成对补全。
+        api = (contract or {}).get("public_api") or (contract or {}).get("exports") or []
+        api_lines = [f"- {item}" for item in api]
+        if api_lines:
+            user += (
+                "\n\n## 模块接口契约（必须实现以下全部导出，名称与签名严格一致；"
+                "契约之外的顶层公开符号会被接口门禁拦截，内部辅助请以 _ 开头私有化）\n"
+                + "\n".join(api_lines)
+            )
         response = self.llm.chat(
             self.dev_model,
             [
                 # M14-3：平台约束注入（windows 缺省禁 fcntl 等）
                 # M15-3：契约风格约束注入（function 缺省 / class / auto 弱引导）
                 {"role": "system", "content": WRITE_CODE_SYSTEM + self._platform_prompt + self._danger_prompt + self._style_prompt},
-                {"role": "user", "content": self._prompt_with_shared(
-                    WRITE_CODE_USER.format(
-                        module=module, responsibility=responsibility or module
-                    )
-                )},
+                {"role": "user", "content": self._prompt_with_shared(user)},
             ],
         )
         return self._split_shared(_extract_code(response.content))
