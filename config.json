@@ -7,5 +7,6 @@
   ],
   "llm_max_retries": 6,
   "retry_backoff_base": 15.0,
-  "llm_timeout_seconds": 240
+  "llm_timeout_seconds": 240,
+  "max_response_tokens": 16000
 }

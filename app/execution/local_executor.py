@@ -68,11 +68,31 @@ def scan_dangerous(code: str, tests: str = "", platform: str = "any") -> list[st
     扫描代码与测试两段文本（被测代码干净但测试里发起网络请求同样拦截）。
     M14-4：platform 指定交付目标平台时，平台不可用模块（如 windows 上的
     fcntl）同样拦截——导入即 ImportError，宁可误报绝不放过。
+    3.6.3 分级修订：硬级（不可替代高危）与软级（fs 删除族·代码侧）合并
+    返回（兼容既有调用方）；分级语义用 scan_dangerous_graded。
+    """
+    hard, soft = scan_dangerous_graded(code, tests, platform)
+    return hard + soft
+
+
+def scan_dangerous_graded(
+    code: str, tests: str = "", platform: str = "any",
+) -> tuple[list[str], list[str]]:
+    """分级危险扫描：返回 (hard, soft)。
+
+    - hard（不可替代高危：动态执行/系统命令/网络/子进程/序列化逃逸）：
+      维持 3.6.3 执行器层 BLOCKED 直接冻结；
+    - soft（fs 删除族 · 模块代码侧：os.remove/unlink/rmdir/removedirs/
+      renames、shutil.rmtree/move）：有正当业务语义且 auto 模式本就运行
+      在沙箱内——bench_v1 round-5 取证（glm-4.7 两模块死于 os.remove
+      直接冻结）后降级为「进修复循环换安全设计」，由 dev_loop 门禁层
+      在执行器之前拦截处置，执行器只拦 hard。
     """
     from app.utils.platform_policy import unavailable_modules
 
     platform_mods = unavailable_modules(platform)
-    issues: list[str] = []
+    hard: list[str] = []
+    soft: list[str] = []
     for label, text in (("代码", code), ("测试", tests)):
         if not text.strip():
             continue
@@ -82,31 +102,34 @@ def scan_dangerous(code: str, tests: str = "", platform: str = "any") -> list[st
             # 语法错误交给静态门禁（run_static_check）报告，此处不重复
             continue
         for node in ast.walk(tree):
-            issues.extend(_scan_node(node, label, platform_mods))
-    return issues
+            h, s = _scan_node(node, label, platform_mods)
+            hard.extend(h)
+            soft.extend(s)
+    return hard, soft
 
 
 def _scan_node(
     node: ast.AST, label: str, platform_mods: frozenset[str] = frozenset(),
-) -> list[str]:
-    """单节点扫描：import 黑名单 + 平台不可用模块 + 危险属性调用 + 危险内建。"""
-    issues: list[str] = []
+) -> tuple[list[str], list[str]]:
+    """单节点扫描 → (hard, soft)：import 黑名单 + 平台模块 + 危险调用。"""
+    hard: list[str] = []
+    soft: list[str] = []
     if isinstance(node, ast.Import):
         for alias in node.names:
             root = alias.name.split(".")[0]
             if root in _FORBIDDEN_MODULES:
-                issues.append(f"{label}禁止导入 {alias.name}（系统命令/网络/动态加载）")
+                hard.append(f"{label}禁止导入 {alias.name}（系统命令/网络/动态加载）")
             elif root in platform_mods:
-                issues.append(
+                hard.append(
                     f"{label}禁止导入 {alias.name}"
                     f"（目标平台不存在该模块，导入即 ImportError）"
                 )
     elif isinstance(node, ast.ImportFrom):
         root = (node.module or "").split(".")[0]
         if root in _FORBIDDEN_MODULES:
-            issues.append(f"{label}禁止从 {node.module} 导入（系统命令/网络/动态加载）")
+            hard.append(f"{label}禁止从 {node.module} 导入（系统命令/网络/动态加载）")
         elif root in platform_mods:
-            issues.append(
+            hard.append(
                 f"{label}禁止从 {node.module} 导入"
                 f"（目标平台不存在该模块，导入即 ImportError）"
             )
@@ -117,17 +140,37 @@ def _scan_node(
             if func.value.id == "os" and func.attr in _FORBIDDEN_OS_ATTRS:
                 if label == "测试" and func.attr in _FS_DELETION_OS_ATTRS:
                     pass  # 测试清理 tmp 产物（见 _FS_DELETION_OS_ATTRS 注）
+                elif func.attr in _FS_DELETION_OS_ATTRS:
+                    soft.append(f"{label}调用 os.{func.attr}()（文件删除族，请改用安全设计）")
                 else:
-                    issues.append(f"{label}禁止调用 os.{func.attr}()")
+                    hard.append(f"{label}禁止调用 os.{func.attr}()")
             elif func.value.id == "shutil" and func.attr in _FORBIDDEN_SHUTIL_ATTRS:
                 if label == "测试":
                     pass  # rmtree/move 同上：测试清理 tmp 产物放行
                 else:
-                    issues.append(f"{label}禁止调用 shutil.{func.attr}()")
+                    soft.append(f"{label}调用 shutil.{func.attr}()（文件删除族，请改用安全设计）")
         # eval/exec/__import__ 内建
         elif isinstance(func, ast.Name) and func.id in _FORBIDDEN_BUILTINS:
-            issues.append(f"{label}禁止调用 {func.id}()（动态执行）")
-    return issues
+            hard.append(f"{label}禁止调用 {func.id}()（动态执行）")
+    return hard, soft
+
+
+def danger_prompt_constraint() -> str:
+    """危险操作约束提示词段（注入 write_code/fix_code，方案 A）。
+
+    与扫描黑名单同文件同源（单一数据源，提示与拦截不漂移——对齐
+    platform_policy 的设计锚点）。
+    """
+    return (
+        "\n\n## 安全约束（违反将被安全层拦截）\n"
+        "禁止使用：eval / exec / compile / __import__（动态执行）；"
+        "os.system / os.popen* / os.exec* / os.spawn* / os.kill*（系统命令）；"
+        "subprocess / socket / ctypes / pickle / urllib / requests 等"
+        "（系统命令/网络/动态加载/序列化逃逸）模块的任何导入。\n"
+        "文件删除（os.remove / os.unlink / os.rmdir / shutil.rmtree / shutil.move）"
+        "不得直接调用：请改为 ① 由调用方负责清理 ② 返回待清理路径列表 "
+        "③ 使用 tempfile.TemporaryDirectory 上下文（作用域结束自动清理）。"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -325,14 +368,18 @@ class LocalExecutor(Executor):
         # 可修复类，语义归执行 FAILED（修复循环）而非 BLOCKED（冻结），
         # 对齐 Python 版「语法错误交给静态门禁」原则。
         if self.language == "node":
-            issues = scan_dangerous_js(code, tests, node_check=False)
+            hard_issues = scan_dangerous_js(code, tests, node_check=False)
         else:
-            issues = scan_dangerous(code, tests, platform=self.platform)
-        if issues:
+            # 3.6.3 分级：执行器只拦 hard（不可替代高危）；soft（fs 删除族
+            # ·代码侧）由 dev_loop 门禁层在执行器之前拦截并进修复循环
+            hard_issues, _soft = scan_dangerous_graded(
+                code, tests, platform=self.platform,
+            )
+        if hard_issues:
             return ExecutionResult(
                 status=ExecutionStatus.BLOCKED,
                 exit_code=None,
-                message="危险操作已拦截（未执行）: " + "; ".join(issues),
+                message="危险操作已拦截（未执行）: " + "; ".join(hard_issues),
             )
 
         module_name = module or "_module_"

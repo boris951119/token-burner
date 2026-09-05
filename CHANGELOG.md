@@ -1,5 +1,33 @@
 # Changelog
 
+## v1.0 · V2.8（2026-09-05）：危险操作分级处置（规格 3.6.3 修订）+ 约束提示词前置
+
+> bench_v1 round-5 取证（T2 glm-4.7）：data_reader/data_processor 两模块死于
+> `os.remove()` 被危险扫描直接冻结（3.6.3 原文：BLOCKED 不进修复循环）。
+> 模型越强越爱写"自然"的文件清理代码——策略误杀随基座能力上升而放大。
+> 用户批准的规格修订（方案 A+B）。
+
+- **方案 B（分级处置）**：`local_executor` 新增 `scan_dangerous_graded` →
+  (hard, soft)。hard（不可替代高危：动态执行/系统命令/网络/子进程/序列化
+  逃逸）维持执行器 BLOCKED 直接冻结；**soft（fs 删除族 · 模块代码侧：
+  os.remove/unlink/rmdir/removedirs/renames、shutil.rmtree/move）降级为
+  可修复**——`dev_loop` 门禁链在执行器之前拦截（平台门禁之后），进修复
+  循环并附修复指导（调用方清理/待清理清单/tempfile 上下文三种替代设计）。
+  双执行器（Local/Docker）同口径只拦 hard；测试侧放行（V2.4）不变；
+  `scan_dangerous` 合并返回保持兼容。
+
+- **方案 A（提示词前置）**：`danger_prompt_constraint()` 与扫描黑名单同文件
+  同源（单一数据源，对齐 platform_policy 设计锚点），注入 write_code /
+  fix_code system 提示词——首版即合规，省掉"生成→拦截→冻结"的整模块
+  投资损失。
+
+- **配置**：`max_response_tokens` 8000 → 16000（config.json；glm-4.7 思考型
+  输出更长，减少截断-续写往返）。
+
+- **测试**：新增 `test_danger_graded.py` 10 项（分级拆分/软级进修复循环/
+  执行器只拦 hard/提示词内容与注入）；全量回归 **1017 → 1027 passed /
+  7 skipped / 0 failed**，既有危险冻结测试（os.system 类）行为不变。
+
 ## v1.0 · V2.7（2026-09-05）：round-4 热修——门禁自炸防护 + 测试竞态根除 + 网关参数硬化
 
 > bench_v1 round-4 取证：T1/T2 死于免费档网关 Timeout/RateLimit；**T3 死于

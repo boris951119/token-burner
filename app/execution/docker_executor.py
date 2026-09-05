@@ -35,7 +35,7 @@ from typing import Callable
 from app.execution.executor import ExecutionResult, ExecutionStatus, Executor
 from app.execution.local_executor import (
     _parse_pytest_summary,
-    scan_dangerous,
+    scan_dangerous_graded,
     scan_dangerous_js,
 )
 
@@ -130,14 +130,18 @@ class DockerExecutor(Executor):
         # node_check 关闭——语法权威在镜像内 node，宿主版本漂移不应误拦，
         # 残余语法错误由容器执行非零退出暴露。
         if self.language == "node":
-            issues = scan_dangerous_js(code, tests, node_check=False)
+            hard_issues = scan_dangerous_js(code, tests, node_check=False)
         else:
-            issues = scan_dangerous(code, tests, platform=self.platform)
-        if issues:
+            # 3.6.3 分级：与 LocalExecutor 同口径——只拦 hard；soft（fs
+            # 删除族·代码侧）由 dev_loop 门禁层先进修复循环
+            hard_issues, _soft = scan_dangerous_graded(
+                code, tests, platform=self.platform,
+            )
+        if hard_issues:
             return ExecutionResult(
                 status=ExecutionStatus.BLOCKED,
                 exit_code=None,
-                message="危险操作已拦截（未执行）: " + "; ".join(issues),
+                message="危险操作已拦截（未执行）: " + "; ".join(hard_issues),
             )
 
         if not self._probe():
