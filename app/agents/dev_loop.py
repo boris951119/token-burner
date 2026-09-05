@@ -147,6 +147,11 @@ class DevLoopEngine:
         from app.utils.platform_policy import prompt_constraint
 
         self._platform_prompt = prompt_constraint(settings.target_platform)
+        # 方案 A：危险操作约束段（与扫描黑名单同源，预生成一次）——
+        # 提示在先、拦截在后，首版即合规，省掉整模块冻结的投资损失
+        from app.execution.local_executor import danger_prompt_constraint
+
+        self._danger_prompt = danger_prompt_constraint()
         # M15-3：契约风格约束段（按 contract_style 预生成一次；
         # function 缺省 = M15-1 原文，class 类式，auto 弱引导）
         from app.utils.contract_style import code_style_prompt
@@ -324,36 +329,56 @@ class DevLoopEngine:
                     platform_issues)
                 gate_passed = False
             else:
-                # M14-2 全局链接门禁：跨模块/_shared import 符号必须存在
-                # （含 FROZEN 模块——交付物仍会 import 它们；v0.5 断裂缺口）
-                from app.utils.link_check import (
-                    _SymbolIndex,
-                    check_links,
-                    format_link_issues,
-                )
+                # 3.6.3 分级修订（方案 B）：fs 删除族（os.remove/unlink/
+                # rmdir/renames、shutil.rmtree/move · 模块代码侧）降级为
+                # 可修复——进修复循环换安全设计（调用方清理/待清理清单/
+                # tempfile 上下文），不再执行器层直接冻结。hard 类（动态
+                # 执行/系统命令/网络）仍由执行器 BLOCKED 直接冻结。
+                from app.execution.local_executor import scan_dangerous_graded
 
-                code_root = None
-                if project_id:
-                    handle = self.file_manager.get_project(project_id)
-                    if handle is not None:
-                        code_root = handle.root / "code"
-                if code_root is not None:
-                    # 索引按项目惰性创建并跨轮复用（mtime/size 增量缓存）
-                    if self._link_index is None or self._link_index._code_root != code_root:  # noqa: SLF001
-                        self._link_index = _SymbolIndex(code_root)
-                    link = check_links(
-                        code_root,
-                        pending_module=module,
-                        pending_code=code,
-                        index=self._link_index,
+                _hard, soft_danger = scan_dangerous_graded(
+                    code, tests, platform=self.settings.target_platform,
+                )
+                if soft_danger:
+                    failure_report = (
+                        "危险操作门禁（3.6.3 分级·可修复）："
+                        + "; ".join(soft_danger)
+                        + "。修复指导：① 由调用方负责清理 ② 返回待清理"
+                          "路径列表 ③ 使用 tempfile.TemporaryDirectory"
+                          "上下文（作用域结束自动清理）"
                     )
-                    if not link.passed:
-                        failure_report = format_link_issues(link.issues)
-                        gate_passed = False
+                    gate_passed = False
+                else:
+                    # M14-2 全局链接门禁：跨模块/_shared import 符号必须存在
+                    # （含 FROZEN 模块——交付物仍会 import 它们；v0.5 断裂缺口）
+                    from app.utils.link_check import (
+                        _SymbolIndex,
+                        check_links,
+                        format_link_issues,
+                    )
+
+                    code_root = None
+                    if project_id:
+                        handle = self.file_manager.get_project(project_id)
+                        if handle is not None:
+                            code_root = handle.root / "code"
+                    if code_root is not None:
+                        # 索引按项目惰性创建并跨轮复用（mtime/size 增量缓存）
+                        if self._link_index is None or self._link_index._code_root != code_root:  # noqa: SLF001
+                            self._link_index = _SymbolIndex(code_root)
+                        link = check_links(
+                            code_root,
+                            pending_module=module,
+                            pending_code=code,
+                            index=self._link_index,
+                        )
+                        if not link.passed:
+                            failure_report = format_link_issues(link.issues)
+                            gate_passed = False
+                        else:
+                            gate_passed = True
                     else:
                         gate_passed = True
-                else:
-                    gate_passed = True
 
             if gate_passed:
                 # M15-3：auto 契约风格自适应——首轮实现到达接口门禁时，
@@ -505,7 +530,7 @@ class DevLoopEngine:
             [
                 # M14-3：平台约束注入（windows 缺省禁 fcntl 等）
                 # M15-3：契约风格约束注入（function 缺省 / class / auto 弱引导）
-                {"role": "system", "content": WRITE_CODE_SYSTEM + self._platform_prompt + self._style_prompt},
+                {"role": "system", "content": WRITE_CODE_SYSTEM + self._platform_prompt + self._danger_prompt + self._style_prompt},
                 {"role": "user", "content": self._prompt_with_shared(
                     WRITE_CODE_USER.format(
                         module=module, responsibility=responsibility or module
@@ -550,7 +575,7 @@ class DevLoopEngine:
             [
                 # M14-3：修复时保持平台约束（防修复又引入 fcntl）
                 # M15-3：修复时保持契约风格约束（防修复轮改风格再触发门禁）
-                {"role": "system", "content": FIX_CODE_SYSTEM + self._platform_prompt + self._style_prompt},
+                {"role": "system", "content": FIX_CODE_SYSTEM + self._platform_prompt + self._danger_prompt + self._style_prompt},
                 {"role": "user", "content": self._prompt_with_shared(
                     FIX_CODE_USER.format(
                         module=module, code=code, tests=tests,
