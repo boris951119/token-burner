@@ -1,6 +1,7 @@
 {
   "models": [
     "openai/glm-4.5-air",
+    "openai/glm-4.7",
     "openai/glm-4-flash",
     "openai/glm-4.5-flash"
   ],
