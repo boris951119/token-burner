@@ -1,6 +1,6 @@
 # token-burner
 
-文档消耗器 · AI 多智能体项目团队系统（v0.5.0-beta）
+文档消耗器 · AI 多智能体项目团队系统（v1.0.0）
 
 Set your tokens on fire!
 
@@ -145,7 +145,7 @@ npm run compile        # 产物在 out/；消息协议契约测试：npm test
 ## 测试
 
 ```bash
-python -m pytest tests/ -q                  # 826+ 项（全 stub，无需密钥）
+python -m pytest tests/ -q                  # 1030 项（全 stub，无需密钥）
 cd vscode-extension && npm test             # 插件消息协议契约测试 4 项
 python scripts/ab_triage_eval.py --mock     # 快慢双模式 A/B 自检（--real 走真实 LLM）
 ```
