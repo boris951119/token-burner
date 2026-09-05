@@ -1,7 +1,7 @@
 {
   "models": [
     "openai/qwen3.6-flash",
-    "openai/deepseek-v4-flash",
+    "openai/deepseek-v4-pro",
     "openai/qwen3-coder-plus"
   ],
   "llm_max_retries": 6,

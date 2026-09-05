@@ -1,0 +1,26 @@
+{
+  "id": "T10",
+  "category": "陌生技术栈",
+  "difficulty_target": 6,
+  "status": "succeeded",
+  "kind": "team_flow",
+  "project_dir": "E:\\token-burner\\projects\\基于_Python_标准库_asyncio_开发一个_DAG_任务调度模拟器_t_20260906_065555",
+  "modules": {
+    "async_scheduler": "SUCCESS",
+    "cycle_validator": "SUCCESS",
+    "data_contracts": "FROZEN",
+    "graph_parser": "SUCCESS",
+    "integration_tests": "FROZEN",
+    "path_analyzer": "FROZEN"
+  },
+  "modules_total": 6,
+  "modules_passed": 3,
+  "pass_rate": 0.5,
+  "tokens_used": 335002,
+  "cost": {
+    "total_tokens": 335002,
+    "budget_tokens": 500000,
+    "over_budget": false
+  },
+  "error": ""
+}

@@ -1,0 +1,26 @@
+{
+  "id": "T7",
+  "category": "第三方库调用",
+  "difficulty_target": 6,
+  "status": "succeeded",
+  "kind": "team_flow",
+  "project_dir": "E:\\token-burner\\projects\\基于_rich_开发一个命令行系统信息展示工具_sysview_采集_CPU_核_20260906_053751",
+  "modules": {
+    "cli_entrypoint": "SUCCESS",
+    "config_manager": "SUCCESS",
+    "json_serializer": "SUCCESS",
+    "metric_collector": "FROZEN",
+    "threshold_analyzer": "FROZEN",
+    "ui_renderer": "FROZEN"
+  },
+  "modules_total": 6,
+  "modules_passed": 3,
+  "pass_rate": 0.5,
+  "tokens_used": 316595,
+  "cost": {
+    "total_tokens": 316595,
+    "budget_tokens": 500000,
+    "over_budget": false
+  },
+  "error": ""
+}

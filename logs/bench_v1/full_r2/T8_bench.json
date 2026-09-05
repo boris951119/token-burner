@@ -1,0 +1,25 @@
+{
+  "id": "T8",
+  "category": "数据处理",
+  "difficulty_target": 7,
+  "status": "succeeded",
+  "kind": "team_flow",
+  "project_dir": "E:\\token-burner\\projects\\开发一个_JSONL_结构化日志聚合分析工具_logroll_解析多个_JSON_20260906_060614",
+  "modules": {
+    "cli_entry": "SUCCESS",
+    "log_reader": "SUCCESS",
+    "metric_engine": "FROZEN",
+    "report_formatter": "SUCCESS",
+    "test_logroll": "FROZEN"
+  },
+  "modules_total": 5,
+  "modules_passed": 3,
+  "pass_rate": 0.6,
+  "tokens_used": 310347,
+  "cost": {
+    "total_tokens": 310347,
+    "budget_tokens": 500000,
+    "over_budget": false
+  },
+  "error": ""
+}
