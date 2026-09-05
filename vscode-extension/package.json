@@ -2,7 +2,7 @@
   "name": "token-burner",
   "displayName": "token-burner · 文档消耗器",
   "description": "AI 多智能体项目团队系统：在侧边栏发起开发任务、跟踪进度与成本（M1-1/M1-2）",
-  "version": "0.4.0",
+  "version": "1.0.0",
   "publisher": "token-burner",
   "engines": {
     "vscode": "^1.85.0"
