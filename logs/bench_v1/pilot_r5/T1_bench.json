@@ -1,0 +1,20 @@
+{
+  "id": "T1",
+  "category": "CLI 工具",
+  "status": "succeeded",
+  "project_dir": "E:\\token-burner\\projects\\开发一个命令行密码生成与强度评估工具_passmint_支持随机密码生成_可指定_20260905_065407",
+  "modules": {
+    "cli": "FROZEN",
+    "config_manager": "FROZEN",
+    "error_handler": "FROZEN",
+    "history_manager": "FROZEN",
+    "password_generator": "FROZEN",
+    "password_strength": "FROZEN",
+    "utils": "FROZEN"
+  },
+  "modules_total": 7,
+  "modules_passed": 0,
+  "pass_rate": 0.0,
+  "tokens_used": 171108,
+  "error": ""
+}

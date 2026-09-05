@@ -1,0 +1,80 @@
+{
+  "generated_at": "2026-09-05 15:27:18",
+  "design": "三组对照:T1=免费档基线(air/flash/flash,旧策略) | T2=dev换glm-4.7(旧策略) | T3=dev换glm-4.7+V2.8(危险分级+提示词前置+16k输出)",
+  "caveat": "T2/T3 为不同需求任务,非严格同任务 A/B;但「os.remove 直接冻结」类型在 T3 归零可独立验证 V2.8 效果",
+  "per_task": [
+    {
+      "id": "T1",
+      "category": "CLI 工具",
+      "status": "succeeded",
+      "project_dir": "E:\\token-burner\\projects\\开发一个命令行密码生成与强度评估工具_passmint_支持随机密码生成_可指定_20260905_065407",
+      "modules": {
+        "cli": "FROZEN",
+        "config_manager": "FROZEN",
+        "error_handler": "FROZEN",
+        "history_manager": "FROZEN",
+        "password_generator": "FROZEN",
+        "password_strength": "FROZEN",
+        "utils": "FROZEN"
+      },
+      "modules_total": 7,
+      "modules_passed": 0,
+      "pass_rate": 0.0,
+      "tokens_used": 171108,
+      "error": ""
+    },
+    {
+      "id": "T2",
+      "category": "数据处理",
+      "models": "PM=glm-4-flash,dev=glm-4.7,test=glm-4.5-air(旧策略)",
+      "status": "succeeded",
+      "project_dir": "E:\\token-burner\\projects\\开发一个命令行_CSV_销售数据分析工具_salestat_读取销售明细_CSV_20260905_095216",
+      "modules": {
+        "anomaly_detector": "FROZEN",
+        "data_processor": "FROZEN",
+        "data_reader": "FROZEN",
+        "report_exporter": "FROZEN",
+        "top_n_ranker": "FROZEN",
+        "unit_tests": "SUCCESS"
+      },
+      "modules_total": 6,
+      "modules_passed": 1,
+      "pass_rate": 0.16666666666666666,
+      "tokens_used": 343122,
+      "error": ""
+    },
+    {
+      "id": "T3",
+      "category": "陌生技术栈",
+      "models": "PM=glm-4-flash,dev=glm-4.7,test=glm-4.5-air(V2.8:A+B)",
+      "status": "succeeded",
+      "project_dir": "E:\\token-burner\\projects\\基于_Python_标准库_sqlite3_与_tomllib_开发一个库存管理_20260905_134958",
+      "modules": {
+        "command_line_interface_module": "FROZEN",
+        "config_parser_module": "FROZEN",
+        "database_module": "FROZEN",
+        "inventory_management_module": "FROZEN",
+        "unit_tests_module": "SUCCESS"
+      },
+      "modules_total": 5,
+      "modules_passed": 1,
+      "pass_rate": 0.2,
+      "tokens_used": 382444,
+      "error": ""
+    }
+  ],
+  "modules_total": 18,
+  "modules_passed": 2,
+  "module_pass_rate": 0.1111111111111111,
+  "task_success_rate": 1.0,
+  "findings": [
+    "机械性缺陷(测试命名/漏import/链接误报/pyc/续写腐蚀/门禁自炸)五轮修复后归零——三轮共 18 模块无一同签名复发",
+    "策略误杀(os.remove 直接冻结)由 V2.8 分级处置消除:T2(旧策略)2 例 → T3(V2.8)0 例",
+    "剩余冻结全部为基座模型能力层:接口门禁不收敛(模型不理会改名指导)、测试断言不收敛、pytest collection error",
+    "任务级成功率 3/3=100%(管线韧性:网关褐色窗口/限流/超时全部存活)",
+    "免费档→glm-4.7 dev:模块通过 0/7→1/6;绝对值仍低于 50% 准入线,瓶颈已收敛至「免费共享网关下的模型能力」单点"
+  ],
+  "admission_line": 0.5,
+  "admission_passed": false,
+  "next_lever": "付费档旗舰 dev 模型(用户已计划用最先进模型亲测)+ M15-2 改名指导对 flash 级模型仍不够强"
+}
