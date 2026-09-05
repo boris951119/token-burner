@@ -1,0 +1,24 @@
+{
+  "id": "T5",
+  "category": "文件操作",
+  "difficulty_target": 4,
+  "status": "succeeded",
+  "kind": "team_flow",
+  "project_dir": "E:\\token-burner\\projects\\开发一个_Markdown_转_HTML_命令行转换器_md2html_支持标题_20260906_050349",
+  "modules": {
+    "cli_entry": "SUCCESS",
+    "html_engine": "FROZEN",
+    "io_dispatcher": "FROZEN",
+    "test_suite": "SUCCESS"
+  },
+  "modules_total": 4,
+  "modules_passed": 2,
+  "pass_rate": 0.5,
+  "tokens_used": 184244,
+  "cost": {
+    "total_tokens": 184244,
+    "budget_tokens": 500000,
+    "over_budget": false
+  },
+  "error": ""
+}

@@ -510,7 +510,7 @@ class DevLoopEngine:
                 tests = self._write_tests(
                     module, code, contract=contract, defect_note=failure_report,
                 )
-            elif fix_attempts == 3 and failure_report.startswith("exit_code=1"):
+            elif fix_attempts == 2 and failure_report.startswith("exit_code=1"):
                 # M15-8：断言类失败连续 2 轮修复不收敛 → 疑似测试过度规格
                 # （paid_pilot3/history：17/18 通过、1 个平台相关权限断言拖死
                 # 整模块；全量基准 16/29 冻结属此类）→ 第 3 轮重写测试：

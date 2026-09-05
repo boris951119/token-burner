@@ -1,0 +1,24 @@
+{
+  "id": "T1",
+  "category": "CLI 工具",
+  "difficulty_target": 5,
+  "status": "succeeded",
+  "kind": "team_flow",
+  "project_dir": "E:\\token-burner\\projects\\开发一个命令行密码生成与强度评估工具_passmint_支持随机密码生成_可指定_20260906_032809",
+  "modules": {
+    "cli_router": "SUCCESS",
+    "history_storage": "FROZEN",
+    "password_generator": "SUCCESS",
+    "strength_evaluator": "SUCCESS"
+  },
+  "modules_total": 4,
+  "modules_passed": 3,
+  "pass_rate": 0.75,
+  "tokens_used": 186165,
+  "cost": {
+    "total_tokens": 186165,
+    "budget_tokens": 500000,
+    "over_budget": false
+  },
+  "error": ""
+}
