@@ -79,7 +79,8 @@ def cost_of(project_dir: str) -> dict:
     }
 
 
-def run_one(task: dict, out_dir: Path, budget_override: int | None) -> dict:
+def run_one(task: dict, out_dir: Path, budget_override: int | None,
+            models_override: list[str] | None = None) -> dict:
     tid = task["id"]
     print(f"[{tid}] 提交：{task['requirement'][:40]}…")
     body = {
@@ -91,6 +92,10 @@ def run_one(task: dict, out_dir: Path, budget_override: int | None) -> dict:
     }
     if budget_override:
         body["budget_tokens"] = budget_override
+    if models_override:
+        # M17-1 扩展：按任务覆盖三模型（顺序 PM,dev,test；须互异，3.3）
+        body["models"] = models_override
+        print(f"[{tid}] models={models_override}")
     created = call("POST", "/api/tasks", body)
     print(f"[{tid}] task_id={created['task_id']}")
     state = wait_terminal(created["task_id"])
@@ -131,6 +136,9 @@ def main() -> None:
     ap.add_argument("--out", required=True, help="报告输出目录")
     ap.add_argument("--budget", type=int, default=None,
                     help="任务级预算覆盖（缺省用服务端档位：auto ×2.5）")
+    ap.add_argument("--models", default=None,
+                    help="逗号分隔三模型覆盖（PM,dev,test；须互异），如 "
+                         "openai/glm-4-flash,openai/glm-4.7,openai/glm-4.5-air")
     args = ap.parse_args()
 
     spec = json.loads(Path(args.tasks).read_text(encoding="utf-8"))
@@ -149,7 +157,11 @@ def main() -> None:
     results = []
     for tid in ids:
         try:
-            results.append(run_one(by_id[tid], out_dir, args.budget))
+            models_override = (
+                [m.strip() for m in args.models.split(",") if m.strip()]
+                if args.models else None
+            )
+            results.append(run_one(by_id[tid], out_dir, args.budget, models_override))
         except Exception as e:  # 单任务失败不中断批次（报告可归因）
             print(f"[{tid}] 异常：{type(e).__name__}: {e}")
             results.append({"id": tid, "status": "error",
