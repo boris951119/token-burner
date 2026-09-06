@@ -1,0 +1,25 @@
+{
+  "id": "T3",
+  "category": "陌生技术栈",
+  "difficulty_target": 5,
+  "status": "succeeded",
+  "kind": "team_flow",
+  "project_dir": "E:\\token-burner\\projects\\基于_Python_标准库_sqlite3_与_tomllib_开发一个库存管理_20260906_090139",
+  "modules": {
+    "cli_interface": "SUCCESS",
+    "config_loader": "SUCCESS",
+    "db_manager": "FROZEN",
+    "stock_engine": "SUCCESS",
+    "test_suite": "FROZEN"
+  },
+  "modules_total": 5,
+  "modules_passed": 3,
+  "pass_rate": 0.6,
+  "tokens_used": 321186,
+  "cost": {
+    "total_tokens": 321186,
+    "budget_tokens": 500000,
+    "over_budget": false
+  },
+  "error": ""
+}

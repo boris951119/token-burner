@@ -1,0 +1,25 @@
+{
+  "id": "T4",
+  "category": "文件操作",
+  "difficulty_target": 5,
+  "status": "succeeded",
+  "kind": "team_flow",
+  "project_dir": "E:\\token-burner\\projects\\开发一个日志轮转分析命令行工具_logscan_扫描指定目录下全部_log_文件_20260906_100004",
+  "modules": {
+    "cli_entry": "SUCCESS",
+    "line_parser": "SUCCESS",
+    "report_renderer": "SUCCESS",
+    "safe_traverser": "SUCCESS",
+    "stream_analyzer": "SUCCESS"
+  },
+  "modules_total": 5,
+  "modules_passed": 5,
+  "pass_rate": 1.0,
+  "tokens_used": 180740,
+  "cost": {
+    "total_tokens": 180740,
+    "budget_tokens": 500000,
+    "over_budget": false
+  },
+  "error": ""
+}

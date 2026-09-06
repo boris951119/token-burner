@@ -1,0 +1,25 @@
+{
+  "id": "T2",
+  "category": "数据处理",
+  "difficulty_target": 6,
+  "status": "succeeded",
+  "kind": "team_flow",
+  "project_dir": "E:\\token-burner\\projects\\开发一个命令行_CSV_销售数据分析工具_salestat_读取销售明细_CSV_20260906_080457",
+  "modules": {
+    "analytics_engine": "SUCCESS",
+    "cli_entry": "FROZEN",
+    "data_parser": "FROZEN",
+    "report_serializer": "SUCCESS",
+    "test_suite": "SUCCESS"
+  },
+  "modules_total": 5,
+  "modules_passed": 3,
+  "pass_rate": 0.6,
+  "tokens_used": 255877,
+  "cost": {
+    "total_tokens": 255877,
+    "budget_tokens": 500000,
+    "over_budget": false
+  },
+  "error": ""
+}

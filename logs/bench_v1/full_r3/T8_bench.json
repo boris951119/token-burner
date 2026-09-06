@@ -1,0 +1,21 @@
+{
+  "id": "T8",
+  "category": "数据处理",
+  "difficulty_target": 7,
+  "status": "succeeded",
+  "kind": "team_flow",
+  "project_dir": "E:\\token-burner\\projects\\开发一个_JSONL_结构化日志聚合分析工具_logroll_解析多个_JSON_20260906_115950",
+  "modules": {
+    "main": "SUCCESS"
+  },
+  "modules_total": 1,
+  "modules_passed": 1,
+  "pass_rate": 1.0,
+  "tokens_used": 98763,
+  "cost": {
+    "total_tokens": 98763,
+    "budget_tokens": 500000,
+    "over_budget": false
+  },
+  "error": ""
+}
