@@ -36,11 +36,13 @@ from __future__ import annotations
 import json
 import queue
 import time
+import secrets as _pysecrets
+
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.config import Settings, load_settings
@@ -52,6 +54,7 @@ from app.orchestrator import Route, RoutingResult, TaskRouter
 from app.pipeline import Pipeline, PipelineResult
 from app.task_manager import TaskManager, TaskStatus
 from app.tools.file_manager import FileManager
+from app.utils.connections import ConnectionStore, mask_key, registry_models
 from app.utils.locks import ProjectLockManager
 from app.utils.model_client import ModelClientFactory
 
@@ -103,6 +106,15 @@ class TaskSubmitRequest(BaseModel):
     # M12-4（插件配置页）：任务级预算覆盖（插件设置 tokenBurner.budgetTokens
     # 透传；None = 用服务端配置的档位预算）。≤0 视为非法，端点层校验。
     budget_tokens: int | None = None
+
+
+class ConnectionRequest(BaseModel):
+    """v1.1 C1:前端连接注册表新增体(api_key 只写不读)。"""
+
+    name: str = Field(min_length=1)
+    base_url: str = ""
+    api_key: str = Field(min_length=1)
+    models: list[str] = Field(min_length=1)
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +222,11 @@ def create_app(
     )
     app.state.executor = executor            # 测试注入；缺省按 mode 构造
     app.state.lock_manager = ProjectLockManager()  # M8-2 项目级锁
+    # v1.1 C1 连接注册表:预设快照 + 密钥库路径 + 写端点会话令牌
+    app.state.preset_models = list(app.state.settings.models)
+    app.state.connection_store = ConnectionStore(
+        app.state.settings.connections_path)
+    app.state.session_token = _pysecrets.token_urlsafe(24)
     app.state.task_manager = TaskManager(
         projects_root=app.state.file_manager.projects_root,
     )  # M8-3 异步任务（线程池 + 状态落盘 + 事件广播）
@@ -279,6 +296,65 @@ def create_app(
             "auto_budget_multiplier": s.auto_mode_budget_multiplier,
             "projects_root": str(app.state.file_manager.projects_root),
         }
+
+    # ------------------------------------------------------------------
+    # v1.1 C1 连接注册表(前端「API 接口配置」的后端真身)
+    # ------------------------------------------------------------------
+
+    def _masked(conn: dict) -> dict:
+        from app.utils.connections import masked
+        return masked(conn)
+
+    def _require_session(request: Request, x_session_token: str) -> None:
+        """写端点双重防护:同源会话令牌 + Host 白名单(防 localhost CSRF/DNS rebinding)。"""
+        if x_session_token != app.state.session_token:
+            raise HTTPException(status_code=403, detail="缺少有效会话令牌")
+        host = (request.headers.get("host") or "").split(":")[0]
+        if host not in ("127.0.0.1", "localhost", "testserver"):
+            raise HTTPException(status_code=403, detail="非法 Host")
+
+    def _sync_models() -> None:
+        """连接增删后同步可用模型全集回 settings.models(TeamBuilder 校验零改动)。"""
+        app.state.settings.models = registry_models(
+            app.state.preset_models, app.state.connection_store)
+
+    @app.get("/api/session")
+    def issue_session() -> dict:
+        """签发同源会话令牌:页面加载时获取,写端点校验(防 localhost CSRF)。"""
+        return {"token": app.state.session_token}
+
+    @app.get("/api/connections")
+    def list_connections() -> dict:
+        """连接列表(密钥永远掩码)+ 可用模型全集(预设 ∪ 连接)。"""
+        store: ConnectionStore = app.state.connection_store
+        return {
+            "connections": [_masked(c) for c in store.all()],
+            "available_models": registry_models(app.state.preset_models, store),
+        }
+
+    @app.post("/api/connections")
+    def add_connection(req: ConnectionRequest, request: Request,
+                       x_session_token: str = Header(default="")) -> dict:
+        _require_session(request, x_session_token)
+        store: ConnectionStore = app.state.connection_store
+        try:
+            conn = store.add(req.name, req.base_url, req.api_key, req.models)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        _sync_models()
+        return {"ok": True, "connection": _masked(conn),
+                "available_models": registry_models(app.state.preset_models, store)}
+
+    @app.delete("/api/connections/{cid}")
+    def delete_connection(cid: str, request: Request,
+                          x_session_token: str = Header(default="")) -> dict:
+        _require_session(request, x_session_token)
+        store: ConnectionStore = app.state.connection_store
+        if not store.delete(cid):
+            raise HTTPException(status_code=404, detail="连接不存在")
+        _sync_models()
+        return {"ok": True,
+                "available_models": registry_models(app.state.preset_models, store)}
 
     @app.get("/", include_in_schema=False)
     def index():

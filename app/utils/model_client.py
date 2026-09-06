@@ -48,6 +48,25 @@ def _is_transient(exc: Exception) -> bool:
     return any(marker in text for marker in _TRANSIENT_MARKERS)
 
 
+def _apply_connection_creds(model: str, kwargs: dict[str, Any]) -> bool:
+    """v1.1 C1：按模型名查连接注册表,命中则注入 api_key/base_url。
+
+    解析失败一律降级返回 False(走环境变量路径),不阻断主管线;
+    返回 True 表示连接凭据已注入(调用方可跳过环境密钥检查)。
+    """
+    try:
+        from app.utils.connections import resolve_credentials
+        creds = resolve_credentials(model)
+    except Exception:
+        return False
+    if not creds:
+        return False
+    kwargs["api_key"] = creds.get("api_key", "")
+    if creds.get("base_url"):
+        kwargs["base_url"] = creds["base_url"]
+    return True
+
+
 class MissingApiKeyError(RuntimeError):
     """已知供应商的 API 密钥缺失（应在发起调用前抛出）。"""
 
@@ -220,7 +239,6 @@ class ModelClient:
         # 11.0：超预算 → 立即中止该任务（每次调用前拦截）
         if self.budget_guard is not None:
             self.budget_guard.ensure_allowed()
-        self._check_api_key(model)
 
         kwargs: dict[str, Any] = {
             "model": model,
@@ -228,6 +246,10 @@ class ModelClient:
             "max_tokens": self.settings.max_response_tokens,  # 第 2 层护栏
             "timeout": self.settings.llm_timeout_seconds,     # 9 章：单次调用超时
         }
+        # v1.1 C1：连接注册表命中 → 注入 api_key/base_url(热加载);
+        # 未命中回落环境变量密钥检查(行为与 v1.0 一致)
+        if not _apply_connection_creds(model, kwargs):
+            self._check_api_key(model)
         use_json = json_mode and self.settings.strict_json_response
         if use_json:
             kwargs["response_format"] = {"type": "json_object"}
@@ -325,13 +347,15 @@ class ModelClient:
                 return cached
 
         embedding = self._embedding_fn or _default_embedding_fn()
+        embed_kwargs: dict[str, Any] = {
+            "model": model,
+            "input": [text],
+            "timeout": self.settings.llm_timeout_seconds,
+        }
+        _apply_connection_creds(model, embed_kwargs)
         response = self._call_with_retry(
             embedding,
-            {
-                "model": model,
-                "input": [text],
-                "timeout": self.settings.llm_timeout_seconds,
-            },
+            embed_kwargs,
             model,
             "embedding 调用失败",
         )

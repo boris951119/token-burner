@@ -109,6 +109,8 @@ class Settings:
     # 空 = 缺省「启动命令时所在目录 / projects」；配置绝对路径后
     # 全部产出（projects/、断点快照、成本报告）落到指定目录
     projects_root: str = ""
+    # v1.1 C1:前端连接注册表的本地密钥库路径(.gitignore 覆盖,密钥只写不读)
+    connections_path: str = "secrets.local.json"
 
     # ---- M2 Docker 沙箱（auto 模式可选容器级隔离）----
     # 缺省 False：auto 模式沿用进程级 LocalExecutor（行为与 v0.3.1 一致）

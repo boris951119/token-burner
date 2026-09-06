@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.1 · C1 连接注册表（2026-09-06）：前端「API 接口配置」的后端真身
+
+> v1.1-workplan C1 批次——用户在前端添加模型连接后**真实生效**,免重启。
+
+- **新增 `app/utils/connections.py`**:ConnectionStore(本地密钥库
+  `secrets.local.json`,gitignore 覆盖,写入后收紧权限;损坏回落空表)+
+  `resolve_credentials`(按模型名解析连接,异常一律降级)+ 掩码视图
+  (密钥永远 `前5****后4`)。
+
+- **server 三端点**:`GET /api/session`(签发同源会话令牌)/
+  `GET|POST /api/connections` / `DELETE /api/connections/{cid}`。
+  写端点双重防护:会话令牌 + Host 白名单(防 localhost CSRF/DNS
+  rebinding);响应体永不携带明文密钥。连接增删后**同步可用模型全集回
+  settings.models**(预设 ∪ 连接,TeamBuilder 校验零改动)。
+
+- **ModelClient 运行时解析**:调用前按模型名查连接,命中注入
+  api_key/base_url(litellm per-call 参数),未命中回落环境变量——
+  新增连接免重启;解析失败一律降级,不阻断主管线;embed 链路同 treatment。
+
+- **config**:新增 `connections_path`(缺省 secrets.local.json)。
+
+- 测试:新增 `test_connections.py` 16 项(CRUD/校验/掩码/损坏回落/
+  凭据注入/环境回落/端点防护/联合模型/400+422 边界);全量回归
+  **1035 → 1051 passed / 7 skipped / 0 failed**。前端接线(C3)另批。
+
+
 ## v1.0 · V3 终局（2026-09-06）：全量基准 71% 达标 · v1.0.0 发布
 
 > full_r3（deepseek-v4-pro dev + qwen3-coder-plus test + qwen3.6-flash PM
