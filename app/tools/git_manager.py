@@ -40,9 +40,17 @@ class GitManager:
         self._runner = runner or _default_runner
 
     def init(self, project_root: Path) -> None:
-        """项目创建后初始化本地仓库（14 章：免推送）。"""
+        """项目创建后初始化本地仓库（14 章：免推送）。
+
+        M17-2：全新机器（CI/新用户）常无 git 身份——commit 会以 128 失败。
+        检测到仓库缺身份时，写入**仓库级**兜底身份（不动全局配置）。
+        """
         root = str(project_root)
         self._safe(root, "init")
+        probe = self._safe_quiet(root, "config", "user.email")
+        if not probe.strip():
+            self._safe(root, "config", "user.name", "token-burner")
+            self._safe(root, "config", "user.email", "token-burner@local")
 
     def commit_stage(self, project_root: Path, stage: str, detail: str) -> None:
         """阶段性提交：git add -A + git commit -m "[<stage>] <detail>"。
@@ -63,3 +71,10 @@ class GitManager:
             self._runner(root, *args)
         except Exception:
             pass
+
+    def _safe_quiet(self, root: str, *args: str) -> str:
+        """带返回值的静默 git 调用（失败返回空串）。"""
+        try:
+            return self._runner(root, *args)
+        except Exception:
+            return ""
