@@ -1,0 +1,277 @@
+{
+  "generated_at": "2026-09-06 13:38:49",
+  "tasks_file": "E:\\token-burner\\scripts\\bench_tasks.json",
+  "ids": [
+    "T1",
+    "T2",
+    "T3",
+    "T4",
+    "T5",
+    "T6",
+    "T7",
+    "T8",
+    "T9",
+    "T10"
+  ],
+  "per_task": [
+    {
+      "id": "T1",
+      "category": "CLI 工具",
+      "difficulty_target": 5,
+      "status": "succeeded",
+      "kind": "team_flow",
+      "project_dir": "E:\\token-burner\\projects\\开发一个命令行密码生成与强度评估工具_passmint_支持随机密码生成_可指定_20260906_073241",
+      "modules": {
+        "cli_main": "SUCCESS",
+        "core_generator": "SUCCESS",
+        "core_history": "FROZEN",
+        "core_strength": "SUCCESS",
+        "infra_utils": "SUCCESS"
+      },
+      "modules_total": 5,
+      "modules_passed": 4,
+      "pass_rate": 0.8,
+      "tokens_used": 238289,
+      "cost": {
+        "total_tokens": 238289,
+        "budget_tokens": 500000,
+        "over_budget": false
+      },
+      "error": ""
+    },
+    {
+      "id": "T2",
+      "category": "数据处理",
+      "difficulty_target": 6,
+      "status": "succeeded",
+      "kind": "team_flow",
+      "project_dir": "E:\\token-burner\\projects\\开发一个命令行_CSV_销售数据分析工具_salestat_读取销售明细_CSV_20260906_080457",
+      "modules": {
+        "analytics_engine": "SUCCESS",
+        "cli_entry": "FROZEN",
+        "data_parser": "FROZEN",
+        "report_serializer": "SUCCESS",
+        "test_suite": "SUCCESS"
+      },
+      "modules_total": 5,
+      "modules_passed": 3,
+      "pass_rate": 0.6,
+      "tokens_used": 255877,
+      "cost": {
+        "total_tokens": 255877,
+        "budget_tokens": 500000,
+        "over_budget": false
+      },
+      "error": ""
+    },
+    {
+      "id": "T3",
+      "category": "陌生技术栈",
+      "difficulty_target": 5,
+      "status": "succeeded",
+      "kind": "team_flow",
+      "project_dir": "E:\\token-burner\\projects\\基于_Python_标准库_sqlite3_与_tomllib_开发一个库存管理_20260906_090139",
+      "modules": {
+        "cli_interface": "SUCCESS",
+        "config_loader": "SUCCESS",
+        "db_manager": "FROZEN",
+        "stock_engine": "SUCCESS",
+        "test_suite": "FROZEN"
+      },
+      "modules_total": 5,
+      "modules_passed": 3,
+      "pass_rate": 0.6,
+      "tokens_used": 321186,
+      "cost": {
+        "total_tokens": 321186,
+        "budget_tokens": 500000,
+        "over_budget": false
+      },
+      "error": ""
+    },
+    {
+      "id": "T4",
+      "category": "文件操作",
+      "difficulty_target": 5,
+      "status": "succeeded",
+      "kind": "team_flow",
+      "project_dir": "E:\\token-burner\\projects\\开发一个日志轮转分析命令行工具_logscan_扫描指定目录下全部_log_文件_20260906_100004",
+      "modules": {
+        "cli_entry": "SUCCESS",
+        "line_parser": "SUCCESS",
+        "report_renderer": "SUCCESS",
+        "safe_traverser": "SUCCESS",
+        "stream_analyzer": "SUCCESS"
+      },
+      "modules_total": 5,
+      "modules_passed": 5,
+      "pass_rate": 1.0,
+      "tokens_used": 180740,
+      "cost": {
+        "total_tokens": 180740,
+        "budget_tokens": 500000,
+        "over_budget": false
+      },
+      "error": ""
+    },
+    {
+      "id": "T5",
+      "category": "文件操作",
+      "difficulty_target": 4,
+      "status": "succeeded",
+      "kind": "team_flow",
+      "project_dir": "E:\\token-burner\\projects\\开发一个_Markdown_转_HTML_命令行转换器_md2html_支持标题_20260906_102225",
+      "modules": {
+        "atomic_writer": "FROZEN",
+        "cli_parser": "SUCCESS",
+        "html_renderer": "SUCCESS",
+        "inline_parser": "SUCCESS",
+        "io_security": "SUCCESS",
+        "lexer_core": "SUCCESS",
+        "model_types": "SUCCESS",
+        "pipeline_driver": "SUCCESS"
+      },
+      "modules_total": 8,
+      "modules_passed": 7,
+      "pass_rate": 0.875,
+      "tokens_used": 261291,
+      "cost": {
+        "total_tokens": 261291,
+        "budget_tokens": 500000,
+        "over_budget": false
+      },
+      "error": ""
+    },
+    {
+      "id": "T6",
+      "category": "第三方库调用",
+      "difficulty_target": 5,
+      "status": "succeeded",
+      "kind": "team_flow",
+      "project_dir": "E:\\token-burner\\projects\\基于_pydantic_开发一个用户资料数据校验模块_profile_schem_20260906_105726",
+      "modules": {
+        "error_i18n": "FROZEN",
+        "orchestrator_api": "SUCCESS",
+        "profile_schema": "SUCCESS",
+        "quality_assurance": "SUCCESS",
+        "security_loader": "FROZEN"
+      },
+      "modules_total": 5,
+      "modules_passed": 3,
+      "pass_rate": 0.6,
+      "tokens_used": 289320,
+      "cost": {
+        "total_tokens": 289320,
+        "budget_tokens": 500000,
+        "over_budget": false
+      },
+      "error": ""
+    },
+    {
+      "id": "T7",
+      "category": "第三方库调用",
+      "difficulty_target": 6,
+      "status": "succeeded",
+      "kind": "team_flow",
+      "project_dir": "E:\\token-burner\\projects\\基于_rich_开发一个命令行系统信息展示工具_sysview_采集_CPU_核_20260906_113048",
+      "modules": {
+        "cli_orchestrator": "FROZEN",
+        "config_manager": "SUCCESS",
+        "metrics_collector": "FROZEN",
+        "rule_engine": "FROZEN",
+        "ui_renderer": "SUCCESS"
+      },
+      "modules_total": 5,
+      "modules_passed": 2,
+      "pass_rate": 0.4,
+      "tokens_used": 236842,
+      "cost": {
+        "total_tokens": 236842,
+        "budget_tokens": 500000,
+        "over_budget": false
+      },
+      "error": ""
+    },
+    {
+      "id": "T8",
+      "category": "数据处理",
+      "difficulty_target": 7,
+      "status": "succeeded",
+      "kind": "team_flow",
+      "project_dir": "E:\\token-burner\\projects\\开发一个_JSONL_结构化日志聚合分析工具_logroll_解析多个_JSON_20260906_115950",
+      "modules": {
+        "main": "SUCCESS"
+      },
+      "modules_total": 1,
+      "modules_passed": 1,
+      "pass_rate": 1.0,
+      "tokens_used": 98763,
+      "cost": {
+        "total_tokens": 98763,
+        "budget_tokens": 500000,
+        "over_budget": false
+      },
+      "error": ""
+    },
+    {
+      "id": "T9",
+      "category": "CLI 工具",
+      "difficulty_target": 6,
+      "status": "succeeded",
+      "kind": "team_flow",
+      "project_dir": "E:\\token-burner\\projects\\开发一个间隔重复记忆卡片命令行工具_memcard_支持卡片的增删改查_基于_S_20260906_121249",
+      "modules": {
+        "cli_command_handler": "SUCCESS",
+        "cli_output_formatter": "SUCCESS",
+        "cli_review_state_machine": "SUCCESS",
+        "core_card_model": "SUCCESS",
+        "core_scheduler_logic": "FROZEN",
+        "core_stats_aggregator": "FROZEN",
+        "db_repo_persistence": "SUCCESS"
+      },
+      "modules_total": 7,
+      "modules_passed": 5,
+      "pass_rate": 0.7142857142857143,
+      "tokens_used": 357099,
+      "cost": {
+        "total_tokens": 357099,
+        "budget_tokens": 500000,
+        "over_budget": false
+      },
+      "error": ""
+    },
+    {
+      "id": "T10",
+      "category": "陌生技术栈",
+      "difficulty_target": 6,
+      "status": "succeeded",
+      "kind": "team_flow",
+      "project_dir": "E:\\token-burner\\projects\\基于_Python_标准库_asyncio_开发一个_DAG_任务调度模拟器_t_20260906_130036",
+      "modules": {
+        "cli": "SUCCESS",
+        "dag_engine": "SUCCESS",
+        "models": "SUCCESS",
+        "parser": "SUCCESS",
+        "runner": "FROZEN",
+        "scheduler": "FROZEN"
+      },
+      "modules_total": 6,
+      "modules_passed": 4,
+      "pass_rate": 0.6666666666666666,
+      "tokens_used": 289875,
+      "cost": {
+        "total_tokens": 289875,
+        "budget_tokens": 500000,
+        "over_budget": false
+      },
+      "error": ""
+    }
+  ],
+  "modules_total": 52,
+  "modules_passed": 37,
+  "module_pass_rate": 0.7115384615384616,
+  "task_success_rate": 1.0,
+  "over_budget_tasks": 0,
+  "admission_line": 0.5,
+  "admission_passed": true
+}
