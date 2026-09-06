@@ -10,7 +10,11 @@
   + dev 换 v4-pro)。逐任务 R3:T4 5/5、T5 7/8、T9 5/7、T1 4/5、T10 4/6,
   最差 T7 2/5——15 个任务模块组中无一低于 40%。
 - **版本口径**:1.0.0(app/README/文档目录/插件已统一,M17-2)。
-- 全量基准数据:`logs/bench_v1/full_r3/`(逐任务 tokens/预算/模块终态)。
+- **发布链首跑即修四类 CI 地雷并转绿**:requirements 补 fastapi/uvicorn;
+  GitManager 仓库级兜底 git 身份;pipeline 探针子进程注入 UTF-8;
+  resource_quota live 测试改真实 runner + Linux 容器模式守卫。
+  `v1.0.0` Release 已发布:token-burner.exe 80.3 MB(76.6 二进制 MB ≤80 达标)。
+  另:test_resource_quota 的 live 测试诞生以来首次真跑并修正假 runner 缺陷。- 全量基准数据:`logs/bench_v1/full_r3/`(逐任务 tokens/预算/模块终态)。
 
 
 ## v1.0 · V3 回炉轮 2/2（2026-09-06）：M15-8 触发提前 + dev 换 deepseek-v4-pro
