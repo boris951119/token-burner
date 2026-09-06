@@ -1,5 +1,29 @@
 # Changelog
 
+## v1.1 · C2+C3 首批（2026-09-06）：探针与发现 + 前端接线
+
+> 接 C1。C2 全部落地;C3 首批=面板接真身+模板卡+自动探针+模型发现
+> (全屏三步向导的完整形态随后续打磨);冻结展示/交付目录为独立追加项。
+
+- **C2 探针**(`connections.probe_connection` + `POST
+  /api/connections/{cid}/probe`):用连接自身凭据发微型真实调用(max_tokens
+  ≤8,直连不经 ModelClient——不进任务预算/调用日志/成本报告),秒级返回
+  verdict:ok / auth_failed / model_not_found / rate_limited / network_error
+  / error;thinking 模型仅断言 HTTP 成功。**模型自动发现**(`POST
+  /api/models/discover` + `connections.discover_models`):OpenAI 兼容
+  {base}/models 拉取清单,失败回落手动输入。
+- **C3 前端接线**(`client.html`):面板从 localStorage 改为后端连接
+  注册表(删 tb_api_configs 与假示例数据);新增 6 张供应商模板卡
+  (智谱/DeepSeek/百炼/Moonshot/OpenRouter/本地 Ollama),点卡片预填;
+  保存后**自动探针**红绿灯反馈;弹窗「🔍 自动发现」一键拉模型清单;
+  无连接时显示 90 秒上手横幅;会话令牌自动获取。
+- **测试**:新增 `test_connection_probe.py` 13 项(六类 verdict/凭据注入/
+  端点透传与 403 守卫/发现解析与失败回落);全量回归 **1051 → 1064
+  passed / 7 skipped / 0 failed**。
+- 后续(同 C3 批次):全屏首启向导完整形态、冻结原因前置展示、交付目录
+  可配置(用户已批准的三项追加)。
+
+
 ## v1.1 · C1 连接注册表（2026-09-06）：前端「API 接口配置」的后端真身
 
 > v1.1-workplan C1 批次——用户在前端添加模型连接后**真实生效**,免重启。
