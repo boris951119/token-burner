@@ -187,6 +187,7 @@ class Pipeline:
         research: str = "off",
         research_material: str = "",
         budget_override: int | None = None,
+        project_dirname: str | None = None,
     ) -> PipelineResult:
         """执行完整管线。交互参数由外层（CLI）收集后传入。
 
@@ -264,6 +265,7 @@ class Pipeline:
             main_model=models[0],
             dev_model=models[1],
             test_model=models[2],
+            project_dirname=project_dirname,
             mode=mode,
             auto_mode_confirmed=auto_mode_confirmed,
         )
@@ -519,6 +521,8 @@ class Pipeline:
                 "module_done", module=name,
                 status=module_results[name].status.value,
                 fix_attempts=module_results[name].fix_attempts,
+                # C3 冻结原因前置展示:截尾原因直通工作台
+                message=(module_results[name].message or "")[:200],
             )
             # 14 章：每模块完成后阶段提交（含冻结模块——保留现场）
             if git is not None:

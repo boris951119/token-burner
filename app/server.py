@@ -73,6 +73,7 @@ class RouteRequest(BaseModel):
 class RunRequest(BaseModel):
     requirement: str = Field(min_length=1)
     models: list[str] | None = None          # 三模型互异（3.3），缺省用配置
+    project_dirname: str = ""                # v1.1 C3:自定义项目目录名(缺省自动)
     mode: str = "safe"                       # safe | auto
     spec_confirm: str = "确认"               # 11.5 spec 确认（缺省直接确认）
     confirmed_as_coding: bool = False        # 15.3 保守降级确认
@@ -106,6 +107,7 @@ class TaskSubmitRequest(BaseModel):
     # M12-4（插件配置页）：任务级预算覆盖（插件设置 tokenBurner.budgetTokens
     # 透传；None = 用服务端配置的档位预算）。≤0 视为非法，端点层校验。
     budget_tokens: int | None = None
+    project_dirname: str = ""                # v1.1 C3:自定义项目目录名(缺省自动)
 
 
 class ConnectionRequest(BaseModel):
@@ -128,6 +130,12 @@ class DiscoverRequest(BaseModel):
 
     base_url: str = Field(min_length=1)
     api_key: str = Field(min_length=1)
+
+
+class ProjectsRootRequest(BaseModel):
+    """v1.1 C3:交付根目录热切换。"""
+
+    new_root: str = Field(min_length=1)
 
 
 # ---------------------------------------------------------------------------
@@ -393,6 +401,24 @@ def create_app(
         from app.utils.connections import discover_models
         return discover_models(req.base_url, req.api_key)
 
+    @app.post("/api/settings/projects-root")
+    def set_projects_root(req: ProjectsRootRequest, request: Request,
+                          x_session_token: str = Header(default="")) -> dict:
+        """v1.1 C3:交付根目录热切换(新任务生效,进行中任务不受影响)。"""
+        _require_session(request, x_session_token)
+        path = (req.new_root or "").strip()
+        if not path:
+            raise HTTPException(status_code=400, detail="路径不能为空")
+        target = Path(path)
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            raise HTTPException(status_code=400,
+                                detail=f"目录不可创建: {exc}") from exc
+        app.state.settings.projects_root = str(target)
+        app.state.file_manager = FileManager(projects_root=target)
+        return {"ok": True, "projects_root": str(target)}
+
     @app.get("/", include_in_schema=False)
     def index():
         """同源托管 client.html（浏览器直开避免 CORS；API_BASE 同源即可）。"""
@@ -436,6 +462,7 @@ def create_app(
             pipeline.run, req.requirement,
             confirmed_as_coding=req.confirmed_as_coding,
             models=models,
+            project_dirname=(req.project_dirname or None),
             mode=req.mode,
             # 3.6.3：API 请求显式选择 auto 即视为用户确认（客户端 UI 展示
             # 预算放大警示后提交）；否则 TeamBuilder 预算闸门会拒绝
@@ -522,7 +549,9 @@ def create_app(
                     return _result_dict(pipeline.run(
                         req.requirement,
                         confirmed_as_coding=req.confirmed_as_coding,
-                        models=models, mode=req.mode,
+                        models=models,
+                        project_dirname=(req.project_dirname or None),
+                        mode=req.mode,
                         # 3.6.3：API 显式选择 auto 即视为确认（同 /api/run）
                         auto_mode_confirmed=(req.mode == "auto"),
                         spec_confirm=req.spec_confirm, route=route_obj,

@@ -632,6 +632,17 @@
       <p class="hint" style="margin-top:6px;">预设列表由服务端 config.json 提供；自定义连接见工作台右下角「API 接口配置」（保存即生效，免重启）。</p>
     </div>
 
+    <!-- 交付目录(v1.1 C3) -->
+    <div class="sub">
+      <h4>📁 交付目录</h4>
+      <div class="field" style="margin-top:8px;">
+        <input type="text" id="set-projects-root" placeholder="项目产出根目录（缺省 ./projects）">
+      </div>
+      <div style="margin-top:6px;"><button class="btn btn-sm" id="btn-save-root">保存目录</button>
+        <span class="hint" id="root-status"></span></div>
+      <p class="hint" style="margin-top:4px;">保存后新任务即写入新目录（进行中任务不受影响）。</p>
+    </div>
+
     <!-- 预算 -->
     <div class="sub">
       <h4>💰 预算（后端档位）</h4>
@@ -684,6 +695,43 @@
     <div class="modal-actions">
       <button class="btn-ghost" id="btn-api-cancel">取消</button>
       <button class="btn" id="btn-api-confirm">确认添加</button>
+    </div>
+  </div>
+</div>
+
+<!-- v1.1 C3 首启向导(三步:模板 → Key+探针 → 完成) -->
+<div class="overlay hidden" id="wiz-modal">
+  <div class="modal" style="max-width:560px;">
+    <h3>🚀 欢迎使用 token-burner <span class="hint" id="wiz-step-label" style="font-weight:normal">步骤 1/3</span></h3>
+    <div id="wiz-body">
+      <div id="wiz-step1">
+        <p class="hint">选择你的模型服务商(点击卡片),或稍后在右下角「API 接口配置」添加。</p>
+        <div class="tpls" id="wiz-tpl-rows" style="display:grid; grid-template-columns:1fr 1fr; gap:8px;"></div>
+        <p class="hint" style="margin-top:10px;">没有 Key?选「本地 Ollama」可零 Key 试用;也可点「跳过」,稍后在右下角配置。</p>
+      </div>
+      <div id="wiz-step2" class="hidden">
+        <p class="hint">已为你预填 <b id="wiz-tpl-name"></b>。请在下方粘贴 API Key 并验证连通性:</p>
+        <div class="field"><label>API Key *</label>
+          <input type="text" id="wiz-key" placeholder="sk-..."></div>
+        <div class="field"><label>模型(可自动发现)</label>
+          <input type="text" id="wiz-models" placeholder="点击右侧按钮自动拉取">
+          <button type="button" class="btn-ghost btn-sm" id="wiz-discover" style="margin-top:4px;">🔍 自动发现模型</button></div>
+        <div id="wiz-probe-result" class="hint" style="margin:8px 0;"></div>
+        <div class="modal-actions">
+          <button class="btn-ghost" id="wiz-back">← 上一步</button>
+          <button class="btn" id="wiz-probe">验证连通(探针)</button>
+        </div>
+      </div>
+      <div id="wiz-step3" class="hidden">
+        <p id="wiz-done-text" style="font-size:15px;">✅ 连接就绪!</p>
+        <p class="hint">接下来:在工作台输入一句需求 → 确认组队 → 点火。模型可随时在右下角修改。</p>
+        <div class="modal-actions">
+          <button class="btn" id="wiz-finish">开始使用 →</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-actions" style="margin-top:6px;">
+      <button class="btn-ghost btn-sm" id="wiz-skip">跳过向导</button>
     </div>
   </div>
 </div>
@@ -897,6 +945,109 @@ $("btn-discover-models").addEventListener("click", async () => {
 
 /* 首次加载 */
 ensureSession().then(loadConnections);
+
+/* =====================================================================
+ * v1.1 C3 首启向导(三步):模板 → Key+探针 → 完成
+ * 触发:连接注册表为空且用户未跳过过(localStorage tb_wizard_done)
+ * ===================================================================== */
+const WIZ_DONE_KEY = "tb_wizard_done";
+let WIZ_TPL = null;
+
+function wizardShouldShow() {
+  if (localStorage.getItem(WIZ_DONE_KEY) === "1") return false;
+  return true;
+}
+function showWizard() {
+  $("wiz-modal").classList.remove("hidden");
+  wizGo(1);
+  renderConnTemplates();  // 复用模板数据渲染步骤 1 卡片
+  const box = $("wiz-tpl-rows");
+  box.innerHTML = PROVIDER_TEMPLATES.map((t, i) =>
+    `<button class="btn-ghost btn-sm" data-wtpl="${i}" style="padding:10px;">`+
+    `<b>${escapeHtml(t.name)}</b><br><span class="hint">${escapeHtml(t.base.replace("https://", ""))}</span></button>`).join("");
+  box.querySelectorAll("[data-wtpl]").forEach(b => b.addEventListener("click", () => {
+    WIZ_TPL = PROVIDER_TEMPLATES[Number(b.dataset.wtpl)];
+    $("wiz-tpl-name").textContent = WIZ_TPL.name;
+    $("wiz-models").value = WIZ_TPL.models;
+    wizGo(2);
+  }));
+}
+function wizGo(n) {
+  $("wiz-step-label").textContent = `步骤 ${n}/3`;
+  [1, 2, 3].forEach(k => $("wiz-step" + k).classList.toggle("hidden", k !== n));
+}
+function wizardFinish() {
+  localStorage.setItem(WIZ_DONE_KEY, "1");
+  $("wiz-modal").classList.add("hidden");
+  loadConnections();
+}
+$("wiz-skip").addEventListener("click", () => {
+  localStorage.setItem(WIZ_DONE_KEY, "1");
+  $("wiz-modal").classList.add("hidden");
+});
+$("wiz-back").addEventListener("click", () => wizGo(1));
+$("wiz-discover").addEventListener("click", async () => {
+  const key = $("wiz-key").value.trim();
+  if (!key) { alert("先粘贴 API Key 再自动发现"); return; }
+  const btn = $("wiz-discover");
+  btn.disabled = true; btn.textContent = "发现中…";
+  try {
+    const r = await apiCall("POST", "/api/models/discover",
+      { base_url: WIZ_TPL.base, api_key: key });
+    if (r.ok && r.models.length) {
+      $("wiz-models").value = r.models.slice(0, 6).map(m => "openai/" + m).join(", ");
+    } else { alert("发现失败:" + (r.detail || "该端点不支持 /models")); }
+  } catch (e) { alert("发现失败: " + (e.message || e)); }
+  btn.disabled = false; btn.textContent = "🔍 自动发现模型";
+});
+$("wiz-probe").addEventListener("click", async () => {
+  const key = $("wiz-key").value.trim();
+  if (!key) { alert("先粘贴 API Key"); return; }
+  const box = $("wiz-probe-result");
+  box.innerHTML = "⏳ 验证中…";
+  await ensureSession();
+  try {
+    // 临时创建连接 → 探针第一个模型 → 按结果保留或删除
+    const saved = await apiCall("POST", "/api/connections", {
+      name: WIZ_TPL.name, base_url: WIZ_TPL.base, api_key: key,
+      models: $("wiz-models").value.split(/[,,]/).map(x => x.trim()).filter(Boolean),
+    });
+    const cid = saved.connection.id;
+    const probe = await apiCall("POST", `/api/connections/${cid}/probe`, {});
+    const [label, color] = PROBE_STYLE[probe.verdict] || PROBE_STYLE.error;
+    box.innerHTML = `<span style="color:${color}">${label}(${probe.latency_ms}ms)</span>`;
+    if (probe.verdict === "ok") {
+      wizGo(3);
+      $("wiz-done-text").textContent = `✅ ${WIZ_TPL.name} 连接就绪,模型已可用!`;
+    } else {
+      box.innerHTML += `<br><span class="hint">连接已暂存但未通过验证——可修改后重试,或删除该连接。</span>`;
+    }
+    loadConnections();
+  } catch (e) { box.innerHTML = `<span style="color:var(--bad)">❌ ${escapeHtml(String(e.message || e).slice(0, 80))}</span>`; }
+});
+$("wiz-finish").addEventListener("click", wizardFinish);
+
+// 首启检测:连接为空 + 未跳过过 → 弹向导(loadConnections 完成后判定)
+const _origLoad = loadConnections;
+loadConnections = async function () {
+  await _origLoad();
+  const empty = $("conn-banner") && !$("conn-banner").classList.contains("hidden");
+  if (empty && wizardShouldShow()) showWizard();
+};
+
+/* 交付目录保存(v1.1 C3:热生效,进行中任务不受影响) */
+$("btn-save-root").addEventListener("click", async () => {
+  const v = $("set-projects-root").value.trim();
+  if (!v) { $("root-status").textContent = "路径不能为空"; return; }
+  await ensureSession();
+  try {
+    await apiCall("POST", "/api/settings/projects-root",
+      Object.assign({}, { new_root: v }));
+    $("root-status").textContent = "✅ 已保存,新任务生效";
+  } catch (e) {
+    $("root-status").textContent = "❌ " + String(e.message || e).slice(0, 80);
+  }
+});
 
 /* =====================================================================
  * 演示剧本
@@ -1264,11 +1415,14 @@ function monModule(e) {
   const st = { success: ["success", "完成"], failed: ["frozen", "失败"],
                frozen: ["frozen", "冻结"], awaiting_feedback: ["awaiting", "待反馈"] };
   const [cls, label] = st[e.status] || ["running", e.status || "…"];
-  MON.mods[name] = { cls, label, fix: e.fix_attempts || 0 };
+  MON.mods[name] = { cls, label, fix: e.fix_attempts || 0,
+                     msg: (e.message || "").slice(0, 120) };
   $("m-mods").innerHTML = Object.entries(MON.mods).map(([n, m]) => `
     <div class="mod">
       <div class="name">${escapeHtml(n)} ${badge(m.cls)}</div>
       <div class="fix">修复 ${m.fix} 次</div>
+      ${m.cls === "frozen" && m.msg ? `<div class="hint" style="color:var(--bad)">${escapeHtml(m.msg)}</div>
+      <div class="hint">建议：查看 changelog 修复历史 / 调高修复轮数 / 更换更强开发模型</div>` : ""}
     </div>`).join("");
 }
 
@@ -1389,7 +1543,14 @@ function runAsyncTask(taskId, onSettled) {
     }
     if (e.type === "module_done") {
       monModule(e);               // M11-1：模块全景
-      logLine(`模块完成：${e.module || e.name || ""}`, "ok");
+      const mdName = e.module || e.name || "";
+      if (e.status === "frozen" && e.message) {
+        // v1.1 C3：冻结原因前置展示（不再需要翻 validation.md）
+        logLine(`模块冻结：${mdName} —— ${e.message}`, "bad");
+        logLine("建议：查看项目 changelog 修复历史，或调高修复轮数 / 更换更强开发模型", "");
+      } else {
+        logLine(`模块完成：${mdName}`, "ok");
+      }
       return;
     }
     if (e.type === "research") {
@@ -1704,6 +1865,8 @@ async function openSettings() {
     $("set-models").innerHTML =
       (cfg.models || []).map((m) => `<code>${escapeHtml(m)}</code>`).join("、")
       || "（服务端未配置预设模型）";
+    const rootInput = $("set-projects-root");
+    if (rootInput) rootInput.value = cfg.projects_root || "";
     $("set-budget").innerHTML =
       `安全模式预算 <b>${Number(cfg.budget_tokens).toLocaleString()}</b> token；` +
       `自动验证模式 <b>${Number(cfg.auto_budget_tokens).toLocaleString()}</b> token` +

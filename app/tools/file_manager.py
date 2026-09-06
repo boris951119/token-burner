@@ -59,15 +59,25 @@ class FileManager:
     # 项目创建与查询
     # ------------------------------------------------------------------
 
-    def create_project(self, raw_requirement: str) -> ProjectHandle:
+    def create_project(self, raw_requirement: str,
+                       dirname: str | None = None) -> ProjectHandle:
         """创建项目目录并初始化 6.3 节目录树。
 
-        project_id 由原始需求生成（清理非法字符、压缩空白、限长）。
+        project_id 由原始需求生成（清理非法字符、压缩空白、限长）；
+        v1.1 C3：dirname 提供时以自定义名生成（同样清洗 + 时间戳后缀，
+        同秒同名碰撞自动追加随机后缀）。
         """
-        project_id = self._sanitize_project_id(raw_requirement)
+        source = dirname if dirname and dirname.strip() else raw_requirement
+        project_id = self._sanitize_project_id(source)
         timestamp = time.strftime(_TIMESTAMP_FORMAT)
         root = self.projects_root / f"{project_id}_{timestamp}"
-        root.mkdir(parents=True, exist_ok=False)
+        try:
+            root.mkdir(parents=True, exist_ok=False)
+        except FileExistsError:
+            # 同秒同名碰撞（自定义目录名可触发）：追加短随机后缀重试
+            import uuid
+            root = self.projects_root / f"{project_id}_{timestamp}_{uuid.uuid4().hex[:6]}"
+            root.mkdir(parents=True, exist_ok=False)
 
         for sub in ("modules", "code/_shared", "tests", "changelog", "logs", "sessions"):
             (root / sub).mkdir(parents=True, exist_ok=True)

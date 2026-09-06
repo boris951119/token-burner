@@ -396,6 +396,7 @@ class TeamBuilder:
         main_model: str,
         dev_model: str,
         test_model: str,
+        project_dirname: str | None = None,
         mode: str = "safe",
         auto_mode_confirmed: bool = False,
     ) -> TeamConfig:
@@ -413,7 +414,8 @@ class TeamBuilder:
         # 11.0 成本总预算闸门：按模式计算任务预算
         budget_tokens = self.settings.task_token_budget(mode)
 
-        handle = self.file_manager.create_project(requirement)
+        handle = self.file_manager.create_project(
+            requirement, dirname=project_dirname)
 
         config = TeamConfig(
             main_model=main_model,
