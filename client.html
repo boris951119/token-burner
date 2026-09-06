@@ -589,16 +589,18 @@
       </div>
     </section>
 
-    <!-- 右下：API 接口配置 -->
+    <!-- 右下：API 接口配置（v1.1 C1/C2/C3 后端真身：探针 + 模型发现） -->
     <section class="card apiconf">
       <h3>API 接口配置 <button class="btn btn-sm" id="btn-add-api">＋ 添加</button></h3>
+      <p class="hint hidden" id="conn-banner" style="margin:6px 0 2px;">尚无可用连接——点上方「＋ 添加」或点下方模板卡，约 90 秒完成配置并自动验证连通性。</p>
+      <div class="tpls" id="conn-tpl-rows" style="margin:4px 0 8px;"></div>
       <div class="tbl-wrap">
         <table>
-          <thead><tr><th>名称</th><th>Base URL</th><th>模型</th><th>API Key</th><th style="width:60px;">操作</th></tr></thead>
+          <thead><tr><th>名称</th><th>Base URL</th><th>模型</th><th>API Key</th><th>状态</th><th style="width:120px;">操作</th></tr></thead>
           <tbody id="api-rows"></tbody>
         </table>
       </div>
-      <p class="hint" style="margin-top:8px;">配置保存在浏览器本地（localStorage）；主 LLM 调用仍经后端环境变量鉴权。</p>
+      <p class="hint" style="margin-top:8px;">连接保存在服务端本地（secrets.local.json，密钥只写不读）；任务调用按连接凭据鉴权，未覆盖的模型回落服务端环境变量。</p>
     </section>
 
   </div>
@@ -627,7 +629,7 @@
     <div class="sub">
       <h4>🤖 模型（后端预设）</h4>
       <div class="hint" id="set-models" style="margin-top:8px;">加载中…</div>
-      <p class="hint" style="margin-top:6px;">预设列表由服务端 config.json 提供；自定义 API 接口配置见工作台右下角。</p>
+      <p class="hint" style="margin-top:6px;">预设列表由服务端 config.json 提供；自定义连接见工作台右下角「API 接口配置」（保存即生效，免重启）。</p>
     </div>
 
     <!-- 预算 -->
@@ -676,8 +678,9 @@
       <input type="text" id="api-key" placeholder="sk-..."></div>
     <div class="field"><label>Base URL（OpenAI 兼容端点）</label>
       <input type="text" id="api-base" placeholder="如：https://api.deepseek.com/v1（留空用官方默认）"></div>
-    <div class="field"><label>模型（逗号分隔）</label>
-      <input type="text" id="api-models" placeholder="如：deepseek-chat, deepseek-reasoner"></div>
+    <div class="field"><label>模型（逗号分隔）
+      <button type="button" class="btn-ghost btn-sm" id="btn-discover-models">🔍 自动发现</button></label>
+      <input type="text" id="api-models" placeholder="如：deepseek-chat, deepseek-reasoner（可先自动发现）"></div>
     <div class="modal-actions">
       <button class="btn-ghost" id="btn-api-cancel">取消</button>
       <button class="btn" id="btn-api-confirm">确认添加</button>
@@ -732,55 +735,117 @@ const $ = (id) => document.getElementById(id);
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 /* =====================================================================
- * API 接口配置（右下面板）：localStorage 持久化 + 弹窗添加
+ * API 接口配置（右下面板）：v1.1 C1/C2/C3 后端真身
+ *   连接 = 服务端 secrets.local.json（密钥只写不读，响应永远掩码）
+ *   探针 = 微型真实调用，秒级反馈连通性（不进任务预算/成本报告）
+ *   发现 = OpenAI 兼容 {base}/models 自动拉取，失败回落手动输入
  * ===================================================================== */
-const LS_KEY = "tb_api_configs";
-const DEFAULT_CONFIGS = [{
-  name: "OpenAI（示例）", key: "", base: "https://api.openai.com/v1",
-  models: ["gpt-4o", "gpt-4o-mini"],
-}];
+let SESSION_TOKEN = "";
+const PROVIDER_TEMPLATES = [
+  { name: "智谱 GLM",   base: "https://open.bigmodel.cn/api/paas/v4", models: "openai/glm-4.7, openai/glm-4.5-air" },
+  { name: "DeepSeek",  base: "https://api.deepseek.com/v1",          models: "openai/deepseek-chat, openai/deepseek-reasoner" },
+  { name: "阿里云百炼", base: "https://dashscope.aliyuncs.com/compatible-mode/v1", models: "openai/qwen-plus, openai/qwen3.8-flash" },
+  { name: "Moonshot",  base: "https://api.moonshot.cn/v1",           models: "openai/kimi-k2" },
+  { name: "OpenRouter", base: "https://openrouter.ai/api/v1",        models: "openai/openrouter/auto" },
+  { name: "本地 Ollama", base: "http://localhost:11434/v1",           models: "openai/llama3.1" },
+];
+const PROBE_STYLE = {
+  ok:              ["✅ 连通正常", "var(--ok, #16a34a)"],
+  auth_failed:     ["🔑 Key 无效或未授权", "var(--bad, #dc2626)"],
+  model_not_found: ["🔎 模型名不存在（检查模型名 / Base URL）", "var(--bad, #dc2626)"],
+  rate_limited:    ["⏳ 限流或额度不足", "#d97706"],
+  network_error:   ["🌐 网络不通（检查 Base URL）", "var(--bad, #dc2626)"],
+  error:           ["⚠️ 探针失败", "var(--bad, #dc2626)"],
+};
 
-function loadConfigs() {
+async function ensureSession() {
+  if (SESSION_TOKEN) return SESSION_TOKEN;
   try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (raw) return JSON.parse(raw);
-  } catch (e) { /* 损坏则回落默认 */ }
-  return JSON.parse(JSON.stringify(DEFAULT_CONFIGS));
-}
-function saveConfigs() { localStorage.setItem(LS_KEY, JSON.stringify(API_CONFIGS)); }
-
-function maskKey(key) {
-  if (!key) return '<span style="color:var(--bad)">未填写</span>';
-  if (key.length <= 8) return key.slice(0, 2) + "****";
-  return key.slice(0, 6) + "****" + key.slice(-4);
-}
-
-function renderConfigs() {
-  $("api-rows").innerHTML = API_CONFIGS.map((c, i) => `
-    <tr>
-      <td><b>${escapeHtml(c.name)}</b></td>
-      <td class="mono">${escapeHtml(c.base || "（官方默认）")}</td>
-      <td class="mono">${escapeHtml((c.models || []).join(", ") || "—")}</td>
-      <td class="mono">${maskKey(c.key)}</td>
-      <td><button class="danger small" data-del="${i}">删除</button></td>
-    </tr>`).join("");
-  $("api-rows").querySelectorAll("[data-del]").forEach(btn => {
-    btn.addEventListener("click", () => {
-      API_CONFIGS.splice(Number(btn.dataset.del), 1);
-      saveConfigs(); renderConfigs();
-    });
-  });
+    const d = await apiGet("/api/session");
+    SESSION_TOKEN = (d && d.token) || "";
+  } catch (e) { SESSION_TOKEN = ""; }
+  return SESSION_TOKEN;
 }
 
 function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 
-let API_CONFIGS = loadConfigs();
-renderConfigs();
+function probeStatusCellHtml(result) {
+  const [label, color] = PROBE_STYLE[result.verdict] || PROBE_STYLE.error;
+  return `<span style="color:${color}">${label}</span><br><span class="hint">${result.latency_ms}ms · ${escapeHtml((result.detail || "").slice(0, 70))}</span>`;
+}
 
-/* 弹窗 */
-$("btn-add-api").addEventListener("click", () => {
+async function probeConnectionCell(cid, cell) {
+  cell.innerHTML = '<span class="hint">⏳ 探针中…</span>';
+  await ensureSession();
+  try {
+    const r = await apiCall("POST", `/api/connections/${cid}/probe`, {});
+    cell.innerHTML = probeStatusCellHtml(r);
+  } catch (e) {
+    cell.innerHTML = `<span style="color:var(--bad)">⚠️ ${escapeHtml(String(e.message || e).slice(0, 70))}</span>`;
+  }
+}
+
+function renderConnTemplates() {
+  const box = $("conn-tpl-rows");
+  if (!box) return;
+  box.innerHTML = PROVIDER_TEMPLATES.map((t, i) =>
+    `<button class="btn-ghost btn-sm" data-tpl="${i}">${escapeHtml(t.name)}</button>`).join(" ");
+  box.querySelectorAll("[data-tpl]").forEach(b => b.addEventListener("click", () => {
+    const t = PROVIDER_TEMPLATES[Number(b.dataset.tpl)];
+    ["api-name", "api-key", "api-base", "api-models"].forEach(id => $(id).value = "");
+    $("api-name").value = t.name;
+    $("api-base").value = t.base;
+    $("api-models").value = t.models;
+    $("api-modal").classList.remove("hidden");
+    $("api-key").focus();
+  }));
+}
+
+async function loadConnections() {
+  let data;
+  try { data = await apiGet("/api/connections"); }
+  catch (e) {
+    $("api-rows").innerHTML = `<tr><td colspan="6" style="color:var(--bad)">无法连接后端（${escapeHtml(String(e.message || e).slice(0, 80))}）——请以 python -m app.server 启动后刷新</td></tr>`;
+    $("conn-banner").classList.remove("hidden");
+    renderConnTemplates();
+    return;
+  }
+  const conns = data.connections || [];
+  $("conn-banner").classList.toggle("hidden", conns.length > 0);
+  $("api-rows").innerHTML = conns.map(c => `
+    <tr>
+      <td><b>${escapeHtml(c.name)}</b></td>
+      <td class="mono">${escapeHtml(c.base_url || "（官方默认）")}</td>
+      <td class="mono">${escapeHtml((c.models || []).join(", ") || "—")}</td>
+      <td class="mono">${escapeHtml(c.api_key)}</td>
+      <td class="conn-status" data-cid="${escapeHtml(c.id)}"><span class="hint">未探针</span></td>
+      <td style="white-space:nowrap;">
+        <button class="btn-ghost btn-sm" data-probe="${escapeHtml(c.id)}">探针</button>
+        <button class="danger small" data-del="${escapeHtml(c.id)}">删除</button>
+      </td>
+    </tr>`).join("") || `<tr><td colspan="6" class="hint">尚无连接——点「＋ 添加」或上方模板卡开始</td></tr>`;
+  $("api-rows").querySelectorAll("[data-del]").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      await ensureSession();
+      try { await apiCall("DELETE", "/api/connections/" + btn.dataset.del); }
+      catch (e) { alert("删除失败: " + (e.message || e)); }
+      loadConnections();
+    });
+  });
+  $("api-rows").querySelectorAll("[data-probe]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const cell = $("api-rows").querySelector(`.conn-status[data-cid="${btn.dataset.probe}"]`);
+      if (cell) probeConnectionCell(btn.dataset.probe, cell);
+    });
+  });
+  renderConnTemplates();
+}
+
+/* 弹窗（保存后自动探针，反馈连通性） */
+$("btn-add-api").addEventListener("click", async () => {
   ["api-name", "api-key", "api-base", "api-models"].forEach(id => $(id).value = "");
+  await ensureSession();
   $("api-modal").classList.remove("hidden");
   $("api-name").focus();
 });
@@ -788,19 +853,50 @@ $("btn-api-cancel").addEventListener("click", () => $("api-modal").classList.add
 $("api-modal").addEventListener("click", (e) => {
   if (e.target === $("api-modal")) $("api-modal").classList.add("hidden");
 });
-$("btn-api-confirm").addEventListener("click", () => {
+$("btn-api-confirm").addEventListener("click", async () => {
   const name = $("api-name").value.trim();
   const key = $("api-key").value.trim();
+  const base = $("api-base").value.trim();
+  const models = $("api-models").value.split(/[,,]/).map(x => x.trim()).filter(Boolean);
   if (!name) { $("api-name").focus(); return; }
   if (!key) { $("api-key").focus(); return; }
-  API_CONFIGS.push({
-    name, key,
-    base: $("api-base").value.trim(),
-    models: $("api-models").value.split(/[,,]/).map(s => s.trim()).filter(Boolean),
-  });
-  saveConfigs(); renderConfigs();
+  if (!models.length) { $("api-models").focus(); return; }
+  await ensureSession();
+  try {
+    await apiCall("POST", "/api/connections",
+      { name, base_url: base, api_key: key, models });
+  } catch (e) { alert("保存失败: " + (e.message || e)); return; }
   $("api-modal").classList.add("hidden");
+  await loadConnections();
+  const list = await apiGet("/api/connections").catch(() => ({ connections: [] }));
+  const fresh = (list.connections || []).find(c => c.name === name);
+  if (fresh) {
+    const cell = $("api-rows").querySelector(`.conn-status[data-cid="${fresh.id}"]`);
+    if (cell) probeConnectionCell(fresh.id, cell);
+  }
 });
+
+/* 自动发现（弹窗内，未保存也可用；失败回落手动输入） */
+$("btn-discover-models").addEventListener("click", async () => {
+  const base = $("api-base").value.trim();
+  const key = $("api-key").value.trim();
+  if (!base || !key) { alert("自动发现需要先填写 Base URL 和 API Key"); return; }
+  const btn = $("btn-discover-models");
+  btn.disabled = true; const old = btn.textContent; btn.textContent = "发现中…";
+  try {
+    const r = await apiCall("POST", "/api/models/discover",
+      { base_url: base, api_key: key });
+    if (r.ok && r.models.length) {
+      $("api-models").value = r.models.map(m => "openai/" + m).join(", ");
+    } else {
+      alert("自动发现失败：" + (r.detail || "该端点不支持 /models") + "。请手动填写模型名。");
+    }
+  } catch (e) { alert("自动发现失败: " + (e.message || e)); }
+  btn.disabled = false; btn.textContent = old;
+});
+
+/* 首次加载 */
+ensureSession().then(loadConnections);
 
 /* =====================================================================
  * 演示剧本

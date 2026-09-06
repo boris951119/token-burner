@@ -168,3 +168,99 @@ def resolve_credentials(model: str) -> dict | None:
         }
     except Exception:
         return None
+
+
+# ---------------------------------------------------------------------------
+# v1.1 C2:探针验证 + 模型自动发现
+# ---------------------------------------------------------------------------
+
+_VERDICT_MARKERS = (
+    ("auth_failed", ("401", "403", "unauthorized", "invalid api key",
+                     "invalid_api_key", "authentication", "permission denied",
+                     "invalid x-api-key", "unauthenticated")),
+    ("model_not_found", ("model_not_found", "model not found",
+                         "does not exist", "404", "no matching")),
+    ("rate_limited", ("429", "rate limit", "ratelimit", "quota",
+                      "insufficient", "balance", "arrears", "欠费")),
+    ("network_error", ("timeout", "timed out", "connection", "connect",
+                       "resolve", "getaddrinfo", "unreachable", "ssl",
+                       "network")),
+)
+
+
+def probe_connection(conn: dict, model: str | None = None,
+                     completion_fn=None) -> dict:
+    """连接探针(C2):用连接自身的凭据发一次微型真实调用。
+
+    3 秒级告诉用户 Key/地址/模型名是否可用。直接使用连接凭据(litellm
+    per-call 参数),不经 ModelClient——不进任务预算、不进调用日志、
+    不污染成本报告。verdict: ok | auth_failed | model_not_found |
+    rate_limited | network_error | error。
+    completion_fn 可注入(测试桩)。
+    """
+    models = conn.get("models") or []
+    target = model or (models[0] if models else "")
+    if not target:
+        return {"ok": False, "verdict": "error", "latency_ms": 0,
+                "model": "", "detail": "连接未配置模型,无法探针"}
+    t0 = time.time()
+    try:
+        fn = completion_fn
+        if fn is None:
+            try:
+                import litellm
+            except ImportError as exc:
+                raise RuntimeError(f"litellm 未安装: {exc}") from exc
+            fn = litellm.completion
+        kwargs = {"model": target,
+                  "messages": [{"role": "user", "content": "ping"}],
+                  "max_tokens": 8, "timeout": 20}
+        if conn.get("base_url"):
+            kwargs["base_url"] = conn["base_url"]
+        if conn.get("api_key"):
+            kwargs["api_key"] = conn["api_key"]
+        fn(**kwargs)
+        return {"ok": True, "verdict": "ok",
+                "latency_ms": int((time.time() - t0) * 1000),
+                "model": target, "detail": "连通正常"}
+    except Exception as exc:
+        text = f"{type(exc).__name__} {exc}"
+        low = text.lower()
+        verdict = "error"
+        for v, markers in _VERDICT_MARKERS:
+            if any(m in low for m in markers):
+                verdict = v
+                break
+        return {"ok": False, "verdict": verdict,
+                "latency_ms": int((time.time() - t0) * 1000),
+                "model": target, "detail": text[:200]}
+
+
+def discover_models(base_url: str, api_key: str,
+                    http_get=None) -> dict:
+    """模型自动发现(C2):对 OpenAI 兼容端点拉取 {base}/models 清单。
+
+    http_get(url, api_key) -> dict 可注入(测试桩);默认 urllib。
+    失败返回 {"ok": False, "models": [], "detail": ...},前端回落手动输入。
+    """
+    base = (base_url or "").rstrip("/")
+    if not base:
+        return {"ok": False, "models": [], "detail": "缺少 Base URL"}
+    url = base + "/models"
+
+    def _default_get(u: str, key: str) -> dict:
+        import urllib.request
+        req = urllib.request.Request(
+            u, headers={"Authorization": f"Bearer {key}",
+                        "User-Agent": "token-burner"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read().decode("utf-8", errors="replace"))
+
+    getter = http_get or _default_get
+    try:
+        data = getter(url, api_key)
+        items = data.get("data", []) if isinstance(data, dict) else []
+        ids = [m.get("id") for m in items if isinstance(m, dict) and m.get("id")]
+        return {"ok": True, "models": ids}
+    except Exception as exc:
+        return {"ok": False, "models": [], "detail": str(exc)[:200]}

@@ -117,6 +117,19 @@ class ConnectionRequest(BaseModel):
     models: list[str] = Field(min_length=1)
 
 
+class ProbeRequest(BaseModel):
+    """v1.1 C2:探针目标模型(缺省用连接第一个模型)。"""
+
+    model: str | None = None
+
+
+class DiscoverRequest(BaseModel):
+    """v1.1 C2:模型自动发现(OpenAI 兼容 {base}/models)。"""
+
+    base_url: str = Field(min_length=1)
+    api_key: str = Field(min_length=1)
+
+
 # ---------------------------------------------------------------------------
 # 序列化
 # ---------------------------------------------------------------------------
@@ -355,6 +368,30 @@ def create_app(
         _sync_models()
         return {"ok": True,
                 "available_models": registry_models(app.state.preset_models, store)}
+
+    @app.post("/api/connections/{cid}/probe")
+    def probe_connection_endpoint(cid: str, request: Request,
+                                  x_session_token: str = Header(default=""),
+                                  req: ProbeRequest | None = None) -> dict:
+        """v1.1 C2:连接探针——微型真实调用,3 秒级反馈连通性。
+
+        直接使用连接凭据,不经 ModelClient:不进任务预算、不进调用日志、
+        不污染成本报告。
+        """
+        _require_session(request, x_session_token)
+        conn = app.state.connection_store.get(cid)
+        if conn is None:
+            raise HTTPException(status_code=404, detail="连接不存在")
+        from app.utils.connections import probe_connection
+        return probe_connection(conn, model=(req.model if req else None))
+
+    @app.post("/api/models/discover")
+    def discover_models_endpoint(req: DiscoverRequest, request: Request,
+                                 x_session_token: str = Header(default="")) -> dict:
+        """v1.1 C2:模型自动发现(OpenAI 兼容 /models),失败回落手动输入。"""
+        _require_session(request, x_session_token)
+        from app.utils.connections import discover_models
+        return discover_models(req.base_url, req.api_key)
 
     @app.get("/", include_in_schema=False)
     def index():
