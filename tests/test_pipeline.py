@@ -256,6 +256,7 @@ class TestConservativeFallback:
 
     def test_generated_modules_importable_in_same_process(self, fm):
         # 回归：模块文件与模块同名（非 main.py）→ 多模块同进程导入互不冲突
+        import os
         import subprocess
         import sys
 
@@ -279,6 +280,7 @@ class TestConservativeFallback:
         out = subprocess.run(
             [sys.executable, "-c", probe],
             capture_output=True, text=True, timeout=30,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
         )
         assert out.returncode == 0, out.stderr
         assert "auth.py" in out.stdout  # auth 来自 auth.py 而非 user/main.py
