@@ -26,10 +26,20 @@ from tests.test_docker_executor import FakeDockerRunner
 
 
 def _docker_available() -> bool:
-    """docker 可用性探测（命令缺失/守护进程未启动一律视为不可用）。"""
+    """docker 可用性探测（命令缺失/守护进程未启动一律视为不可用）。
+
+    额外要求 Linux 容器模式：GitHub windows runner 默认 Windows 容器，
+    python:3.11-slim 等 Linux 镜像无法拉取（CI 第四跑取证：no matching
+    manifest for windows/amd64）。
+    """
     try:
-        return subprocess.run(["docker", "info"], capture_output=True,
-                              timeout=15).returncode == 0
+        if subprocess.run(["docker", "info"], capture_output=True,
+                          timeout=15).returncode != 0:
+            return False
+        ostype = subprocess.run(
+            ["docker", "version", "--format", "{{.Server.Os}}"],
+            capture_output=True, text=True, timeout=15).stdout.strip()
+        return ostype == "linux"
     except Exception:
         return False
 
@@ -168,7 +178,7 @@ docker_live = pytest.mark.skipif(
 @docker_live
 class TestQuotaLive:
     @pytest.mark.skipif(not _docker_available(),
-        reason="环境无 Docker——真实 OOM 终止只能在容器内验证")
+        reason="环境无 Linux 容器 Docker——真实 OOM 终止只能在 Linux 容器内验证")
     def test_memory_hog_killed_by_quota(self):
         """内存配额真实终止：256m 上限下吃 512m 必被 OOM kill。
 
