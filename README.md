@@ -67,6 +67,17 @@ GEMINI_API_KEY=
 > GLM 等第三方 OpenAI 兼容端点还需设置 `OPENAI_API_BASE` 环境变量，
 > 例如 `https://open.bigmodel.cn/api/paas/v4`。
 
+### ⚡ 90 秒上手（Web 工作台引导）
+
+1. `python -m app.server` → 浏览器打开 http://127.0.0.1:8000/
+2. 首次打开会弹出**连接向导**：选模型服务商模板（智谱 / DeepSeek /
+   Moonshot / 阿里云百炼 / OpenRouter / 本地 Ollama）→ 粘贴 API Key →
+   点「🔍 自动发现模型」→ 点「验证连通」绿灯即成
+3. 回到工作台输入一句需求（如"开发一个待办事项 CLI"）→ 点火
+
+连接保存在服务端 `secrets.local.json`（密钥只写不读），修改模型免重启；
+交付目录可在「⚙ 设置 → 📁 交付目录」随时切换。
+
 ### 三种打开方式
 
 ```bash
