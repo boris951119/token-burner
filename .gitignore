@@ -72,3 +72,6 @@ __pycache__/
 vscode-extension/node_modules/
 vscode-extension/out/
 *.vsix
+
+# v1.1 C1 连接注册表密钥库
+secrets.local.json
