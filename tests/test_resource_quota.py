@@ -25,6 +25,15 @@ from app.execution.factory import build_executor
 from tests.test_docker_executor import FakeDockerRunner
 
 
+def _docker_available() -> bool:
+    """docker 可用性探测（命令缺失/守护进程未启动一律视为不可用）。"""
+    try:
+        return subprocess.run(["docker", "info"], capture_output=True,
+                              timeout=15).returncode == 0
+    except Exception:
+        return False
+
+
 def _make(**kw) -> tuple[DockerExecutor, FakeDockerRunner]:
     fake = FakeDockerRunner(**{k: v for k, v in kw.items()
                                if k in FakeDockerRunner.__init__.__code__.co_varnames})
@@ -158,9 +167,20 @@ docker_live = pytest.mark.skipif(
 
 @docker_live
 class TestQuotaLive:
+    @pytest.mark.skipif(not _docker_available(),
+        reason="环境无 Docker——真实 OOM 终止只能在容器内验证")
     def test_memory_hog_killed_by_quota(self):
-        """内存配额真实终止：256m 上限下吃 512m 必被 OOM kill。"""
-        executor, _ = _make(mem_limit="256m")
+        """内存配额真实终止：256m 上限下吃 512m 必被 OOM kill。
+
+        M17-2 修正：此前经 _make 注入 FakeDockerRunner（默认恒返回
+        成功）——"真实终止"测试用假 runner，本地无 Docker 被跳过从未
+        真跑，首次 CI（有 Docker）即挂。改用真实 runner + skipif 守卫。
+        """
+        executor = DockerExecutor(
+            image="python:3.11-slim",
+            network_enabled=False,
+            mem_limit="256m",
+        )
         result = executor.run(
             "x = []\nwhile True:\n    x.append(b'x' * (1024 * 1024))\n",
             "", timeout=60, module="m",

@@ -277,11 +277,18 @@ class TestConservativeFallback:
             "print(user.__file__); print(auth.__file__)"
             % (code_root / "user", code_root / "data", code_root / "auth")
         )
-        out = subprocess.run(
-            [sys.executable, "-c", probe],
-            capture_output=True, text=True, timeout=30,
-            env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
-        )
-        assert out.returncode == 0, out.stderr
-        assert "auth.py" in out.stdout  # auth 来自 auth.py 而非 user/main.py
-        assert "user.py" in out.stdout
+        # M17-2：stdout 走临时文件而非管道——CI runner 上管道捕获偶发
+        # 返回 None（根因未明），文件承载语义确定
+        out_file = handle.root / "_probe_stdout.txt"
+        with open(out_file, "w", encoding="utf-8") as fh:
+            proc = subprocess.run(
+                [sys.executable, "-c", probe],
+                stdout=fh, stderr=subprocess.PIPE, text=True,
+                encoding="utf-8", errors="replace", timeout=30,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"},
+            )
+        assert proc.returncode == 0, proc.stderr
+        content = out_file.read_text(encoding="utf-8")
+        out_file.unlink(missing_ok=True)
+        assert "auth.py" in content  # auth 来自 auth.py 而非 user/main.py
+        assert "user.py" in content
