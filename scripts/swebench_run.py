@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import subprocess
 import sys
@@ -30,6 +31,9 @@ from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # 仓库根入 path(app.* 可导入)
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # swebench_recipes 同目录
+from swebench_recipes import build_install_commands, recipe_for  # noqa: E402
 
 from dotenv import load_dotenv  # noqa: E402
 
@@ -124,16 +128,42 @@ def ensure_repo(instance: dict, cache: Path) -> Path:
     return target
 
 
-def pip_install_repo(repo_path: Path) -> str:
-    """pip install -e .(flask/xarray 等仓库测试的导入前提)。
+def create_instance_venv(instance_id: str, cache: Path,
+                         python_exe: str | None = None) -> tuple[Path, str]:
+    """v1.2 环境适配:每实例独立 venv——仓库依赖永不污染全局环境。
 
-    返回空串 = 成功;否则返回截尾错误(调用方记入实例备注)。
+    (取证:pytest-dev/pytest 实例的 pip install -e . 曾把克隆的旧版
+    pytest 装进全局环境,致 runner 自身 pytest 崩溃。)
+    返回 (venv 路径, venv 内 python 绝对路径)。
     """
-    proc = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "-e", ".", "--quiet",
-         "--disable-pip-version-check"],
-        cwd=repo_path, capture_output=True, text=True, timeout=600)
-    return "" if proc.returncode == 0 else (proc.stderr or proc.stdout)[-200:]
+    base = python_exe or sys.executable
+    venv_dir = cache / "venvs" / instance_id
+    venv_dir.parent.mkdir(parents=True, exist_ok=True)
+    if not (venv_dir / "pyvenv.cfg").exists():
+        subprocess.run([base, "-m", "venv", str(venv_dir)], check=True,
+                       capture_output=True, text=True, timeout=300)
+    py = venv_dir / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    if not py.exists():
+        py = venv_dir / "bin" / "python"
+    return venv_dir, str(py)
+
+
+def install_repo_with_recipe(repo_path: Path, repo: str) -> list[str]:
+    """v1.2 环境适配层:按 repo 家族配方安装(钉版/本体/extras/补装)。
+
+    返回备注列表(空 = 全部成功;条目 = 失败阶段摘要,记入实例报告)。
+    命令构建在 swebench_recipes.build_install_commands(纯函数,已测)。
+    """
+    notes: list[str] = []
+    base = [sys.executable, "-m", "pip", "install", "--quiet",
+            "--disable-pip-version-check"]
+    for cmd in build_install_commands(recipe_for(repo), pip=base):
+        proc = subprocess.run(cmd, cwd=repo_path, capture_output=True,
+                              text=True, timeout=900)
+        if proc.returncode != 0:
+            step = " ".join(cmd[-1:]) or "install"
+            notes.append(f"{step} 失败: {(proc.stderr or proc.stdout)[-150:]}")
+    return notes
 
 
 def apply_test_patch(instance: dict, repo_path: Path) -> None:
@@ -153,7 +183,8 @@ def apply_test_patch(instance: dict, repo_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def run_instance(instance: dict, cache: Path, model: str,
-                 max_rounds: int, pip_install: bool = True) -> dict:
+                 max_rounds: int, pip_install: bool = True,
+                 use_venv: bool = True) -> dict:
     from app.agents.repo_fixer import RepoFixer
     from app.config import load_settings
     from app.utils.model_client import ModelClientFactory
@@ -168,10 +199,23 @@ def run_instance(instance: dict, cache: Path, model: str,
     try:
         repo_path = ensure_repo(instance, cache)
         apply_test_patch(instance, repo_path)
-        if pip_install:
-            note = pip_install_repo(repo_path)
-            if note:
-                record_notes.append(note[:200])
+        verify_python = sys.executable
+        if use_venv:
+            _venv, verify_python = create_instance_venv(
+                record["instance_id"], cache)
+            recipe_base = [verify_python, "-m", "pip", "install", "--quiet",
+                           "--disable-pip-version-check"]
+            for cmd in build_install_commands(
+                    recipe_for(instance["repo"]), pip=recipe_base):
+                proc = subprocess.run(cmd, cwd=repo_path, capture_output=True,
+                                      text=True, timeout=1200)
+                if proc.returncode != 0:
+                    record_notes.append(
+                        f"{' '.join(cmd[-2:])} 失败: "
+                        f"{(proc.stderr or proc.stdout)[-130:]}")
+        elif pip_install:
+            record_notes.extend(
+                install_repo_with_recipe(repo_path, instance["repo"]))
         f2p = json.loads(instance.get("FAIL_TO_PASS") or "[]")
         p2p = json.loads(instance.get("PASS_TO_PASS") or "[]")
         settings = load_settings()          # 载入 config.json(超时/重试/16k 输出)
@@ -188,7 +232,7 @@ def run_instance(instance: dict, cache: Path, model: str,
         if hints:
             issue += "\n\n补充线索:\n" + hints[:2000]
         fixer = RepoFixer(llm, repo_path,
-                          test_cmd=[sys.executable, "-m", "pytest", "-q",
+                          test_cmd=[verify_python, "-m", "pytest", "-q",
                                     "--no-header"],
                           max_rounds=max_rounds)
         result = fixer.fix(issue, test_files=list(f2p))
@@ -225,6 +269,8 @@ def main() -> None:
     ap.add_argument("--max-rounds", type=int, default=2)
     ap.add_argument("--no-install", action="store_true",
                     help="跳过 pip install -e .(默认安装以支持仓库测试导入)")
+    ap.add_argument("--no-venv", action="store_true",
+                    help="跳过每实例 venv 隔离(不推荐:仓库依赖会污染全局环境)")
     ap.add_argument("--workers", type=int, default=1,
                     help="并行实例数(实例间相互独立;默认 1 串行)")
     ap.add_argument("--retry-errors", metavar="DIR",
@@ -263,7 +309,8 @@ def main() -> None:
     def _run_and_save(i, ins):
         print(f"[{i}/{len(picked)}] {ins.get('repo')} …", flush=True)
         rec = run_instance(ins, Path(args.repos_cache), args.model,
-                           args.max_rounds, pip_install=not args.no_install)
+                           args.max_rounds, pip_install=not args.no_install,
+                           use_venv=not args.no_venv)
         (out_dir / f"{rec['instance_id'].replace('/', '_')}.json").write_text(
             json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"[{i}] -> {rec['status']} tokens={rec['tokens']}", flush=True)
