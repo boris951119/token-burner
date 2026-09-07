@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import threading
+
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -118,15 +120,21 @@ class Pipeline:
         self._git_factory = git_manager_factory or GitManager
         # 11.0 任务级基线：看板只统计本任务切片（跨任务不污染，问题 7）
         self._task_baseline = 0
+        # v1.2 S0:并行模块开发下事件派发互斥(多 worker 同时 module_done)
+        self._emit_lock = threading.Lock()
 
     def _emit(self, event_type: str, **data) -> None:
-        """M8-4：发进度事件（轻量钩子，不改编排逻辑）。"""
-        if self._on_event is None:
-            return
-        try:
-            self._on_event(event_type, data)
-        except Exception:
-            pass  # 进度回调失败不影响任务
+        """M8-4：发进度事件（轻量钩子，不改编排逻辑）。
+
+        v1.2 S0:并行开发下多 worker 同时发事件 → 派发互斥。
+        """
+        with self._emit_lock:
+            if self._on_event is None:
+                return
+            try:
+                self._on_event(event_type, data)
+            except Exception:
+                pass  # 进度回调失败不影响任务
 
     def _resolve_models(
         self, route: RoutingResult, models: tuple[str, str, str] | None
@@ -172,6 +180,25 @@ class Pipeline:
         if not getattr(self.settings, "enable_git", False):
             return None
         return self._git_factory()
+
+    @staticmethod
+    def _dependency_layers(order: list[str], interfaces: dict) -> list[list[str]]:
+        """v1.2 S0:按契约依赖把拓扑序切分为可并行的层。
+
+        order 为拓扑序;模块的层号 = 其全部依赖层号最大值 + 1。
+        同层模块相互无依赖,可安全并发开发。
+        """
+        layer_of: dict[str, int] = {}
+        layers: list[list[str]] = []
+        for name in order:
+            deps = [d for d in (interfaces.get(name) or {}).get("dependencies", [])
+                    if d in layer_of]
+            lvl = max((layer_of[d] for d in deps), default=-1) + 1
+            layer_of[name] = lvl
+            if lvl >= len(layers):
+                layers.append([])
+            layers[lvl].append(name)
+        return layers
 
     def run(
         self,
@@ -504,9 +531,25 @@ class Pipeline:
         self._bind_executor_project(team.project_id)
         # 14.4：_shared/ 内容签名基线（变更检测）
         shared_baseline = self.file_manager.shared_signature(team.project_id)
-        for name in order:
-            if name in module_results:
-                continue  # resume：已完成/已冻结模块跳过（不重复消耗 LLM 调用）
+
+        def _finish_one(name: str) -> None:
+            """单模块收尾:事件 + 阶段提交 + _shared 回归(串行段,并发后统一执行)。"""
+            self._emit(
+                "module_done", module=name,
+                status=module_results[name].status.value,
+                fix_attempts=module_results[name].fix_attempts,
+                # C3 冻结原因前置展示:截尾原因直通工作台
+                message=(module_results[name].message or "")[:200],
+            )
+            if git is not None:
+                status = "完成" if module_results[name].status is ModuleStatus.SUCCESS else "冻结"
+                git.commit_stage(
+                    project_root, f"module:{name}",
+                    f"模块 {name} {status}（修复 {module_results[name].fix_attempts} 次）",
+                )
+            return None
+
+        def _develop_one(name: str) -> None:
             plan = next(p for p in plans if p.name == name)
             module_results[name] = dev_loop.run_module(
                 name,
@@ -516,22 +559,29 @@ class Pipeline:
                 project_modules=set(order),
                 user_feedback=user_feedback,
             )
-            # M8-4：单模块完成事件（插件逐模块进度）
-            self._emit(
-                "module_done", module=name,
-                status=module_results[name].status.value,
-                fix_attempts=module_results[name].fix_attempts,
-                # C3 冻结原因前置展示:截尾原因直通工作台
-                message=(module_results[name].message or "")[:200],
-            )
-            # 14 章：每模块完成后阶段提交（含冻结模块——保留现场）
-            if git is not None:
-                status = "完成" if module_results[name].status is ModuleStatus.SUCCESS else "冻结"
-                git.commit_stage(
-                    project_root, f"module:{name}",
-                    f"模块 {name} {status}（修复 {module_results[name].fix_attempts} 次）",
-                )
-            # 14.4/12.7：_shared 变更 → 已完成依赖模块整包回归
+
+        # v1.2 S0:按契约依赖分层;同层无依赖可并发(默认 1 = 完全串行,
+        # 行为与 v1.0 逐字节一致)。层间仍按拓扑序,层结束后统一做
+        # 事件/提交/_shared 回归(收尾段串行化,语义与串行等价)。
+        layers = self._dependency_layers(order, interfaces)
+        workers = max(1, int(self.settings.module_parallelism))
+        for layer in layers:
+            todo = [n for n in layer if n not in module_results]
+            if not todo:
+                continue  # resume:该层全部已完成/已冻结
+            if workers > 1 and len(todo) > 1:
+                from concurrent.futures import ThreadPoolExecutor
+
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    futures = [pool.submit(_develop_one, n) for n in todo]
+                    for f in futures:
+                        f.result()  # 任一异常 → 传播(与串行语义一致)
+            else:
+                for n in todo:
+                    _develop_one(n)
+            # 收尾(串行):层内模块按原拓扑序 事件 → 提交 → _shared 回归
+            for n in todo:
+                _finish_one(n)
             shared_baseline = self._shared_regression(
                 team, dev_loop, interfaces, order, module_results,
                 shared_baseline, git, project_root,

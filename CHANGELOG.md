@@ -1,5 +1,30 @@
 # Changelog
 
+## v1.2 · S0 无依赖模块并行开发（2026-09-07）：等待时间 2-4× 压缩
+
+> v1.2-workplan S0——同一依赖层的模块并发开发,层间仍按拓扑序。
+> 缺省 `module_parallelism=1`(串行,行为与 v1.0 逐字节一致)。
+
+- **实现**(`pipeline.py`):新增 `_dependency_layers(order, interfaces)`——
+  按契约依赖把拓扑序切分为可并行层;模块循环改层执行:同层多模块经
+  `ThreadPoolExecutor(max_workers=module_parallelism)` 并发 run_module,
+  层结束后**串行收尾**(module_done 事件 → git 阶段提交 → _shared 回归),
+  收尾语义与串行等价。
+
+- **并发安全边界**:_shared 读-合并-写全程持模块级锁
+  (`file_manager._SHARED_WRITE_LOCK`,S0 并发下合并守卫不再可能交错);
+  pipeline 事件派发互斥(`_emit_lock`);dev_loop 链接门禁索引按原惰性
+  构建不变;预算闸门继续逐调用拦截。
+
+- **测试**:新增 `test_parallel_modules.py` 7 项——分层单测(独立/链式/
+  混合/team 结构)+ 按提示词路由的并行安全桩(RoutingLLM)+ 同层执行
+  区间重叠直接证据 + 串行缺省等价 + auth 依赖层顺序。全量回归
+  **1071 → 1078 passed / 7 skipped / 0 failed**。
+
+- **使用**:config.json `"module_parallelism": 2`(建议 2-3;独立模块多
+  的需求收益最大,链式依赖需求自动退化为串行)。
+
+
 ## v1.1 · C3 收官批（2026-09-06）：冻结展示 + 交付目录 + 首启向导
 
 > C3 全部落地(v1.1-workplan 用户批准的三项追加 + 全屏向导)。
