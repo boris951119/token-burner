@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.2 · S1 repo-patch 模式（2026-09-07）：修已有仓库的 issue
+
+> v1.2-workplan S1——产品从「从零造项目」扩展到「修真实代码库」,
+> SWE-bench 的能力前提。独立模块 `app/agents/repo_fixer.py`,
+> greenfield 主路径零改动。
+
+- **RepoFixer 三阶段**:plan(issue + 仓库文件树 → 目标文件清单与意图,
+  JSON)→ patch(逐文件:原内容 + 修改意图 → 完整新版,最小改动约束
+  写入提示词)→ verify(仓库内运行验证命令,缺省 pytest)。失败进修复
+  循环(≤ max_rounds):带测试失败输出重出全部已改文件完整新版。
+
+- **安全边界**:LLM 只能改文件(仓库内相对路径,绝对路径/.. 越界一律
+  拒绝并记录 skipped_paths);命令执行仅限我方验证运行;diff 取自
+  git diff(无 .git 明确报错)。
+
+- **诚实边界**:repo 模式无 interfaces.json,链接/接口门禁不适用,
+  验收以仓库自带测试为准(workplan 已注明)。
+
+- 测试:新增 `test_repo_fixer.py` 6 项(最小补丁转绿/多文件/修复轮
+  恢复/不收敛报错/路径越界拒绝/无 git 报错)。全量回归 **1071 → 1084
+  passed / 7 skipped / 0 failed**;greenfield 主路径(1035+ 既有用例)零回归。
+
+
 ## v1.2 · S0 无依赖模块并行开发（2026-09-07）：等待时间 2-4× 压缩
 
 > v1.2-workplan S0——同一依赖层的模块并发开发,层间仍按拓扑序。
