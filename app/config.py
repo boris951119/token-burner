@@ -111,6 +111,9 @@ class Settings:
     projects_root: str = ""
     # v1.1 C1:前端连接注册表的本地密钥库路径(.gitignore 覆盖,密钥只写不读)
     connections_path: str = "secrets.local.json"
+    # v1.2 S0:无依赖模块并行开发数(1 = 串行缺省,行为与 v1.0 一致;
+    # 2-4 = 同层并发开发,加速 2-4×,预算/门禁语义不变)
+    module_parallelism: int = 1
 
     # ---- M2 Docker 沙箱（auto 模式可选容器级隔离）----
     # 缺省 False：auto 模式沿用进程级 LocalExecutor（行为与 v0.3.1 一致）

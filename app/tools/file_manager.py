@@ -10,6 +10,8 @@
 
 from __future__ import annotations
 
+import threading
+
 import json
 import re
 import time
@@ -33,6 +35,10 @@ _CODE_DIR = Path(__file__).resolve().parent / "code"
 if _CODE_DIR.is_dir() and str(_CODE_DIR) not in sys.path:
     sys.path.insert(0, str(_CODE_DIR))
 '''
+
+
+# v1.2 S0:并行开发下 _shared 写入串行化(模块级锁)
+_SHARED_WRITE_LOCK = threading.Lock()
 
 
 class ProjectHandle:
@@ -193,35 +199,37 @@ class FileManager:
         语法解析失败回退整文件覆盖（接口门禁兜底）。
         内容相同则不重写（mtime 稳定，变更检测以内容为准）。
         """
-        handle = self._require_project(project_id)
-        self._check_filename(filename)
-        path = handle.root / "code" / "_shared" / filename
-        effective = content
-        merge_note = ""
-        if path.is_file():
-            old = path.read_text(encoding="utf-8")
-            if old != content:
-                from app.utils.shared_merge import merge_shared_source
+        # v1.2 S0:并行模块开发下 _shared 合并写必须互斥(读-合并-写全程持锁)
+        with _SHARED_WRITE_LOCK:
+            handle = self._require_project(project_id)
+            self._check_filename(filename)
+            path = handle.root / "code" / "_shared" / filename
+            effective = content
+            merge_note = ""
+            if path.is_file():
+                old_content = path.read_text(encoding="utf-8")
+                if old_content != content:
+                    from app.utils.shared_merge import merge_shared_source
 
-                merged, report = merge_shared_source(old, content)
-                effective = merged
-                if report.fallback_overwrite:
-                    merge_note = "（语法回退：整文件覆盖）"
-                elif report.merged:
-                    merge_note = (
-                        f"（合并守卫：保留 {report.kept_symbols}"
-                        f" 变更 {report.updated_symbols}"
-                        f" 删除 {report.deleted_symbols}）"
-                    )
-        if not (path.is_file() and path.read_text(encoding="utf-8") == effective):
-            _write_text(path, effective)
-        # 交付物可运行性：_shared 包标记（from _shared.<file> import <符号>）
-        _write_text(path.parent / "__init__.py", "")
-        self._log(
-            handle, "写入公共层文件",
-            path.relative_to(handle.root).as_posix() + merge_note,
-        )
-        return path
+                    merged, report = merge_shared_source(old_content, content)
+                    effective = merged
+                    if report.fallback_overwrite:
+                        merge_note = "（语法回退：整文件覆盖）"
+                    elif report.merged:
+                        merge_note = (
+                            f"（合并守卫：保留 {report.kept_symbols}"
+                            f" 变更 {report.updated_symbols}"
+                            f" 删除 {report.deleted_symbols}）"
+                        )
+            if not (path.is_file() and path.read_text(encoding="utf-8") == effective):
+                _write_text(path, effective)
+            # 交付物可运行性：_shared 包标记（from _shared.<file> import <符号>）
+            _write_text(path.parent / "__init__.py", "")
+            self._log(
+                handle, "写入公共层文件",
+                path.relative_to(handle.root).as_posix() + merge_note,
+            )
+            return path
 
     def shared_signature(self, project_id: str) -> str:
         """_shared/ 目录内容签名（14.4 变更检测基线，确定性 hash）。"""
