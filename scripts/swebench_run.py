@@ -29,6 +29,7 @@ import time
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # 仓库根入 path(app.* 可导入)
 
 REPO_URL = "https://github.com/{repo}.git"
 # 重度运行时依赖仓库黑名单(简化验证口径下排除;清单随报告公开)
