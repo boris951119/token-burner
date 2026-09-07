@@ -36,6 +36,12 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")  # API 凭据(本地,不入库)
 
 REPO_URL = "https://github.com/{repo}.git"
+# clone 候选链:直连优先,镜像回落(国内网络间歇阻断 github.com——
+# 2026-09-07 实测 ghproxy.net 可用;gitclone.com 无响应;kkgithub 证书过期)
+REPO_URL_CANDIDATES = (
+    REPO_URL,
+    "https://ghproxy.net/https://github.com/{repo}.git",
+)
 # 重度运行时依赖仓库黑名单(简化验证口径下排除;清单随报告公开)
 REPO_SKIP_HINTS = ("django", "matplotlib", "sympy", "scikit-learn", "astropy")
 
@@ -92,19 +98,23 @@ def ensure_repo(instance: dict, cache: Path) -> Path:
     """克隆(浅)并 checkout base_commit;已存在则直接 fetch/checkout。"""
     repo = instance["repo"]
     target = cache / repo.replace("/", "__")
-    url = REPO_URL.format(repo=repo)
+    urls = [u.format(repo=repo) for u in REPO_URL_CANDIDATES]
     if not target.exists():
         last = None
-        for attempt in range(3):  # 网络抖动重试(大仓库 + 跨境网络)
-            try:
-                subprocess.run(["git", "clone", url, str(target)], check=True,
-                               capture_output=True, text=True, timeout=900)
-                last = None
+        for url in urls:  # 直连 → 镜像回落
+            for attempt in range(3):  # 网络抖动重试(大仓库 + 跨境网络)
+                try:
+                    subprocess.run(["git", "clone", url, str(target)], check=True,
+                                   capture_output=True, text=True, timeout=900)
+                    last = None
+                    break
+                except Exception as exc:
+                    last = exc
+                    if target.exists():
+                        shutil.rmtree(target, ignore_errors=True)
+            if last is None:
                 break
-            except Exception as exc:
-                last = exc
-                if target.exists():
-                    shutil.rmtree(target, ignore_errors=True)
+            print(f"    clone 经 {url.split('/')[2]} 失败,换下一来源", flush=True)
         if last is not None:
             raise last
     subprocess.run(["git", "fetch", "origin", instance["base_commit"]],
