@@ -31,6 +31,10 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # 仓库根入 path(app.* 可导入)
 
+from dotenv import load_dotenv  # noqa: E402
+
+load_dotenv(Path(__file__).resolve().parents[1] / ".env")  # API 凭据(本地,不入库)
+
 REPO_URL = "https://github.com/{repo}.git"
 # 重度运行时依赖仓库黑名单(简化验证口径下排除;清单随报告公开)
 REPO_SKIP_HINTS = ("django", "matplotlib", "sympy", "scikit-learn", "astropy")
