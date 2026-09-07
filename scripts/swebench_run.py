@@ -94,13 +94,36 @@ def ensure_repo(instance: dict, cache: Path) -> Path:
     target = cache / repo.replace("/", "__")
     url = REPO_URL.format(repo=repo)
     if not target.exists():
-        subprocess.run(["git", "clone", url, str(target)], check=True,
-                       capture_output=True, text=True, timeout=600)
+        last = None
+        for attempt in range(2):  # 网络抖动重试一次
+            try:
+                subprocess.run(["git", "clone", url, str(target)], check=True,
+                               capture_output=True, text=True, timeout=900)
+                last = None
+                break
+            except Exception as exc:
+                last = exc
+                if target.exists():
+                    shutil.rmtree(target, ignore_errors=True)
+        if last is not None:
+            raise last
     subprocess.run(["git", "fetch", "origin", instance["base_commit"]],
                    cwd=target, check=False, capture_output=True, timeout=300)
     subprocess.run(["git", "checkout", "-q", "-f", instance["base_commit"]],
                    cwd=target, check=True, capture_output=True, timeout=120)
     return target
+
+
+def pip_install_repo(repo_path: Path) -> str:
+    """pip install -e .(flask/xarray 等仓库测试的导入前提)。
+
+    返回空串 = 成功;否则返回截尾错误(调用方记入实例备注)。
+    """
+    proc = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "-e", ".", "--quiet",
+         "--disable-pip-version-check"],
+        cwd=repo_path, capture_output=True, text=True, timeout=600)
+    return "" if proc.returncode == 0 else (proc.stderr or proc.stdout)[-200:]
 
 
 def apply_test_patch(instance: dict, repo_path: Path) -> None:
@@ -120,12 +143,13 @@ def apply_test_patch(instance: dict, repo_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 def run_instance(instance: dict, cache: Path, model: str,
-                 max_rounds: int) -> dict:
+                 max_rounds: int, pip_install: bool = True) -> dict:
     from app.agents.repo_fixer import RepoFixer
-    from app.config import Settings
+    from app.config import load_settings
     from app.utils.model_client import ModelClientFactory
 
     t0 = time.time()
+    record_notes: list[str] = []
     record = {"instance_id": instance.get("instance_id")
               or f"{instance['repo']}-{instance['base_commit'][:8]}",
               "repo": instance["repo"], "resolved": False,
@@ -134,9 +158,14 @@ def run_instance(instance: dict, cache: Path, model: str,
     try:
         repo_path = ensure_repo(instance, cache)
         apply_test_patch(instance, repo_path)
+        if pip_install:
+            note = pip_install_repo(repo_path)
+            if note:
+                record_notes.append(note[:200])
         f2p = json.loads(instance.get("FAIL_TO_PASS") or "[]")
         p2p = json.loads(instance.get("PASS_TO_PASS") or "[]")
-        settings = Settings(models=[model])
+        settings = load_settings()          # 载入 config.json(超时/重试/16k 输出)
+        settings.models = [model]           # 仅注册本实例使用的模型
         client = ModelClientFactory(settings).create()
 
         def llm(system, user):
@@ -160,6 +189,9 @@ def run_instance(instance: dict, cache: Path, model: str,
             "duration_s": round(time.time() - t0, 1),
             "error": (result.error or "")[:300],
             "pass_to_pass_count": len(p2p),
+            "test_output_tail": (result.test_output or "")[-800:],
+            "diff_head": (result.diff or "")[:2000],
+            "notes": record_notes,
         })
     except Exception as exc:
         record["error"] = f"{type(exc).__name__}: {str(exc)[:200]}"
@@ -181,6 +213,10 @@ def main() -> None:
     ap.add_argument("--repos-cache", default=".tmp/swebench_repos")
     ap.add_argument("--out", default="logs/swebench")
     ap.add_argument("--max-rounds", type=int, default=2)
+    ap.add_argument("--no-install", action="store_true",
+                    help="跳过 pip install -e .(默认安装以支持仓库测试导入)")
+    ap.add_argument("--workers", type=int, default=1,
+                    help="并行实例数(实例间相互独立;默认 1 串行)")
     args = ap.parse_args()
 
     if args.prepare_dataset:
@@ -196,17 +232,27 @@ def main() -> None:
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    resolved = errors = 0
-    total_tokens = 0
-    for i, ins in enumerate(picked, 1):
+
+    def _run_and_save(i, ins):
         print(f"[{i}/{len(picked)}] {ins.get('repo')} …", flush=True)
-        rec = run_instance(ins, Path(args.repos_cache), args.model, args.max_rounds)
+        rec = run_instance(ins, Path(args.repos_cache), args.model,
+                           args.max_rounds, pip_install=not args.no_install)
         (out_dir / f"{rec['instance_id'].replace('/', '_')}.json").write_text(
             json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
-        resolved += rec["resolved"]
-        errors += rec["status"] == "error"
-        total_tokens += rec["tokens"]
-        print(f"    -> {rec['status']} tokens={rec['tokens']}")
+        print(f"[{i}] -> {rec['status']} tokens={rec['tokens']}", flush=True)
+        return rec
+
+    if args.workers > 1:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            records = list(pool.map(_run_and_save, range(1, len(picked) + 1), picked))
+    else:
+        records = [_run_and_save(i, ins) for i, ins in enumerate(picked, 1)]
+
+    resolved = sum(r["resolved"] for r in records)
+    errors = sum(r["status"] == "error" for r in records)
+    total_tokens = sum(r["tokens"] for r in records)
 
     summary = {
         "model": args.model, "seed": args.seed, "sample": len(picked),
