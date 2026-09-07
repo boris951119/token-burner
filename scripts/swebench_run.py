@@ -95,7 +95,7 @@ def ensure_repo(instance: dict, cache: Path) -> Path:
     url = REPO_URL.format(repo=repo)
     if not target.exists():
         last = None
-        for attempt in range(2):  # 网络抖动重试一次
+        for attempt in range(3):  # 网络抖动重试(大仓库 + 跨境网络)
             try:
                 subprocess.run(["git", "clone", url, str(target)], check=True,
                                capture_output=True, text=True, timeout=900)
@@ -217,6 +217,8 @@ def main() -> None:
                     help="跳过 pip install -e .(默认安装以支持仓库测试导入)")
     ap.add_argument("--workers", type=int, default=1,
                     help="并行实例数(实例间相互独立;默认 1 串行)")
+    ap.add_argument("--retry-errors", metavar="DIR",
+                    help="读取 DIR 中 status=error 的实例补跑(跳过已 resolved)")
     args = ap.parse_args()
 
     if args.prepare_dataset:
@@ -228,6 +230,21 @@ def main() -> None:
         sys.exit(f"数据集不存在: {path} —— 先 --prepare-dataset 或手工放置官方 JSONL")
     instances = [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
     picked = sample_instances(instances, args.sample, args.seed)
+
+    if args.retry_errors:
+        err_dir = Path(args.retry_errors)
+        by_id = {r.get("instance_id"): r for r in picked}
+        retry_list = []
+        for f in err_dir.glob("*.json"):
+            try:
+                prev = json.loads(f.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            iid = prev.get("instance_id")
+            if prev.get("status") == "error" and iid in by_id:
+                retry_list.append(by_id[iid])
+        picked = retry_list
+        print(f"错误实例补跑: {len(picked)} 个")
     print(f"抽样: {len(picked)}/{len(instances)} (seed={args.sample and args.seed})")
 
     out_dir = Path(args.out)
