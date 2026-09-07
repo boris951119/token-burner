@@ -182,6 +182,35 @@ def apply_test_patch(instance: dict, repo_path: Path) -> None:
 # 逐实例执行
 # ---------------------------------------------------------------------------
 
+def env_precheck(repo_path: Path, p2p: list[str], f2p_files: list[str],
+                 python_exe: str) -> tuple[bool, str]:
+    """base 状态环境预检(零 LLM token):PASS_TO_PASS 必须在 base 转绿。
+
+    P2P 为空时退化为「F2P 测试文件可收集」检查(导入成功即环境可用)。
+    失败 → 该实例环境不可评,不应消耗任何 LLM token(用户要求:token
+    必须全部有价值)。
+    """
+    def run_pytest(args: list[str], timeout: int):
+        return subprocess.run(
+            [python_exe, "-m", "pytest", *args, "-q", "--no-header"],
+            cwd=repo_path, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=timeout)
+
+    if p2p:
+        proc = run_pytest(list(p2p), 900)
+        if proc.returncode != 0:
+            tail = (proc.stdout or "")[-300:]
+            return False, f"P2P 在 base 状态即失败(环境不兼容): {tail}"
+        return True, ""
+    files = sorted({n.split("::")[0] for n in f2p_files if n})
+    if files:
+        proc = run_pytest(["--co"] + files, 300)
+        if proc.returncode != 0:
+            tail = (proc.stdout or proc.stderr or "")[-300:]
+            return False, f"测试收集失败(导入/环境不兼容): {tail}"
+    return True, ""
+
+
 def run_instance(instance: dict, cache: Path, model: str,
                  max_rounds: int, pip_install: bool = True,
                  use_venv: bool = True) -> dict:
@@ -213,11 +242,25 @@ def run_instance(instance: dict, cache: Path, model: str,
                     record_notes.append(
                         f"{' '.join(cmd[-2:])} 失败: "
                         f"{(proc.stderr or proc.stdout)[-130:]}")
+            # 兜底:配方未覆盖 pytest 时确保 venv 内可导入
+            subprocess.run([verify_python, "-m", "pip", "install", "pytest",
+                            "--quiet", "--disable-pip-version-check"],
+                           capture_output=True, text=True, timeout=300)
         elif pip_install:
             record_notes.extend(
                 install_repo_with_recipe(repo_path, instance["repo"]))
         f2p = json.loads(instance.get("FAIL_TO_PASS") or "[]")
         p2p = json.loads(instance.get("PASS_TO_PASS") or "[]")
+
+        # C3 环境预检闸门(零 LLM token):base 都跑不绿 → 环境不可评,
+        # 不应消耗任何 LLM token(用户要求:token 必须全部有价值)。
+        env_ok, env_reason = env_precheck(repo_path, p2p, f2p, verify_python)
+        if not env_ok:
+            record.update({"status": "env_unverifiable",
+                           "error": env_reason[:300],
+                           "duration_s": round(time.time() - t0, 1)})
+            return record
+
         settings = load_settings()          # 载入 config.json(超时/重试/16k 输出)
         settings.models = [model]           # 仅注册本实例使用的模型
         client = ModelClientFactory(settings).create()
