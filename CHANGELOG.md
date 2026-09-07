@@ -1,5 +1,27 @@
 # Changelog
 
+## v1.2 · S2 SWE-bench Lite 跑分器（2026-09-07）：抽样/执行/报告四合一
+
+> v1.2-workplan S2——`scripts/swebench_run.py`。实际跑分需 API Key
+  (回填 .env 即可)与数据集文件(--prepare-dataset 自动导出)。
+
+- **数据准备**:`--prepare-dataset` 经 HF datasets 导出 SWE-bench Lite
+  test split 为 JSONL(可选依赖,或手工放置官方文件)。
+- **分层抽样**:按仓库聚合每仓至多 5 例,总量 --sample(缺省 50),
+  seed 可复现;重度运行时依赖仓库(django/matplotlib/sympy 等)按
+  黑名单剔除并随报告公开——**供过于求时必终止**(首版死循环,CI
+  前本地测试抓出并修复,含回归用例)。
+- **逐实例执行**:clone(缓存复用)→ checkout base_commit → apply
+  test_patch → RepoFixer 修 issue(test_files=FAIL_TO_PASS 节点)→
+  pytest 验证。逐实例 JSON(tokens/轮数/变更文件/错误)+ summary
+  (resolved/resolve_rate/总成本)。
+- **诚实边界**(随 summary 公开):简化验证口径——仓库根直接 pytest,
+  未做官方 per-repo conda 环境;同批补丁可交官方 harness 复评。
+- 测试:新增 `test_swebench_sampler.py` 5 项(规模/可复现/黑名单/
+  多仓分撒/**池小于 sample 终止**)。全量回归 **1071 → 1089 passed /
+  7 skipped / 0 failed**。
+
+
 ## v1.2 · S1 repo-patch 模式（2026-09-07）：修已有仓库的 issue
 
 > v1.2-workplan S1——产品从「从零造项目」扩展到「修真实代码库」,
