@@ -1,0 +1,131 @@
+{
+  "order": [
+    "cli_entry",
+    "safe_traverser",
+    "line_parser",
+    "stream_analyzer",
+    "report_renderer"
+  ],
+  "plans": [
+    {
+      "name": "cli_entry",
+      "responsibility": "实现命令行参数解析(argparse)，执行权限预判，协调各模块生命周期，处理标准输入输出流及退出码逻辑。",
+      "dependencies": [],
+      "priority": 1
+    },
+    {
+      "name": "safe_traverser",
+      "responsibility": "基于pathlib实现安全递归遍历，通过inode去重防止软硬链接死循环，控制最大深度，过滤指定后缀，并透明支持.gz/.bz2压缩文件的字节流读取。",
+      "dependencies": [],
+      "priority": 2
+    },
+    {
+      "name": "line_parser",
+      "responsibility": "构建多格式正则优先级链(RFC3164/5424/JSON/自定义)，实施UTF-8到GBK/Latin-1的编码降级策略，将原始文本清洗为标准化LogEntry字典，并隔离解析失败行。",
+      "dependencies": [],
+      "priority": 3
+    },
+    {
+      "name": "stream_analyzer",
+      "responsibility": "消费解析后的生成器流，利用线程安全累加器聚合文件级统计(INFO/WARN/ERROR计数)，同时提取错误日志并基于(时间戳,全局序列号)进行确定性排序，生成错误时间线。",
+      "dependencies": [
+        "line_parser"
+      ],
+      "priority": 4
+    },
+    {
+      "name": "report_renderer",
+      "responsibility": "定义渲染基类协议，默认实现Markdown模板引擎，负责将聚合统计数据和错误时间线转换为结构化表格与文本，处理ASCII兼容字符集与列宽自适应。",
+      "dependencies": [],
+      "priority": 5
+    }
+  ],
+  "interfaces": {
+    "cli_entry": {
+      "imports": [
+        "auth_service.validate_credentials",
+        "core_engine.run_task"
+      ],
+      "exports": [
+        "parse_args(args_list: list[str]) -> dict",
+        "main(argv: list[str] | None = None) -> int"
+      ],
+      "public_api": [
+        "parse_args(args_list: list[str]) -> dict",
+        "main(argv: list[str] | None = None) -> int"
+      ],
+      "dependencies": []
+    },
+    "safe_traverser": {
+      "imports": [
+        "pathlib.Path",
+        "io.BytesIO"
+      ],
+      "exports": [
+        "safe_traverse(directory_path, extensions=None, max_depth=None)",
+        "read_file_content(file_path)"
+      ],
+      "public_api": [
+        "safe_traverse(directory_path: Path | str, extensions: list[str] | None = None, max_depth: int | None = None) -> dict[inode: int, path: Path]",
+        "read_file_content(file_path: Path | str) -> bytes"
+      ],
+      "dependencies": []
+    },
+    "line_parser": {
+      "imports": [
+        "log_entry.LogEntry"
+      ],
+      "exports": [
+        "parse_line",
+        "detect_encoding",
+        "register_custom_pattern"
+      ],
+      "public_api": [
+        "parse_line(raw_bytes: bytes) -> LogEntry | None",
+        "detect_encoding(raw_bytes: bytes) -> str",
+        "register_custom_pattern(name: str, regex: str, priority: int) -> bool"
+      ],
+      "dependencies": []
+    },
+    "stream_analyzer": {
+      "imports": [
+        "line_parser.ParsedLine"
+      ],
+      "exports": [
+        "StreamAccumulator",
+        "create_accumulator",
+        "push_parsed_line",
+        "get_file_stats",
+        "flush_errors",
+        "reset_state"
+      ],
+      "public_api": [
+        "create_accumulator() -> StreamAccumulator",
+        "push_parsed_line(accum: StreamAccumulator, line: ParsedLine) -> bool",
+        "get_file_stats(accum: StreamAccumulator) -> dict[str, int]",
+        "flush_errors(accum: StreamAccumulator) -> list[dict]",
+        "reset_state(accum: StreamAccumulator) -> None"
+      ],
+      "dependencies": [
+        "line_parser"
+      ]
+    },
+    "report_renderer": {
+      "imports": [],
+      "exports": [
+        "RenderResult",
+        "render_report(data, errors, config)"
+      ],
+      "public_api": [
+        "render_report(data: dict, errors: list, config: dict) -> RenderResult"
+      ],
+      "dependencies": []
+    }
+  },
+  "mode": "auto",
+  "models": [
+    "openai/qwen3.6-flash",
+    "openai/deepseek-v4-pro",
+    "openai/qwen3-coder-plus"
+  ]
+}

@@ -1,0 +1,82 @@
+{
+  "cli_entry": {
+    "imports": [
+      "auth_service.validate_credentials",
+      "core_engine.run_task"
+    ],
+    "exports": [
+      "parse_args(args_list: list[str]) -> dict",
+      "main(argv: list[str] | None = None) -> int"
+    ],
+    "public_api": [
+      "parse_args(args_list: list[str]) -> dict",
+      "main(argv: list[str] | None = None) -> int"
+    ],
+    "dependencies": []
+  },
+  "safe_traverser": {
+    "imports": [
+      "pathlib.Path",
+      "io.BytesIO"
+    ],
+    "exports": [
+      "safe_traverse(directory_path, extensions=None, max_depth=None)",
+      "read_file_content(file_path)"
+    ],
+    "public_api": [
+      "safe_traverse(directory_path: Path | str, extensions: list[str] | None = None, max_depth: int | None = None) -> dict[inode: int, path: Path]",
+      "read_file_content(file_path: Path | str) -> bytes"
+    ],
+    "dependencies": []
+  },
+  "line_parser": {
+    "imports": [
+      "log_entry.LogEntry"
+    ],
+    "exports": [
+      "parse_line",
+      "detect_encoding",
+      "register_custom_pattern"
+    ],
+    "public_api": [
+      "parse_line(raw_bytes: bytes) -> LogEntry | None",
+      "detect_encoding(raw_bytes: bytes) -> str",
+      "register_custom_pattern(name: str, regex: str, priority: int) -> bool"
+    ],
+    "dependencies": []
+  },
+  "stream_analyzer": {
+    "imports": [
+      "line_parser.ParsedLine"
+    ],
+    "exports": [
+      "StreamAccumulator",
+      "create_accumulator",
+      "push_parsed_line",
+      "get_file_stats",
+      "flush_errors",
+      "reset_state"
+    ],
+    "public_api": [
+      "create_accumulator() -> StreamAccumulator",
+      "push_parsed_line(accum: StreamAccumulator, line: ParsedLine) -> bool",
+      "get_file_stats(accum: StreamAccumulator) -> dict[str, int]",
+      "flush_errors(accum: StreamAccumulator) -> list[dict]",
+      "reset_state(accum: StreamAccumulator) -> None"
+    ],
+    "dependencies": [
+      "line_parser"
+    ]
+  },
+  "report_renderer": {
+    "imports": [],
+    "exports": [
+      "RenderResult",
+      "render_report(data, errors, config)"
+    ],
+    "public_api": [
+      "render_report(data: dict, errors: list, config: dict) -> RenderResult"
+    ],
+    "dependencies": []
+  }
+}

@@ -1,0 +1,304 @@
+{
+  "generated_at": "2026-09-06 10:22:05",
+  "budget_tokens": 500000,
+  "total_tokens": 180740,
+  "input_output": {
+    "input": 73179,
+    "output": 107561
+  },
+  "by_model": {
+    "openai/deepseek-v4-pro": 100892,
+    "openai/qwen3.6-flash": 45464,
+    "openai/qwen3-coder-plus": 34384
+  },
+  "by_stage": {
+    "评估": 733,
+    "方案讨论": 35333,
+    "拆分接口": 23228,
+    "开发": 92235,
+    "测试": 29211
+  },
+  "by_tier": {
+    "未登记": 180740
+  },
+  "cache": {
+    "embedding_calls": 0,
+    "cache_hits": 0,
+    "hit_rate": 0.0,
+    "saved_tokens": 0
+  },
+  "savings": {
+    "saved_tokens": 0,
+    "saved_ratio": 0.0,
+    "cache_hit_rate": 0.0,
+    "embedding_calls": 0,
+    "cache_hits": 0
+  },
+  "routing_costs": {
+    "available": false,
+    "actual_cost_usd": 0.0,
+    "flagship_cost_usd": 0.0,
+    "saved_cost_usd": 0.0
+  },
+  "calls": [
+    {
+      "model": "openai/deepseek-v4-pro",
+      "stage": "评估",
+      "tier": "",
+      "input_tokens": 412,
+      "output_tokens": 321
+    },
+    {
+      "model": "openai/qwen3.6-flash",
+      "stage": "方案讨论",
+      "tier": "",
+      "input_tokens": 161,
+      "output_tokens": 2369
+    },
+    {
+      "model": "openai/deepseek-v4-pro",
+      "stage": "方案讨论",
+      "tier": "",
+      "input_tokens": 815,
+      "output_tokens": 920
+    },
+    {
+      "model": "openai/qwen3-coder-plus",
+      "stage": "方案讨论",
+      "tier": "",
+      "input_tokens": 857,
+      "output_tokens": 273
+    },
+    {
+      "model": "openai/qwen3.6-flash",
+      "stage": "方案讨论",
+      "tier": "",
+      "input_tokens": 1293,
+      "output_tokens": 4543
+    },
+    {
+      "model": "openai/deepseek-v4-pro",
+      "stage": "方案讨论",
+      "tier": "",
+      "input_tokens": 1493,
+      "output_tokens": 1116
+    },
+    {
+      "model": "openai/qwen3-coder-plus",
+      "stage": "方案讨论",
+      "tier": "",
+      "input_tokens": 1596,
+      "output_tokens": 277
+    },
+    {
+      "model": "openai/qwen3.6-flash",
+      "stage": "方案讨论",
+      "tier": "",
+      "input_tokens": 1913,
+      "output_tokens": 4862
+    },
+    {
+      "model": "openai/deepseek-v4-pro",
+      "stage": "方案讨论",
+      "tier": "",
+      "input_tokens": 1741,
+      "output_tokens": 1839
+    },
+    {
+      "model": "openai/qwen3-coder-plus",
+      "stage": "方案讨论",
+      "tier": "",
+      "input_tokens": 1871,
+      "output_tokens": 299
+    },
+    {
+      "model": "openai/qwen3.6-flash",
+      "stage": "方案讨论",
+      "tier": "",
+      "input_tokens": 2306,
+      "output_tokens": 4789
+    },
+    {
+      "model": "openai/qwen3.6-flash",
+      "stage": "拆分接口",
+      "tier": "",
+      "input_tokens": 2665,
+      "output_tokens": 3494
+    },
+    {
+      "model": "openai/qwen3.6-flash",
+      "stage": "拆分接口",
+      "tier": "",
+      "input_tokens": 396,
+      "output_tokens": 2067
+    },
+    {
+      "model": "openai/qwen3.6-flash",
+      "stage": "拆分接口",
+      "tier": "",
+      "input_tokens": 411,
+      "output_tokens": 2593
+    },
+    {
+      "model": "openai/qwen3.6-flash",
+      "stage": "拆分接口",
+      "tier": "",
+      "input_tokens": 423,
+      "output_tokens": 4028
+    },
+    {
+      "model": "openai/qwen3.6-flash",
+      "stage": "拆分接口",
+      "tier": "",
+      "input_tokens": 419,
+      "output_tokens": 4029
+    },
+    {
+      "model": "openai/qwen3.6-flash",
+      "stage": "拆分接口",
+      "tier": "",
+      "input_tokens": 406,
+      "output_tokens": 2297
+    },
+    {
+      "model": "openai/deepseek-v4-pro",
+      "stage": "开发",
+      "tier": "",
+      "input_tokens": 723,
+      "output_tokens": 1950
+    },
+    {
+      "model": "openai/qwen3-coder-plus",
+      "stage": "测试",
+      "tier": "",
+      "input_tokens": 774,
+      "output_tokens": 1468
+    },
+    {
+      "model": "openai/deepseek-v4-pro",
+      "stage": "开发",
+      "tier": "",
+      "input_tokens": 771,
+      "output_tokens": 5085
+    },
+    {
+      "model": "openai/qwen3-coder-plus",
+      "stage": "测试",
+      "tier": "",
+      "input_tokens": 1111,
+      "output_tokens": 2085
+    },
+    {
+      "model": "openai/deepseek-v4-pro",
+      "stage": "开发",
+      "tier": "",
+      "input_tokens": 5209,
+      "output_tokens": 6916
+    },
+    {
+      "model": "openai/qwen3-coder-plus",
+      "stage": "测试",
+      "tier": "",
+      "input_tokens": 1191,
+      "output_tokens": 1966
+    },
+    {
+      "model": "openai/deepseek-v4-pro",
+      "stage": "开发",
+      "tier": "",
+      "input_tokens": 4314,
+      "output_tokens": 2647
+    },
+    {
+      "model": "openai/deepseek-v4-pro",
+      "stage": "开发",
+      "tier": "",
+      "input_tokens": 767,
+      "output_tokens": 4902
+    },
+    {
+      "model": "openai/qwen3-coder-plus",
+      "stage": "测试",
+      "tier": "",
+      "input_tokens": 1807,
+      "output_tokens": 1888
+    },
+    {
+      "model": "openai/deepseek-v4-pro",
+      "stage": "开发",
+      "tier": "",
+      "input_tokens": 4450,
+      "output_tokens": 2100
+    },
+    {
+      "model": "openai/qwen3-coder-plus",
+      "stage": "测试",
+      "tier": "",
+      "input_tokens": 1890,
+      "output_tokens": 1487
+    },
+    {
+      "model": "openai/deepseek-v4-pro",
+      "stage": "开发",
+      "tier": "",
+      "input_tokens": 803,
+      "output_tokens": 5589
+    },
+    {
+      "model": "openai/qwen3-coder-plus",
+      "stage": "测试",
+      "tier": "",
+      "input_tokens": 1365,
+      "output_tokens": 2397
+    },
+    {
+      "model": "openai/deepseek-v4-pro",
+      "stage": "开发",
+      "tier": "",
+      "input_tokens": 5292,
+      "output_tokens": 4283
+    },
+    {
+      "model": "openai/deepseek-v4-pro",
+      "stage": "开发",
+      "tier": "",
+      "input_tokens": 822,
+      "output_tokens": 5726
+    },
+    {
+      "model": "openai/qwen3-coder-plus",
+      "stage": "测试",
+      "tier": "",
+      "input_tokens": 1883,
+      "output_tokens": 2785
+    },
+    {
+      "model": "openai/deepseek-v4-pro",
+      "stage": "开发",
+      "tier": "",
+      "input_tokens": 5597,
+      "output_tokens": 2249
+    },
+    {
+      "model": "openai/qwen3-coder-plus",
+      "stage": "测试",
+      "tier": "",
+      "input_tokens": 1955,
+      "output_tokens": 3159
+    },
+    {
+      "model": "openai/deepseek-v4-pro",
+      "stage": "开发",
+      "tier": "",
+      "input_tokens": 7148,
+      "output_tokens": 5200
+    },
+    {
+      "model": "openai/deepseek-v4-pro",
+      "stage": "开发",
+      "tier": "",
+      "input_tokens": 6129,
+      "output_tokens": 3563
+    }
+  ]
+}
