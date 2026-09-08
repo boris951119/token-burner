@@ -75,3 +75,6 @@ vscode-extension/out/
 
 # v1.1 C1 连接注册表密钥库
 secrets.local.json
+
+# 本地临时目录(基准克隆/日志)
+.tmp/
