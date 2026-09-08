@@ -33,7 +33,10 @@ sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # 仓库根入 path(app.* 可导入)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # swebench_recipes 同目录
-from swebench_recipes import build_install_commands, recipe_for  # noqa: E402
+from swebench_recipes import (  # noqa: E402
+    FAMILY_CONDA, build_install_commands, conda_env_name, family_of,
+    recipe_for,
+)
 
 from dotenv import load_dotenv  # noqa: E402
 
@@ -148,6 +151,25 @@ def create_instance_venv(instance_id: str, cache: Path,
     return venv_dir, str(py)
 
 
+def ensure_family_env(family: str, conda_exe: str,
+                      envs_root: Path) -> tuple[str, str]:
+    """确保家族 conda 环境存在(python 版本 + 依赖 pin),返回 (名称, python 路径)。"""
+    spec = FAMILY_CONDA[family]
+    name = conda_env_name(family)
+    py = envs_root / name / "python.exe"
+    if not py.exists():
+        subprocess.run([conda_exe, "create", "-n", name,
+                        f"python={spec['python']}", "-y"], check=True,
+                       capture_output=True, text=True, timeout=1800)
+    if spec["pip"]:
+        subprocess.run([str(py), "-m", "pip", "install", *spec["pip"],
+                        "--quiet", "-i",
+                        "https://pypi.tuna.tsinghua.edu.cn/simple"],
+                       check=False, capture_output=True, text=True,
+                       timeout=900)
+    return name, str(py)
+
+
 def install_repo_with_recipe(repo_path: Path, repo: str) -> list[str]:
     """v1.2 环境适配层:按 repo 家族配方安装(钉版/本体/extras/补装)。
 
@@ -196,8 +218,17 @@ def env_precheck(repo_path: Path, p2p: list[str], f2p_files: list[str],
             cwd=repo_path, capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=timeout)
 
+    def _write_argsfile(nodes: list[str]) -> Path:
+        argsfile = repo_path / "_swebench_precheck_args.txt"
+        argsfile.write_text("\n".join(nodes), encoding="utf-8")
+        return argsfile
+
     if p2p:
-        proc = run_pytest(list(p2p), 900)
+        if len(" ".join(p2p)) > 6000:  # Windows 命令行 32k 上限(R1 xarray 取证)
+            argsfile = _write_argsfile(p2p)
+            proc = run_pytest([f"@{argsfile.name}"], 900)
+        else:
+            proc = run_pytest(list(p2p), 900)
         if proc.returncode != 0:
             tail = (proc.stdout or "")[-300:]
             return False, f"P2P 在 base 状态即失败(环境不兼容): {tail}"
@@ -213,7 +244,8 @@ def env_precheck(repo_path: Path, p2p: list[str], f2p_files: list[str],
 
 def run_instance(instance: dict, cache: Path, model: str,
                  max_rounds: int, pip_install: bool = True,
-                 use_venv: bool = True) -> dict:
+                 use_venv: bool = True, env_backend: str = "venv",
+                 conda_exe: str = "", envs_root: str = "") -> dict:
     from app.agents.repo_fixer import RepoFixer
     from app.config import load_settings
     from app.utils.model_client import ModelClientFactory
@@ -229,7 +261,18 @@ def run_instance(instance: dict, cache: Path, model: str,
         repo_path = ensure_repo(instance, cache)
         apply_test_patch(instance, repo_path)
         verify_python = sys.executable
-        if use_venv:
+        family = family_of(instance["repo"])
+        if env_backend == "conda":
+            # v1.2 环境适配:家族 conda 环境(Python 版本+依赖 pin)。
+            _env_name, verify_python = ensure_family_env(
+                family, conda_exe, envs_root)
+            # 仓库本体以 --no-deps 装入环境(不打乱已 pin 的依赖;
+            # pytest 仓库:装的就是它自己,正是官方口径)
+            subprocess.run([verify_python, "-m", "pip", "install", "-e", ".",
+                            "--no-deps", "--quiet"],
+                           cwd=repo_path, capture_output=True, text=True,
+                           timeout=900)
+        elif use_venv:
             _venv, verify_python = create_instance_venv(
                 record["instance_id"], cache)
             recipe_base = [verify_python, "-m", "pip", "install", "--quiet",
@@ -314,6 +357,10 @@ def main() -> None:
                     help="跳过 pip install -e .(默认安装以支持仓库测试导入)")
     ap.add_argument("--no-venv", action="store_true",
                     help="跳过每实例 venv 隔离(不推荐:仓库依赖会污染全局环境)")
+    ap.add_argument("--env-backend", default="venv", choices=["venv", "conda"],
+                    help="验证环境后端:venv(同版本隔离)或 conda(家族环境,版本考古)")
+    ap.add_argument("--conda-exe", default=r"D:\miniconda3\Scripts\conda.exe")
+    ap.add_argument("--envs-root", default=r"E:\conda_envs")
     ap.add_argument("--workers", type=int, default=1,
                     help="并行实例数(实例间相互独立;默认 1 串行)")
     ap.add_argument("--retry-errors", metavar="DIR",
@@ -353,7 +400,10 @@ def main() -> None:
         print(f"[{i}/{len(picked)}] {ins.get('repo')} …", flush=True)
         rec = run_instance(ins, Path(args.repos_cache), args.model,
                            args.max_rounds, pip_install=not args.no_install,
-                           use_venv=not args.no_venv)
+                           use_venv=not args.no_venv,
+                           env_backend=args.env_backend,
+                           conda_exe=args.conda_exe,
+                           envs_root=args.envs_root)
         (out_dir / f"{rec['instance_id'].replace('/', '_')}.json").write_text(
             json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
         print(f"[{i}] -> {rec['status']} tokens={rec['tokens']}", flush=True)
