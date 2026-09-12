@@ -414,10 +414,10 @@ class TestScriptDefectClassification:
         from app.arcbench_smoke import _is_script_defect
 
         report = (
-            'Traceback (most recent call last):\n'
-            '  File "C:\Temp\arcbench_journey.py", line 17, in <module>\n'
-            '    c = client\n'
-            'NameError: name \'client\' is not defined'
+            "Traceback (most recent call last):\n"
+            '  File "C:/Temp/arcbench_journey.py", line 17, in <module>\n'
+            "    c = client\n"
+            "NameError: name 'client' is not defined"
         )
         assert _is_script_defect(report)
 
@@ -425,9 +425,9 @@ class TestScriptDefectClassification:
         from app.arcbench_smoke import _is_script_defect
 
         report = (
-            '  File "C:\Temp\arcbench_journey.py", line 20, in <module>\n'
-            '    assert r.status_code == 201\n'
-            'AssertionError: assert 404 == 201'
+            '  File "C:/Temp/arcbench_journey.py", line 20, in <module>\n'
+            "    assert r.status_code == 201\n"
+            "AssertionError: assert 404 == 201"
         )
         assert not _is_script_defect(report)
 
