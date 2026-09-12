@@ -154,6 +154,9 @@ def create_instance_venv(instance_id: str, cache: Path,
 def ensure_family_env(family: str, conda_exe: str,
                       envs_root: Path) -> tuple[str, str]:
     """确保家族 conda 环境存在(python 版本 + 依赖 pin),返回 (名称, python 路径)。"""
+    # 夜批 b2 取证:argparse 传 --envs-root 为 str,注解 Path 不会自动转换,
+    # `envs_root / name` 直接 TypeError——conda 后端此前从未真正能跑。
+    envs_root = Path(envs_root)
     spec = FAMILY_CONDA[family]
     name = conda_env_name(family)
     py = envs_root / name / "python.exe"
