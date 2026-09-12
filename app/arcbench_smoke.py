@@ -170,6 +170,9 @@ _JOURNEY_SYSTEM = (
     "禁止 import json/re 之外的模块；禁止 os/sys/subprocess/socket/requests。"
 )
 
+# 旅程步数计数（缩水检测：c.get/c.post/c.put/c.delete 调用数）
+_JOURNEY_STEP_RE = re.compile(r"c\.(?:get|post|put|delete|patch)\(")
+
 _JOURNEY_USER = """根据需求摘要与真实路由表，生成该 Web 应用的主旅程验收代码体。
 
 需求摘要：
@@ -342,10 +345,14 @@ def _journey_gate(
     best_script: str | None = None  # 执行报告中信息量最大的合法脚本版本
     last_report = ""
     best_report = ""  # 信息量最大的一次真实执行报告（修应用时交给 LLM）
+    best_steps = 0  # 已接受版本的最大步数（缩水检测基线，r8 取证）
     for attempt in (1, 2):
         try:
             body = gen("" if attempt == 1 else
-                       "\n\n上一版脚本执行失败输出（修正脚本本身，勿改应用行为假设）：\n"
+                       "\n\n上一版脚本执行失败输出（修正脚本本身的路径/参数/"
+                       "选择器错误；**禁止缩减旅程覆盖范围**——需求要求的注册/"
+                       "登录/查询/下单等步骤一个都不能少，应用缺能力就保留"
+                       "断言如实失败，缺失将由应用修复通道补齐）：\n"
                        + last_report[-800:])
         except Exception as exc:
             notes.append(f"[journey] SKIP: 脚本生成失败 {exc!r}")
@@ -374,6 +381,17 @@ def _journey_gate(
             notes.append(f"[journey] 第{attempt}版脚本被扫描拦截，重生成")
             continue
         script = candidate
+        # r8 取证：自修复脚本「缩水迁就残缺应用」（v1 八步旅程 → v2 只查
+        # health）会把空心 PASS 放行——真实评测 0 分。步数不得低于 v1：
+        # 缩水版按无效处理，落应用修复通道（宁可诚实 FAIL）。
+        steps = len(_JOURNEY_STEP_RE.findall(body))
+        if steps and steps < best_steps:
+            last_report = (
+                f"自修复脚本步数缩水（{best_steps}→{steps}），疑似迁就残缺应用"
+            )
+            notes.append(f"[journey] 第{attempt}版脚本缩水被拒收")
+            continue
+        best_steps = max(best_steps, steps)
         jpath.write_text(script, encoding="utf-8")
         ok, last_report = run_journey_script(jpath, code_dir)
         if len(last_report) > len(best_report):
@@ -513,7 +531,11 @@ def auto_repair(
         + report[-1500:]
         + "\n请最小化修复使冒烟通过：可新增缺失函数、注册缺失路由、"
         "托管缺失静态页面（index.html 等，放模块目录 static/ 下），"
-        "保证所有模块可导入、create_app 可用、健康检查 200。"
+        "保证所有模块可导入、create_app 可用、健康检查 200。\n"
+        "硬性约束（r8 取证）：**禁止删除或绕过 create_app 中已有的业务"
+        "路由注册逻辑**（register/login/search/booking 等真实业务端点"
+        "一个都不能少）——import 缺失用补建别名/垫片模块解决，"
+        "而不是删减组装逻辑；修残应用的验收会被下游旅程门禁拒绝。"
         "禁止修改 tests/ 目录；禁止重构无关代码。"
     )
     if test_cmd is None:

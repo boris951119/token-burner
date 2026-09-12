@@ -356,3 +356,52 @@ class TestRepairRouteGuard:
         )
         assert ok, (notes, report)
         assert not any("已回滚" in n for n in notes)
+
+
+# ---- r8 取证：自修复脚本缩水迁就残缺应用 = 空心 PASS，必须拒收 ----
+
+
+class TestShrinkGuard:
+    def test_shrunk_repair_script_rejected_goes_to_fixer(self, app_code, monkeypatch):
+        """v1 八步旅程在残缺应用上失败；v2 缩水成只查 health → 拒收 →
+        进 RepoFixer（应用修复通道），而非放行空心 PASS。"""
+        # 残缺应用：只有 health（注册/登录/搜索/订票全丢）
+        web = app_code / "web" / "web.py"
+        web.write_text(
+            "from flask import Flask, jsonify\n"
+            "def create_app():\n"
+            "    app = Flask(__name__)\n"
+            "    @app.route('/api/health')\n"
+            "    def h():\n        return jsonify(status='ok')\n"
+            "    return app\n",
+            encoding="utf-8",
+        )
+
+        class _FakeResult:
+            ok = False
+            rounds = 3
+
+        fixed = {}
+
+        class _SpyFixer:
+            def __init__(self, llm, project_dir, test_cmd=None, max_rounds=3):
+                fixed["called"] = True
+
+            def fix(self, issue):
+                fixed["issue_head"] = issue[:60]
+                return _FakeResult()
+
+        monkeypatch.setattr("app.agents.repo_fixer.RepoFixer", _SpyFixer)
+        notes: list[str] = []
+        good = _GOOD_BODY  # 八步全旅程
+        shrunk = (
+            "resp = c.get('/api/health')\n"
+            "assert resp.status_code == 200, 'health'"
+        )
+        llm = _ScriptedLLM([good, shrunk])
+        ok, report = _journey_gate(
+            app_code, app_code.parent, "train ticket app", llm, 3, notes
+        )
+        assert not ok  # 残缺应用 + 修复无效 → 诚实 FAIL
+        assert any("缩水被拒收" in n for n in notes)
+        assert fixed.get("called") is True  # 走了应用修复而非放行
