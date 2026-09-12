@@ -266,3 +266,93 @@ class TestSyntaxGuard:
         )
         assert ok is True
         assert any("均不可执行" in n for n in notes)
+
+
+# ---- r7d 取证：修复可能把应用修残（业务路由全丢）→ 路由面退化守卫 ----
+
+
+class TestRepairRouteGuard:
+    def test_route_degradation_triggers_rollback(self, app_code, monkeypatch):
+        """修复把路由删光（8→3）：终验 FAIL + 路由退化 → 回滚修复前状态。"""
+        # 先破坏应用（搜索 500）让脚本失败、进入修复通道
+        web = app_code / "web" / "web.py"
+        web.write_text(
+            _WEBAPP.replace(
+                'return jsonify(trains=trains)',
+                'raise RuntimeError("broken")',
+            ),
+            encoding="utf-8",
+        )
+        before = _probe_routes(app_code)
+        assert before is not None and len(before[1]) >= 5
+
+        class _FakeResult:
+            ok = False
+            rounds = 3
+
+        class _VandalFixer:
+            """模拟越修越残：把 web.py 覆盖成只剩 health 的空壳。"""
+
+            def __init__(self, llm, project_dir, test_cmd=None, max_rounds=3):
+                self.project_dir = project_dir
+
+            def fix(self, issue):
+                assert "不得删除任何既有路由" in issue  # 修复指令带路由面快照
+                web = self.project_dir / "code" / "web" / "web.py"
+                web.write_text(
+                    "from flask import Flask, jsonify\n"
+                    "def create_app():\n"
+                    "    app = Flask(__name__)\n"
+                    "    @app.route('/api/health')\n"
+                    "    def h():\n        return jsonify(status='ok')\n"
+                    "    return app\n",
+                    encoding="utf-8",
+                )
+                return _FakeResult()
+
+        monkeypatch.setattr("app.agents.repo_fixer.RepoFixer", _VandalFixer)
+        notes: list[str] = []
+        llm = _ScriptedLLM([_GOOD_BODY])
+        ok, report = _journey_gate(
+            app_code, app_code.parent, "train ticket app", llm, 3, notes
+        )
+        assert not ok  # 修复无效
+        assert any("已回滚修复" in n for n in notes)
+        # 回滚后路由面与修复前一致
+        after = _probe_routes(app_code)
+        assert after is not None and len(after[1]) == len(before[1])
+
+    def test_route_guard_not_triggered_on_success(self, app_code, monkeypatch):
+        """修复成功（旅程 PASS）：不触发回滚判定；终验用最佳脚本版本。"""
+
+        class _FakeResultOk:
+            ok = True
+            rounds = 1
+
+        # 破坏应用让脚本失败进修复；修复器把应用修回原样
+        web = app_code / "web" / "web.py"
+        original = web.read_text(encoding="utf-8")
+        web.write_text(
+            original.replace(
+                'return jsonify(trains=trains)',
+                'raise RuntimeError("broken")',
+            ),
+            encoding="utf-8",
+        )
+
+        class _RealishFixer:
+            def __init__(self, llm, project_dir, test_cmd=None, max_rounds=3):
+                self.web = project_dir / "code" / "web" / "web.py"
+
+            def fix(self, issue):
+                self.web.write_text(original, encoding="utf-8")
+                return _FakeResultOk()
+
+        monkeypatch.setattr("app.agents.repo_fixer.RepoFixer", _RealishFixer)
+        notes: list[str] = []
+        llm = _ScriptedLLM([_GOOD_BODY])
+        ok, report = _journey_gate(
+            app_code, app_code.parent, "train ticket app", llm, 3, notes
+        )
+        assert ok, (notes, report)
+        assert not any("已回滚" in n for n in notes)

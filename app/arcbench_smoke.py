@@ -323,6 +323,7 @@ def _journey_gate(
 
     jpath = Path(tempfile.gettempdir()) / "arcbench_journey.py"
     script: str | None = None
+    best_script: str | None = None  # 执行报告中信息量最大的合法脚本版本
     last_report = ""
     best_report = ""  # 信息量最大的一次真实执行报告（修应用时交给 LLM）
     for attempt in (1, 2):
@@ -361,6 +362,7 @@ def _journey_gate(
         ok, last_report = run_journey_script(jpath, code_dir)
         if len(last_report) > len(best_report):
             best_report = last_report
+            best_script = script
         if ok:
             notes.append("[journey] PASS")
             return True, ""
@@ -377,6 +379,15 @@ def _journey_gate(
 
     # 脚本本身两轮收敛了但断言仍失败 → 应用缺陷，进入修复循环
     notes.append("[journey] 旅程断言失败 → RepoFixer 修复应用")
+    # r7d 取证：修复可能把应用越修越残（业务路由 11→3 全丢）——修复前
+    # 备份 code/，修复后路由面退化即回滚；修复指令携带完整路由面快照
+    backup = Path(tempfile.mkdtemp()) / "code_backup"
+    try:
+        shutil.copytree(
+            code_dir, backup, ignore=shutil.ignore_patterns("__pycache__")
+        )
+    except Exception:
+        pass
     try:
         from app.agents.repo_fixer import RepoFixer
 
@@ -389,12 +400,33 @@ def _journey_gate(
             "旅程验收失败（评测方以真实浏览器走用户旅程，本脚本是同进程"
             "等价验收）。失败输出如下，请最小化修复使旅程通过（典型："
             "查询/列表必须返回数据库种子数据而非硬编码列表、缺失页面/"
-            "路由补齐、响应字段补齐）。禁止修改 tests/ 目录与旅程脚本。\n"
+            "路由补齐、响应字段补齐）。\n"
+            "硬性约束：修复后应用必须仍注册下列全部路由（方法不得改动、"
+            "不得删除任何既有路由）——\n"
+            + "\n".join(routes)
+            + "\n禁止修改 tests/ 目录与旅程脚本。\n"
             + best_report[-1500:]
         )
     except Exception as exc:
         notes.append(f"[journey] 修复通道异常 {exc!r}")
+    if best_script is not None:
+        # r7d：修复后终验必须用「最有效的脚本版本」——自修复轮可能产出
+        # 退化脚本（SystemExit 占位），复用最后一版会把修好的应用判死
+        jpath.write_text(best_script, encoding="utf-8")
     ok, report = run_journey_script(jpath, code_dir)
+    if not ok:
+        # 路由面退化守卫：修复后探针路由数明显缩水 → 回滚到修复前状态
+        post = _probe_routes(code_dir)
+        if post is None or len(post[1]) < len(routes) - 1:
+            try:
+                shutil.rmtree(code_dir)
+                shutil.copytree(backup, code_dir)
+                notes.append(
+                    f"[journey] 修复致路由面退化（{len(routes)}→"
+                    f"{len(post[1]) if post else 0}），已回滚修复"
+                )
+            except Exception:
+                notes.append("[journey] 路由面退化但回滚失败")
     notes.append(f"[journey] 修复后 {'PASS' if ok else 'FAIL'}")
     if not ok:
         return False, last_report[-300:]
