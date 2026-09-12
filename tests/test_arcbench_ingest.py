@@ -143,3 +143,16 @@ def test_render_requires_db_backed_queries():
     assert "严禁返回硬编码静态列表" in text
     assert "内置降级 mock" in text
     assert "判定集成失败" in text
+
+
+def test_render_requires_single_anchored_database():
+    """硬性契约 14：唯一锚定数据库，禁止 CWD 相对路径与多库并存
+    （r7c-2 实弹取证：三库并存致种子/搜索读写分离，评测必挂）。"""
+    import yaml
+
+    tree = yaml.safe_load(_TREE)
+    text = render_requirement_text(tree)
+    assert "共用唯一数据库" in text
+    assert "Path(__file__)" in text
+    assert "严禁 CWD 相对路径" in text
+    assert "多库并存判定集成失败" in text

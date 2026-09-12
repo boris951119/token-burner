@@ -92,3 +92,8 @@ swebench_lite.jsonl
 # 运行时产物（用户手动测试产生，去留待定）
 data/
 agent-blank-based.zip
+
+# CWD 相对路径 sqlite 产物（r7c-2 取证：正是第 14 条契约禁止的形态）
+app.db
+*.db
+!arcbench-agent-runtime/**
