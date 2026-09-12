@@ -126,10 +126,11 @@ FAMILY_CONDA: dict[str, dict] = {
     "flask":   {"python": "3.9",  "pip": ["werkzeug~=2.0", "pytest~=6.2",
                                           "click==8.1.3"]},
     "pytest":  {"python": "3.11", "pip": ["hypothesis<6.80", "xmlschema"]},
-    "sphinx":  {"python": "3.9",  "pip": ["docutils<0.18", "jinja2<3.0"]},
+    "sphinx":  {"python": "3.9",  "pip": ["docutils<0.18", "jinja2<3.0",
+                                          "markupsafe==2.0.1"]},
     "pylint":  {"python": "3.10", "pip": ["astroid~=2.15", "tomlkit"]},
     "astroid": {"python": "3.10", "pip": []},
-    "requests": {"python": "3.9", "pip": ["urllib3", "pytest-httpbin", "pytest-mock"]},
+    "requests": {"python": "3.9", "pip": ["urllib3<1.27", "pytest-httpbin", "pytest-mock"]},
     "xarray":  {"python": "3.10", "pip": ["numpy<2", "pandas<2.1", "pytest"]},
     "seaborn": {"python": "3.10", "pip": ["numpy<2", "pandas<2.1", "matplotlib"]},
 }
