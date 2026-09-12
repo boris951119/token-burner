@@ -39,6 +39,9 @@ _TRANSIENT_MARKERS: tuple[str, ...] = (
     # json 解析响应体抛 UnicodeDecodeError/JSONDecodeError——响应乱码属
     # 网关瞬态故障，重试即可恢复（此前直接上谋杀整个任务）
     "unicodedecodeerror", "jsondecodeerror",
+    # factory26 r7b 取证：评审模型偶发返回 message.content 缺失的响应
+    # （网关抖动）——换一次尝试即恢复，非瞬态判定会当场谋杀整个任务
+    "message.content",
 )
 
 
@@ -291,23 +294,33 @@ class ModelClient:
 
         completion = self._completion_fn or _default_completion_fn()
 
+        # factory26 r7b：响应构建（含 content 校验）纳入重试与墙钟范围——
+        # 网关偶发返回 message.content 缺失的响应，构建在重试外会让该
+        # 抖动绕过瞬态判定当场终止任务。raw_holder 暴露末次成功裸响应
+        # （截断续写需读 finish_reason）。
+        raw_holder: list[Any] = []
+
+        def _call_and_build(**kw):
+            response = completion(**kw)
+            raw_holder.append(response)
+            return self._build_response(
+                model, response, json_mode=json_mode, messages=kw["messages"]
+            )
+
         try:
-            response = self._call_with_retry(
-                completion, kwargs, model, "LLM 调用失败"
+            result = self._call_with_retry(
+                _call_and_build, kwargs, model, "LLM 调用失败"
             )
         except RuntimeError:
             if use_json:
                 # 15.1：模型不支持 response_format 时降级为普通调用
                 kwargs.pop("response_format", None)
-                response = self._call_with_retry(
-                    completion, kwargs, model, "LLM 调用失败"
+                result = self._call_with_retry(
+                    _call_and_build, kwargs, model, "LLM 调用失败"
                 )
             else:
                 raise
-
-        result = self._build_response(
-            model, response, json_mode=json_mode, messages=messages
-        )
+        response = raw_holder[-1] if raw_holder else None
 
         # 11.2：截断（finish_reason=length）分块续写，不静默丢弃
         continuations = 0
@@ -323,14 +336,12 @@ class ModelClient:
                 + [{"role": "user", "content": "继续，从中断处接着输出剩余部分，不要重复已有内容。"}]
             )
             try:
-                response = self._call_with_retry(
-                    completion, kwargs, model, "LLM 续写调用失败"
+                continuation = self._call_with_retry(
+                    _call_and_build, kwargs, model, "LLM 续写调用失败"
                 )
+                response = raw_holder[-1]
             except RuntimeError:
                 raise
-            continuation = self._build_response(
-                model, response, json_mode=json_mode, messages=kwargs["messages"]
-            )
             # bench_v1 试跑取证（2026-09-04）：句中截断（原文不以换行结尾）时，
             # GLM 续写响应以真实换行开头而非接着输出原行——裸拼接在拼接点产生
             # 未闭合字符串（unterminated string literal），且修复轮重新生成再次
