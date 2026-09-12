@@ -113,6 +113,17 @@ def render_requirement_text(
         "锚定（如各模块共同引用 _shared 中的单一路径），严禁 CWD 相对路径"
         "（评测方从任意目录启动服务，相对路径会产生新的空库导致种子丢失）；"
         "禁止任何模块自建独立的 sqlite 文件——多库并存判定集成失败；",
+        "15. Flask 应用级钩子（teardown_appcontext/before_request 等）必须"
+        "在 create_app() 组装期间、首个请求之前一次性注册（r12 实证：在"
+        "请求处理路径里惰性注册 teardown_appcontext，Flask 3 抛 "
+        "AssertionError 使该接口 500）——标准模式：_shared 提供 "
+        "init_app(app)，create_app() 显式调用；get_db() 只允许使用已注册"
+        "的回调，严禁在请求路径上首次注册任何应用级钩子；",
+        "16. 任何模块访问数据库只允许通过 _shared 的 get_db()；严禁借用"
+        "其他模块的 DB 封装类或连接工具（r12 实证：auth 借用 booking 的"
+        "封装类导致报错定位错乱）；表结构的唯一权威是 seed_data 模块的 "
+        "DDL——任何模块不得另建同名表、不得假设 DDL 之外的列（如 users.id）；"
+        "跨模块表结构漂移判定集成失败；",
         "",
         "功能与验收要求（模块划分必须与下列功能模块一一对应，不要合并、不要增删）：",
     ]
