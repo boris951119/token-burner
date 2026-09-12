@@ -335,3 +335,52 @@ class TestContentlessResponse:
             client.chat("gpt-4o", _MSG)
         assert flaky.calls == 2  # 1 次首发 + 1 次重试（构建纳入重试范围）
         assert _is_transient(RuntimeError("LLM 响应缺少 message.content 字段"))
+
+
+# ---------------------------------------------------------------------------
+# factory26 r7c：推理模型吃满 max_tokens → finish=length + content 空 → 扩容重试
+# ---------------------------------------------------------------------------
+
+
+class _LengthEmptyThenGood:
+    """首两次返回「推理吃满预算」形态（finish=length, content 空），第三次正常。"""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def __call__(self, **kwargs):
+        self.calls.append(kwargs)
+        if len(self.calls) <= 2:
+            return {"choices": [{"message": {"content": ""},
+                                 "finish_reason": "length"}],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": kwargs["max_tokens"]}}
+        return _resp("finally")
+
+
+class TestEmptyContentBudgetExpansion:
+    def test_empty_length_doubles_max_tokens_and_recovers(self, gpt_key):
+        flaky = _LengthEmptyThenGood()
+        client = _client(completion=flaky, sleep=SleepRecorder(),
+                         max_response_tokens=3000, retry_backoff_base=0.01)
+        result = client.chat("gpt-4o", _MSG)
+        assert result.content == "finally"
+        caps = [c["max_tokens"] for c in flaky.calls]
+        assert caps == [3000, 6000, 12000]  # 翻倍序列
+        assert flaky.calls[2]["max_tokens"] == 12000
+
+    def test_ceiling_caps_expansion(self, gpt_key):
+        """预算已到天花板附近：不再翻倍，保留空内容结果交给上层。"""
+        flaky = _LengthEmptyThenGood()
+        flaky.calls.append({"max_tokens": 24000})  # 预热：下次调用起全为坏
+        client = _client(completion=flaky, sleep=SleepRecorder(),
+                         max_response_tokens=24000, retry_backoff_base=0.01)
+        result = client.chat("gpt-4o", _MSG)
+        # 24000 已达天花板 → 不扩容（new_cap <= cap → break）；
+        # 后续 finish=length 走既有续写通道救回内容
+        assert all(c["max_tokens"] <= 24000 for c in flaky.calls)
+
+    def test_normal_content_skips_expansion(self, gpt_key):
+        flaky = FlakyCompletion(fail_times=0)
+        client = _client(completion=flaky, sleep=SleepRecorder())
+        client.chat("gpt-4o", _MSG)
+        assert flaky.calls[0]["max_tokens"] == client.settings.max_response_tokens

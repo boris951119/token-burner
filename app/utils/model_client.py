@@ -44,6 +44,11 @@ _TRANSIENT_MARKERS: tuple[str, ...] = (
     "message.content",
 )
 
+# factory26 r7c：空内容扩容重试的生成预算天花板（tokens）。
+# 推理模型长推理吃满 max_tokens → finish=length + content 空，
+# 翻倍重试需上限防失控（12000 → 24000 → 放弃）。
+_EMPTY_CONTENT_MAX_TOKENS_CEILING = 24000
+
 
 def _is_transient(exc: Exception) -> bool:
     """判断异常是否为瞬态（可退避重试）。"""
@@ -321,6 +326,28 @@ class ModelClient:
             else:
                 raise
         response = raw_holder[-1] if raw_holder else None
+
+        # factory26 r7c 取证：推理模型（glm-5.2/5.3）长推理可吃光 max_tokens，
+        # 返回 finish=length + content 空（completion_tokens 全花在推理上）
+        # ——空内容走「续写」是死路，翻倍生成预算重试才对路（封顶 24k）。
+        for _ in range(2):
+            if (
+                result.content
+                or _get_finish_reason(response) != "length"
+                or not self.settings.max_output_continuations
+            ):
+                break
+            new_cap = min(
+                int(kwargs.get("max_tokens") or 0) * 2,
+                _EMPTY_CONTENT_MAX_TOKENS_CEILING,
+            )
+            if new_cap <= int(kwargs.get("max_tokens") or 0):
+                break
+            kwargs["max_tokens"] = new_cap
+            result = self._call_with_retry(
+                _call_and_build, kwargs, model, "LLM 调用失败（空内容扩容重试）"
+            )
+            response = raw_holder[-1]
 
         # 11.2：截断（finish_reason=length）分块续写，不静默丢弃
         continuations = 0
