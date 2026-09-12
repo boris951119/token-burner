@@ -45,9 +45,12 @@ class TestEnvPrecheckStderr:
         repo = tmp_path / "repo"
         repo.mkdir()
 
-        def fake_run(*args, **kwargs):
-            return sp.CompletedProcess(args, 1,
-                                       stdout="", stderr="ModuleNotFoundError: x")
+        def fake_run(cmd, **kwargs):
+            if "--co" in cmd:  # 收集成功,节点在列
+                return sp.CompletedProcess(cmd, 0,
+                                           stdout="tests/a.py::t", stderr="")
+            return sp.CompletedProcess(cmd, 1, stdout="",
+                                       stderr="ModuleNotFoundError: x")
 
         monkeypatch.setattr(swebench_run.subprocess, "run", fake_run)
         ok, reason = swebench_run.env_precheck(repo, ["tests/a.py::t"], [], "py")
