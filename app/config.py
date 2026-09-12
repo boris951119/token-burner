@@ -210,6 +210,27 @@ class Settings:
     # ---- 14 章 生成项目本地 git 版本管理 ----
     enable_git: bool = True                      # 阶段性本地提交（免推送）
 
+    # ---- factory26 平台单模型模式 ----
+    # ARC-Bench runner 按单模型下发（MODEL 环境变量），三角色同模是合法
+    # 形态；开启后 TeamBuilder._check_models 跳过互异校验（预设列表校验
+    # 仍生效）。仅 headless 参赛入口（main.py）设置，web/CLI 产品路径不触碰。
+    single_model_mode: bool = False
+
+    # ---- factory26 中转站多模型组队 ----
+    # r6 探测取证：比赛网关（api.arc-bench.com/v1）单 key 可直连全部
+    # 11 个模型且可并发——true 时平台入口保留三模型互异组队（注入
+    # MODEL 任主 LLM，开发/测试副 LLM 取 config 预设中互异者）；
+    # false = 注入单模型三角色同模（严格按 runner 下发口径）。
+    platform_multi_model: bool = False
+
+    # ---- factory26 网关长挂防御 ----
+    # 单次 LLM 调用的墙钟上限（秒）：0 = 关闭（产品缺省，行为不变）。
+    # 背景：httpx read timeout 是「字节间隙」口径——网关对长生成滴字
+    # 续命时 240s read timeout 永不触发，单请求实测可挂 25 分钟以上。
+    # >0 时调用放入守护线程并 join(deadline)，超时抛 TimeoutError
+    # （瞬态，走既有退避重试）；参赛入口 main.py 兜底 600s。
+    llm_wall_clock_seconds: int = 0
+
     # ------------------------------------------------------------------
     # 校验（总则 D.1：确定性校验由程序承担）
     # ------------------------------------------------------------------

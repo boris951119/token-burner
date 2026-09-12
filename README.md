@@ -37,6 +37,13 @@ spec 确认 → 模块拆分 → 逐模块「写码 → 测试 → 执行」循�
 - **可恢复与可取消**：中断后恢复续跑（已完成模块自动跳过）；运行中任务
   协作式取消 + 僵尸任务启动清扫
 
+- **并行模块开发**（v1.2）：无依赖模块同层并发（worker 数可配），
+  依赖分层间保持拓扑序，等待时间 2-4× 压缩
+
+- **repo-patch 模式**（v1.2）：除从零生成外，支持克隆真实仓库至 base commit、
+  以 issue 文本为需求产出补丁并跑仓库自带测试（SWE-bench Lite 跑分线，
+  `scripts/swebench_run.py`）
+
 - **可视化**：Web 工作台实时监控（阶段耗时 / token 曲线 / 模块全景）、
   对话流图、模式推荐、深浅主题、分类设置页
 
@@ -132,7 +139,7 @@ npm run compile        # 产物在 out/；消息协议契约测试：npm test
   → [可选 Researcher：资料注入 / 联网搜索 → 四段式摘要]
   → 组队（三模型互异校验）→ 方案讨论（PM/双评审，五层护栏）
   → 模块拆分（难度≥5 或文件≥6）→ 接口契约（imports/exports/public_api）
-  → 逐模块开发循环（写码 → 测试 → 静态验证 → 接口门禁 → 执行）
+  → 逐层模块开发循环（同层并发；写码 → 测试 → 静态验证 → 接口门禁 → 执行）
   → 反馈闭环（安全模式）/ 自动验证（Docker 沙箱或进程降级）
   → 交付（modules/*.md + code/ + tests/ + changelog/ + 成本看板）
 ```
@@ -156,7 +163,7 @@ npm run compile        # 产物在 out/；消息协议契约测试：npm test
 ## 测试
 
 ```bash
-python -m pytest tests/ -q                  # 1030 项（全 stub，无需密钥）
+python -m pytest tests/ -q                  # 1116 项（全 stub，无需密钥）
 cd vscode-extension && npm test             # 插件消息协议契约测试 4 项
 python scripts/ab_triage_eval.py --mock     # 快慢双模式 A/B 自检（--real 走真实 LLM）
 ```
@@ -166,15 +173,35 @@ python scripts/ab_triage_eval.py --mock     # 快慢双模式 A/B 自检（--rea
 推送 `v*` 标签触发 GitHub Actions（`.github/workflows/release.yml`）：
 pytest 全量回归 → PyInstaller 构建 → 产物体积检查（≤80MB）→ Release 附 EXE。
 
+## ARC-Bench 参赛模式
+
+平台 runner 以 headless CLI 调用（模型经环境变量注入，OpenAI 兼容网关，
+平台提交包 = 仓库 zip，根目录含 `main.py` + `requirements.txt`）：
+
+```bash
+OPENAI_API_KEY=<key> OPENAI_BASE_URL=<gateway> MODEL=<model> \
+python main.py <requirements_dir> --output-dir <output_dir> --type web --mode auto
+```
+
+- 需求树摄取：`requirements.yaml`（FOLDER/ATOMIC）→ 管线需求文本，
+  FOLDER 对齐模块划分、ATOMIC 对齐验收标准、`tests/helpers.ts` 种子契约注入
+  （`app/arcbench_ingest.py`）
+- 过程上报：Pipeline 事件 → 官方 SDK 翻译（事件流 + traceability + git 提交），
+  本地无 SDK 自动 no-op（`app/arcbench_bridge.py`）
+- 交付后集成冒烟：import 全模块 + `create_app()` + `/api/health` 200，
+  失败自动修复 ≤3 轮（`app/arcbench_smoke.py`）
+- 中断恢复：`--resume` 跳过已完成模块续跑
+
+赛制理解 / 提交契约 / 演练计划见 [docs/competition-plan.md](docs/competition-plan.md)。
+
 ## 文档
 
-- [CHANGELOG.md](CHANGELOG.md) — 版本历史（v0.5.0-beta 全量交付清单）
+- [CHANGELOG.md](CHANGELOG.md) — 版本历史（v1.0.0 正式版交付清单；v1.2 参赛适配与 SWE-bench 基准线）
 
-- [v0.5.md](v0.5.md) / [v0.5-workplan.md](v0.5-workplan.md) — Beta 任务清单与批次计划
+- [docs/competition-plan.md](docs/competition-plan.md) — ARC-Bench 参赛作战手册
+  （赛制理解 / 提交契约 / 模型策略 / 演练计划 / 风险预案）
 
-- [v0.4.md](v0.4.md) — Alpha 规格（双模式意图 / Docker 沙箱 / 并发架构）
-
-- [v0.3.1 合并版规格](Token消耗器_AI多智能体项目团队系统_开发规格文档_v0.3.1_合并版.md) — 核心流程与护栏设计
+- [v1.0.md](v1.0.md) / [v1.0-workplan.md](v1.0-workplan.md) — 1.0 定稿规格与批次计划
 
 - [文档目录.md](文档目录.md) — 全部文档索引
 

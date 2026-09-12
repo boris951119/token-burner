@@ -44,6 +44,8 @@ _TRANSIENT_MARKERS: tuple[str, ...] = (
 
 def _is_transient(exc: Exception) -> bool:
     """判断异常是否为瞬态（可退避重试）。"""
+    if isinstance(exc, TimeoutError):
+        return True  # 墙钟防御超时（网关长挂）→ 换一次尝试常可恢复
     text = f"{type(exc).__name__} {exc}".lower()
     return any(marker in text for marker in _TRANSIENT_MARKERS)
 
@@ -178,6 +180,39 @@ class ModelClient:
 
     # ------------------------------------------------------------------
 
+    def _call_with_wall_clock(self, fn, kwargs: dict[str, Any]) -> Any:
+        """网关长挂防御：单次调用限墙钟（llm_wall_clock_seconds，0=关）。
+
+        httpx read timeout 只约束「字节间隙」——网关对长生成滴字续命时
+        永不触发，单请求实测可挂 25 分钟以上（P2P 演练取证）。放入
+        守护线程 join(deadline)：超时抛 TimeoutError（瞬态 → 既有退避
+        重试），被遗弃线程随响应到达自行消散。
+        """
+        limit = int(self.settings.llm_wall_clock_seconds or 0)
+        if limit <= 0:
+            return fn(**kwargs)
+        import threading
+
+        box: dict[str, Any] = {}
+
+        def _worker() -> None:
+            try:
+                box["result"] = fn(**kwargs)
+            except BaseException as exc:  # 原样转交主线程判定
+                box["error"] = exc
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+        t.join(timeout=float(limit))
+        if t.is_alive():
+            raise TimeoutError(
+                f"单次调用超过墙钟上限 {limit}s timed out"
+                "（网关长挂防御触发）"
+            )
+        if "error" in box:
+            raise box["error"]
+        return box["result"]
+
     def _call_with_retry(
         self,
         fn: Callable[..., Any],
@@ -201,7 +236,7 @@ class ModelClient:
 
                 self.rate_limiter.acquire(provider_of(model))
             try:
-                return fn(**kwargs)
+                return self._call_with_wall_clock(fn, kwargs)
             except Exception as exc:
                 if not _is_transient(exc):
                     raise RuntimeError(

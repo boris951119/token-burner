@@ -447,10 +447,13 @@ class TeamBuilder:
                     f"模型「{name}」不在预设列表中，可用模型: {self.settings.models}"
                 )
         if len({main_model, dev_model, test_model}) != 3:
-            raise TeamBuildError(
-                f"主 LLM / 开发副 LLM / 测试副 LLM 必须选择三个不同的模型，"
-                f"当前: ({main_model}, {dev_model}, {test_model})"
-            )
+            # factory26：平台单模型下发是合法形态（single_model_mode），
+            # 仅跳过互异校验；web/CLI 产品路径默认关闭，规格 3.3 不变。
+            if not self.settings.single_model_mode:
+                raise TeamBuildError(
+                    f"主 LLM / 开发副 LLM / 测试副 LLM 必须选择三个不同的模型，"
+                    f"当前: ({main_model}, {dev_model}, {test_model})"
+                )
 
     def _check_mode(self, mode: str) -> None:
         if mode not in ("safe", "auto"):

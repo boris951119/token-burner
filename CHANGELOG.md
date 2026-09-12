@@ -1,5 +1,37 @@
 # Changelog
 
+## v1.2 · factory26 参赛适配（2026-09-11）：平台单模型模式 + E2E 演练 P0 修复
+
+> ARC-Bench（arc-bench.com）参赛强化。真实网关（api.arc-bench.com/v1，
+> glm-5.3）端到端演练两连炸取证修复；参赛完整性补提交。
+
+- **平台单模型模式**：runner 按 `MODEL` 环境变量单模型下发，而
+  `Settings._validate` 禁重复模型（[m,m,m] 在网关预检
+  `dataclasses.replace` 重建即炸）且管线三处硬索引 models[1]/[2]、
+  `TeamBuilder._check_models` 强制三模型互异。修复：`main.py` 收敛
+  `settings.models=[m]`；新增 `pipeline._model_triplet` 同模补位收口
+  全部索引点；`Settings.single_model_mode`（缺省关）放行互异校验，
+  预设列表校验仍生效——web/CLI 产品路径规格 3.3 行为不变。
+- **桥接层 traceability 增强**（Usage Rule 合规，只调 SDK 方法）：
+  管线拆分+契约后发 `interfaces_ready` 事件 → 逐 export 登记
+  interfaces 表 + mark_design_done；module_done → tests 表登记
+  （SUCCESS passed / FROZEN failed）+ set_interface_implemented；
+  模块名 → FOLDER id 确定性模糊映射（全等/互相包含/公共前缀≥4 且占
+  短边≥2/3），显式 node_map 优先；`ARCBENCH_OUTPUT_DIR` setdefault
+  兜底，事件流不落错目录。
+- **门禁指引**：extra 处置指引明示「测试已引用的符号禁止私有化」
+  （演练取证：私有化 → ImportError 与门禁震荡，db_layer 连修 2 轮）。
+- **参赛完整性**：`arcbench-agent-runtime` SDK（requirements.txt 路径
+  依赖）与 `arcbench_ingest`/`arcbench_smoke` 补提交入库——按此前
+  状态提交会导致平台侧依赖解析直接失败；构建副产物入 gitignore。
+- **网关实measurement**：glm-5.3 讨论级调用（≈4k in / 8k max out）
+  实测 2m24s/次——推理模型讨论阶段 25-40 分钟属正常水位，
+  headless 超时诊断以此为基线。
+- 测试：新增单模型模式/同模补位/桥接登记/FOLDER 映射/
+  interfaces_ready 事件 **17 项**。全量回归 **1099 → 1116 passed /
+  7 skipped / 0 failed**。
+
+
 ## v1.2 · S2 SWE-bench Lite 跑分器（2026-09-07）：抽样/执行/报告四合一
 
 > v1.2-workplan S2——`scripts/swebench_run.py`。实际跑分需 API Key

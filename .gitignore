@@ -78,3 +78,17 @@ secrets.local.json
 
 # 本地临时目录(基准克隆/日志)
 .tmp/
+
+# SDK 构建副产物（pip install 路径依赖产生）
+arcbench-agent-runtime/build/
+arcbench-agent-runtime/src/*.egg-info/
+
+# 基准跑分过程产物（ab_reports 归档入库，其余本地留存）
+logs/bench_v1/
+logs/swebench_*/
+api_blob_cache.json.bak
+swebench_lite.jsonl
+
+# 运行时产物（用户手动测试产生，去留待定）
+data/
+agent-blank-based.zip

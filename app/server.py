@@ -226,7 +226,7 @@ def create_app(
     llm 与 llm_factory 的取舍（M8-1）：注入 llm → 全端点共享实例
     （测试桩兼容）；否则经 llm_factory 每请求/每任务新建客户端。
     """
-    app = FastAPI(title="token-burner API", version="0.1.0")
+    app = FastAPI(title="token-burner API", version="1.0.0")
     app.state.settings = settings or load_settings()
     app.state.llm = llm  # 测试注入（共享模式）；生产为 None
     app.state.llm_factory = llm_factory or ModelClientFactory(app.state.settings)

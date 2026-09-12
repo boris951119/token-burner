@@ -14,7 +14,7 @@ import pytest
 
 from app.config import Settings
 from app.orchestrator import route_models
-from app.pipeline import Pipeline
+from app.pipeline import Pipeline, _model_triplet
 
 
 def _no_dup(models: tuple[str, str, str]) -> bool:
@@ -146,3 +146,25 @@ class TestPipelineResolveModels:
         models = p._resolve_models(self._route(5), None)
         assert models[0] in ("claude-3-5-sonnet", "deepseek-chat")
         assert "deepseek-lite" in models
+
+
+class TestModelTriplet:
+    """三角色同模补位（factory26 平台单模型下发，P2P 演练取证的 P0 修复）。"""
+
+    def test_single_model_fills_all_roles(self):
+        assert _model_triplet(("openai/glm-5.3",)) == \
+            ("openai/glm-5.3", "openai/glm-5.3", "openai/glm-5.3")
+
+    def test_two_models_third_falls_back_to_first(self):
+        assert _model_triplet(("a", "b")) == ("a", "b", "a")
+
+    def test_three_models_untouched(self):
+        assert _model_triplet(("a", "b", "c")) == ("a", "b", "c")
+
+    def test_empty_falls_back_to_default_triple(self):
+        assert _model_triplet(()) == ("gpt-4o", "deepseek-chat", "claude-3-5-sonnet")
+
+    def test_single_model_settings_survives_validation(self):
+        """平台模式链路：单模型 Settings 合法（[m,m,m] 会炸 _validate）。"""
+        settings = Settings(models=["openai/glm-5.3"])
+        assert settings.models == ["openai/glm-5.3"]
