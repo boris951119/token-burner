@@ -190,6 +190,13 @@ def main(argv: list[str] | None = None) -> int:
     # 桥接层 SDK 以 ARCBENCH_OUTPUT_DIR 定位 workspace（.arc/ 事件流与
     # traceability 落点）；runner 只传 --output-dir 时兜底对齐，事件不落错目录
     os.environ.setdefault("ARCBENCH_OUTPUT_DIR", str(workdir))
+    # r10 取证：stdout 重定向到文件时全程打印滞留缓冲，进程终局后日志
+    # 只剩两行——平台排障与本地复盘都依赖 stdout，行缓冲必须打开
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(line_buffering=True)
+        except Exception:
+            pass
     diag = _align_gateway_env()
     settings = load_settings()
     _apply_runner_model(settings)
@@ -244,6 +251,16 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if result.kind in _SUCCESS_KINDS:
+        # 不变量：交付成功必须有完成标记（r10 取证：budget_exceeded 曾
+        # 以退出码 0 上报——终态以落盘标记与退出码双重锚定，宁可误报
+        # 失败不可假报成功）
+        marker_ok = (
+            result.project_dir is None
+            or (Path(result.project_dir) / "sessions" / "completed.json").exists()
+        )
+        if not marker_ok:
+            bridge.run_failed("管线报成功但 completed.json 缺失（终态矛盾）")
+            return 1
         # 交付两段式验收（r2/r4 演练取证：逐模块门禁覆盖不了组装级缺陷；
         # 基础冒烟覆盖不了旅程级缺陷——评测方是 Playwright 走用户旅程）
         if result.project_dir is not None:

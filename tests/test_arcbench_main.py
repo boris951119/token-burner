@@ -70,6 +70,10 @@ class _FakePipeline:
 def _team_result(project_dir):
     from app.pipeline import PipelineResult
 
+    # main.py 成功不变量（r10 取证）要求交付项目带 completed.json 终局标记
+    (Path(project_dir) / "sessions").mkdir(parents=True, exist_ok=True)
+    (Path(project_dir) / "sessions" / "completed.json").write_text(
+        "{}", encoding="utf-8")
     return PipelineResult(
         kind="team_flow", project_dir=project_dir, deliverable_summary="交付完成"
     )
