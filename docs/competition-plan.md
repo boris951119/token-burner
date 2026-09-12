@@ -1,6 +1,6 @@
 # ARC-Bench 参赛规划（factory26）
 
-> 更新：2026-09-11。本文档是参赛作战手册：赛制理解、提交契约、
+> 更新：2026-09-13（夜批）。本文档是参赛作战手册：赛制理解、提交契约、
 > 模型策略、演练计划、风险预案、提交前检查清单。
 
 ## 1. 赛制理解
@@ -10,6 +10,34 @@ ARC-Bench（https://arc-bench.com）是软件工程智能体基准工作台，�
 - **Playground**：低压力草稿区，设计需求、检查基准结构、迭代 agent；
 - **Competition**：正式计分赛（我们的目标）；
 - **Research**：研究协作。
+
+**赛道盘点（2026-09-13 凌晨实测，官方页面核验）**：
+
+| 入口 | 性质 | 结论 |
+| --- | --- | --- |
+| Playground | 工作台（Home/任务/环境），页脚标注 MOBILE / KERNEL 赛道 coming soon | 非赛道，不可报 |
+| Competition | **Smoke Competition**（2026-09-01 → 10-17），唯一活跃计分赛 | **唯一可报赛道** |
+| Research | 文献图谱（ARC 框架=上交/国大 treed compiler 谱系） | 参考资料，非赛道 |
+
+**计分口径（Competition 排行榜列名，实测抄录）**：
+`Avg. Pass Rate`（主指标）→ `Efficiency`（**pass/CNY，每元钱过几个任务**）
+→ `Total Token` → `Runtime`。同通过率下按效率排位。
+
+**头部格局（2026-09-13 快照）**：Top8 全部 `Avg. Pass Rate = 100.0` 且清一色
+`deepseek-v4-flash`；第 1 名 VOLO AI 效率 6241 pass/CNY、Token 0.00M、
+Runtime 5s；第 6-8 名 Token 3.96M-9.09M、Runtime 10-11m 仍 100 分。
+**榜尾一半队伍 0-50 分**——通过率断层是主要分水岭，效率是同分胜负手。
+
+**我方赛道判断**：唯一可报的 Smoke Competition 正是 WEB/Playwright 全旅程
+任务形态，与 r3-r10 演练完全同构，即我方优势赛道。产品差异化与计分逐项对位：
+诚实验收/旅程闸门 → Pass Rate（别人 0-50 分的主因）；BudgetGuard/成本治理
+→ Efficiency(pass/CNY)（"token-burner" 产品本命）。
+
+**模型策略含义（重要）**：头部全用 deepseek-v4-flash 说明便宜快模型在该
+任务形态上已达 100 分——多模型大编制（glm-5.3/deepseek-v4-pro/minimax-m3）
+在效率维度吃亏。预案：先以现编制保 Pass Rate 拿分，再演练
+deepseek-v4-flash 单模型编制对比 pass/CNY，若通过率不降则切换。
+（榜上 5s/0.00M 疑似微型任务或计入口径特例，不影响上述结论。）
 
 **任务形态**：平台下发 `requirements.yaml` 需求树（FOLDER/ATOMIC 两级，
 ATOMIC 节点与 Playwright 端到端用例一一对应，"需求即测试"）。

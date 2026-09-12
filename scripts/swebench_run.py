@@ -230,14 +230,16 @@ def env_precheck(repo_path: Path, p2p: list[str], f2p_files: list[str],
         else:
             proc = run_pytest(list(p2p), 900)
         if proc.returncode != 0:
-            tail = (proc.stdout or "")[-300:]
+            # stdout+stderr 合并取尾(夜批 b1 取证:pytest 启动即崩时
+            # 诊断全在 stderr,只看 stdout 尾巴 → 空原因无从排查)
+            tail = ((proc.stdout or "") + (proc.stderr or ""))[-300:]
             return False, f"P2P 在 base 状态即失败(环境不兼容): {tail}"
         return True, ""
     files = sorted({n.split("::")[0] for n in f2p_files if n})
     if files:
         proc = run_pytest(["--co"] + files, 300)
         if proc.returncode != 0:
-            tail = (proc.stdout or proc.stderr or "")[-300:]
+            tail = ((proc.stdout or "") + (proc.stderr or ""))[-300:]
             return False, f"测试收集失败(导入/环境不兼容): {tail}"
     return True, ""
 
@@ -272,6 +274,12 @@ def run_instance(instance: dict, cache: Path, model: str,
                             "--no-deps", "--quiet"],
                            cwd=repo_path, capture_output=True, text=True,
                            timeout=900)
+            # 兜底保证验证工具存在(sphinx/pylint 家族 pin 里没有 pytest,
+            # F2P 验证命令会直接瞎;setuptools 治 pkg_resources 缺失)
+            subprocess.run([verify_python, "-m", "pip", "install", "pytest",
+                            "setuptools", "--quiet",
+                            "--disable-pip-version-check"],
+                           capture_output=True, text=True, timeout=300)
         elif use_venv:
             _venv, verify_python = create_instance_venv(
                 record["instance_id"], cache)
@@ -285,9 +293,12 @@ def run_instance(instance: dict, cache: Path, model: str,
                     record_notes.append(
                         f"{' '.join(cmd[-2:])} 失败: "
                         f"{(proc.stderr or proc.stdout)[-130:]}")
-            # 兜底:配方未覆盖 pytest 时确保 venv 内可导入
+            # 兜底:配方未覆盖 pytest 时确保 venv 内可导入;setuptools
+            # 治 pkg_resources 缺失(夜批 b1 xarray-5131 取证:Py3.12 venv
+            # 不再自带 setuptools,老仓库 import pkg_resources 直接炸)
             subprocess.run([verify_python, "-m", "pip", "install", "pytest",
-                            "--quiet", "--disable-pip-version-check"],
+                            "setuptools", "--quiet",
+                            "--disable-pip-version-check"],
                            capture_output=True, text=True, timeout=300)
         elif pip_install:
             record_notes.extend(
@@ -305,13 +316,32 @@ def run_instance(instance: dict, cache: Path, model: str,
             return record
 
         settings = load_settings()          # 载入 config.json(超时/重试/16k 输出)
-        settings.models = [model]           # 仅注册本实例使用的模型
+        # 批量跑分专用钩子(环境变量,不污染全局 config.json):
+        # SWEBENCH_WALL_CLOCK=秒数   单次 LLM 调用墙钟上限(网关长挂防御;
+        #                            取证:旧批一实例无墙钟烧 6023s 后超时)
+        # SWEBENCH_FALLBACK_MODELS=m1,m2  重试耗尽后的模型级降级链
+        wall = int(os.environ.get("SWEBENCH_WALL_CLOCK", "0") or 0)
+        if wall > 0:
+            settings.llm_wall_clock_seconds = wall
+        fallbacks = [m.strip() for m in
+                     os.environ.get("SWEBENCH_FALLBACK_MODELS", "").split(",")
+                     if m.strip() and m.strip() != model]
+        settings.models = [model] + fallbacks  # 注册本实例全部可用模型
         client = ModelClientFactory(settings).create()
 
         def llm(system, user):
-            r = client.chat(model, [{"role": "system", "content": system},
-                                    {"role": "user", "content": user}])
-            return r.content
+            # dev_loop._chat_resilient 同款:网关退化窗口内同模型重试
+            # 全部落窗,按降级链逐个备胎(全部失败才上抛)。
+            messages = [{"role": "system", "content": system},
+                        {"role": "user", "content": user}]
+            chain = [model, *fallbacks]
+            for i, m in enumerate(chain):
+                try:
+                    return client.chat(m, messages).content
+                except RuntimeError:
+                    if i == len(chain) - 1:
+                        raise
+                    continue
 
         issue = instance.get("problem_statement", "")
         hints = instance.get("hints_text") or ""
