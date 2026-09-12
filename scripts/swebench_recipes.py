@@ -118,15 +118,20 @@ def build_install_commands(recipe: dict, pip: list[str] | None = None) -> list[l
 # ---------------------------------------------------------------------------
 
 FAMILY_CONDA: dict[str, dict] = {
-    # python 版本按仓库 base_commit 年代选;pip pins 治 R1 的环境类失败
-    "flask":   {"python": "3.9",  "pip": ["werkzeug~=2.0", "pytest~=6.2"]},
-    "pytest":  {"python": "3.11", "pip": ["hypothesis", "xmlschema"]},
-    "sphinx":  {"python": "3.9",  "pip": ["docutils", "jinja2"]},
-    "pylint":  {"python": "3.10", "pip": ["astroid~=2.15"]},
+    # python 版本按仓库 base_commit 年代选;pip pins 治 R1 的环境类失败。
+    # 夜批 b3 取证:2026 最新传递依赖会与 2021-2023 仓库互斥——
+    # hypothesis(新钩子签名)× 旧 pytest = PluginValidationError;
+    # numpy 2.x × 旧 xarray = 收集失败;docutils 0.2x × 旧 sphinx = 导入炸。
+    # 一律加"年代上限"cap,pip 先装 pin,后装 -e . 全依赖时满足即保留。
+    "flask":   {"python": "3.9",  "pip": ["werkzeug~=2.0", "pytest~=6.2",
+                                          "click<8.2"]},
+    "pytest":  {"python": "3.11", "pip": ["hypothesis<6.80", "xmlschema"]},
+    "sphinx":  {"python": "3.9",  "pip": ["docutils<0.20", "jinja2<3.2"]},
+    "pylint":  {"python": "3.10", "pip": ["astroid~=2.15", "tomlkit"]},
     "astroid": {"python": "3.10", "pip": []},
     "requests": {"python": "3.9", "pip": ["urllib3", "pytest-httpbin", "pytest-mock"]},
-    "xarray":  {"python": "3.10", "pip": ["numpy", "pandas", "pytest"]},
-    "seaborn": {"python": "3.10", "pip": ["numpy", "pandas", "matplotlib"]},
+    "xarray":  {"python": "3.10", "pip": ["numpy<2", "pandas<2.1", "pytest"]},
+    "seaborn": {"python": "3.10", "pip": ["numpy<2", "pandas<2.1", "matplotlib"]},
 }
 
 

@@ -271,18 +271,24 @@ def run_instance(instance: dict, cache: Path, model: str,
             # v1.2 环境适配:家族 conda 环境(Python 版本+依赖 pin)。
             _env_name, verify_python = ensure_family_env(
                 family, conda_exe, envs_root)
-            # 仓库本体以 --no-deps 装入环境(不打乱已 pin 的依赖;
-            # pytest 仓库:装的就是它自己,正是官方口径)
-            subprocess.run([verify_python, "-m", "pip", "install", "-e", ".",
-                            "--no-deps", "--quiet"],
-                           cwd=repo_path, capture_output=True, text=True,
-                           timeout=900)
-            # 兜底保证验证工具存在(sphinx/pylint 家族 pin 里没有 pytest,
-            # F2P 验证命令会直接瞎;setuptools 治 pkg_resources 缺失)
-            subprocess.run([verify_python, "-m", "pip", "install", "pytest",
-                            "setuptools", "--quiet",
-                            "--disable-pip-version-check"],
-                           capture_output=True, text=True, timeout=300)
+            # 仓库本体【全依赖】装入:b3 取证 --no-deps 会让 flask 缺
+            # click、pylint 缺 tomlkit、sphinx 缺 babel——pin 已先装入,
+            # pip 解析依赖时对已满足的 pin 保留不升级(年代钉版生效)。
+            proc = subprocess.run([verify_python, "-m", "pip", "install",
+                                   "-e", ".", "--quiet",
+                                   "--disable-pip-version-check"],
+                                  cwd=repo_path, capture_output=True, text=True,
+                                  timeout=1200)
+            # 兜底仅缺才补装:严禁无条件 pip install pytest 覆盖仓库自装
+            # 的旧版本——b3 取证 latest pytest 替换 pytest 仓库本体后与
+            # 新版 hypothesis 钩子签名互斥(PluginValidationError)。
+            for mod, pkg in (("pytest", "pytest"), ("pkg_resources", "setuptools")):
+                probe = subprocess.run([verify_python, "-c", f"import {mod}"],
+                                       capture_output=True, text=True)
+                if probe.returncode != 0:
+                    subprocess.run([verify_python, "-m", "pip", "install", pkg,
+                                    "--quiet", "--disable-pip-version-check"],
+                                   capture_output=True, text=True, timeout=300)
         elif use_venv:
             _venv, verify_python = create_instance_venv(
                 record["instance_id"], cache)
