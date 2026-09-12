@@ -124,9 +124,9 @@ FAMILY_CONDA: dict[str, dict] = {
     # numpy 2.x × 旧 xarray = 收集失败;docutils 0.2x × 旧 sphinx = 导入炸。
     # 一律加"年代上限"cap,pip 先装 pin,后装 -e . 全依赖时满足即保留。
     "flask":   {"python": "3.9",  "pip": ["werkzeug~=2.0", "pytest~=6.2",
-                                          "click<8.2"]},
+                                          "click==8.1.3"]},
     "pytest":  {"python": "3.11", "pip": ["hypothesis<6.80", "xmlschema"]},
-    "sphinx":  {"python": "3.9",  "pip": ["docutils<0.20", "jinja2<3.2"]},
+    "sphinx":  {"python": "3.9",  "pip": ["docutils<0.18", "jinja2<3.0"]},
     "pylint":  {"python": "3.10", "pip": ["astroid~=2.15", "tomlkit"]},
     "astroid": {"python": "3.10", "pip": []},
     "requests": {"python": "3.9", "pip": ["urllib3", "pytest-httpbin", "pytest-mock"]},

@@ -170,6 +170,16 @@ def ensure_family_env(family: str, conda_exe: str,
                         "https://pypi.tuna.tsinghua.edu.cn/simple"],
                        check=False, capture_output=True, text=True,
                        timeout=900)
+    # 全家族无条件底座(夜批 b4 取证,两案并发):
+    # 1) setuptools<81:2026 版 setuptools 已整体移除 pkg_resources,
+    #    老仓库(xarray 0.17)import pkg_resources 直接炸;
+    # 2) wheel+现代 setuptools:老仓库 pip install -e . 走 PEP 660 需要
+    #    build_editable 钩子(pylint 2.17 实测报错),配合 --no-build-
+    #    isolation 让构建用环境内后端。
+    subprocess.run([str(py), "-m", "pip", "install", "setuptools<81", "wheel",
+                    "--quiet", "-i",
+                    "https://pypi.tuna.tsinghua.edu.cn/simple"],
+                   check=False, capture_output=True, text=True, timeout=600)
     return name, str(py)
 
 
@@ -274,11 +284,23 @@ def run_instance(instance: dict, cache: Path, model: str,
             # 仓库本体【全依赖】装入:b3 取证 --no-deps 会让 flask 缺
             # click、pylint 缺 tomlkit、sphinx 缺 babel——pin 已先装入,
             # pip 解析依赖时对已满足的 pin 保留不升级(年代钉版生效)。
-            proc = subprocess.run([verify_python, "-m", "pip", "install",
-                                   "-e", ".", "--quiet",
-                                   "--disable-pip-version-check"],
-                                  cwd=repo_path, capture_output=True, text=True,
-                                  timeout=1200)
+            # --no-build-isolation:构建后端用环境内 setuptools(含
+            # build_editable),不重建隔离环境(b4 pylint PEP 660 取证)。
+            install_cmd = [verify_python, "-m", "pip", "install", "-e", ".",
+                           "--no-build-isolation", "--quiet",
+                           "--disable-pip-version-check"]
+            proc = subprocess.run(install_cmd, cwd=repo_path,
+                                  capture_output=True, text=True, timeout=1200)
+            if proc.returncode != 0:
+                # 回退:非 editable 全依赖(极老项目 editable 仍失败时)
+                record_notes.append(
+                    "editable 安装失败,回退普通安装: "
+                    + (proc.stderr or proc.stdout)[-150:])
+                subprocess.run([verify_python, "-m", "pip", "install", ".",
+                                "--no-build-isolation", "--quiet",
+                                "--disable-pip-version-check"],
+                               cwd=repo_path, capture_output=True, text=True,
+                               timeout=1200)
             # 兜底仅缺才补装:严禁无条件 pip install pytest 覆盖仓库自装
             # 的旧版本——b3 取证 latest pytest 替换 pytest 仓库本体后与
             # 新版 hypothesis 钩子签名互斥(PluginValidationError)。
