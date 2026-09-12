@@ -62,9 +62,19 @@ kimi-k3、minimax-m3、qwen3.6-flash/plus、qwen3.7-max/plus、qwen3.8-max）。
 
 | 候选 | 角色 | 备注 |
 |---|---|---|
-| `glm-5.3` | **首选（演练中）** | 代码/指令跟随强，中文任务包理解好 |
-| `deepseek-v4-pro` | 多模型组队·开发副 LLM | 代码强；r6 探测 2.4-4.4s |
-| `qwen3.8-max` | 多模型组队·测试副 LLM | r6 探测 2.2s（r4 夜间挂为网关拥塞，非硬封） |
+| `glm-5.3` | **首选·主 LLM（r7c 演练中）** | 代码/指令跟随强，中文任务包理解好 |
+| `deepseek-v4-pro` | 多模型组队·开发副 LLM | 代码强；大生成 182s/8.1k tokens 实测健康 |
+| `glm-5.2` | 多模型组队·测试副 LLM | 大生成 82s/4.4k tokens 实测健康（r7b 换入） |
+| ~~`qwen3.8-max`~~ | **黑名单（大生成）** | r7 实弹：测试级大生成 510s 后 HTTP 400；ping 正常（2.2s）但 ≥4k tokens 生成不可用。r4 夜间挂死同因 |
+| `kimi-k3` / `minimax-m3` / 其他 | 观察 | 无大生成实测数据，不用于正式提交 |
+
+**r7 系列实弹修通的韧性链**（多模型组队全链的最后一块）：
+- `message.content` 缺失响应 → 瞬态重试（响应构建并入重试/墙钟范围）；
+- 推理模型吃满 max_tokens → finish=length + content 空 → **扩容重试**
+  （`2ea65f5`）；
+- r7c 阵型：主 glm-5.3（注入）/ 开发 deepseek-v4-pro / 测试 glm-5.2，
+  6 模块（auth_service / train_search / train_data / booking_service /
+  web_interface / app_shell）开发中。
 
 **r6 探测（2026-09-12）：比赛 key 是多模型中转站**——单 key 直连全部
 11 个模型全通（HTTP 200），三模型并发各自独立服务（7s 总耗时）。

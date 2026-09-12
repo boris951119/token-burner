@@ -1,5 +1,46 @@
 # Changelog
 
+## v1.2 · factory26 参赛强化 r4-r7c（2026-09-12）：交付验收 v2 + 修复链路复活 + 多模型组队
+
+> 三轮实弹演练（含用户手动 --resume 取证）驱动的成批强化。全量回归
+  **1149 passed / 0 failed**。
+
+- **交付验收 v2**（`verify_delivery` 两段式）：基础冒烟 + 旅程验收——
+  路由探测定位组装模块 → LLM 生成主成功路径脚本（compile 预检 +
+  危险 API 扫描 + test_client 同进程）→ 执行；失败先自修复脚本一轮
+  （不冤枉应用），仍失败 RepoFixer 修应用（验证命令=旅程脚本）。
+  验收 FAIL = run_failed 终态，不再带病交付。首实弹即拦截一份
+  create_app 阶段崩溃的坏交付。
+- **修复链路复活（r5 实弹 P0）**：RepoFixer 文档承诺「无 .git 跳过
+  diff」但实现硬拒绝，而平台入口 enable_git=False → 交付修复安全网
+  在参赛路径恒为 0 轮死路。已修；修后同一坏交付 2 轮修复通过。
+- **交付前 pycache 清除**：等长同秒覆写骗过 pyc 双重校验（mtime 秒级
+  + 源大小），验证跑到陈旧模块——29 字符 return↔raise 实证。
+- **夹具链路加固**：helpers.ts 三布局探测 + 缺失显式告警进诊断事件；
+  ingest 硬性契约第 13 条（查询/列表必须查库种子，禁止硬编码降级
+  列表——r3 搜索/种子漂移根因）。
+- **--resume 恢复判据修复**：interruption.md 只在协作式 Ctrl+C 落盘，
+  平台硬杀场景恒失效 → completed.json 完成标记 + 判据放宽（快照且
+  未完成；协作式中断优先）。已随产线验证（硬杀→恢复→交付）。
+- **网关长挂防御**：`llm_wall_clock_seconds`（main.py 兜底 600s）——
+  httpx read timeout 是字节间隙口径，滴字续命永不触发（单请求实测
+  挂 25 分钟+）。
+- **content 缺失响应纳入重试/墙钟**（r7b）：评审模型偶发返回
+  message.content 缺失的响应，构建在重试外 → 非瞬态当场终止任务。
+  completion 调用与响应构建合并为单次尝试函数。
+- **截断扩容重试**（r7c）：推理模型吃满 max_tokens → finish=length +
+  content 空 → 扩容重试（`2ea65f5`）。
+- **中转站多模型组队**（r6/r7）：比赛 key 实为多模型中转（单 key 11
+  模型全通可并发，规则口径已确认允许）→ `platform_multi_model` 开关：
+  注入 MODEL 任主 LLM，开发/测试副 LLM 取 config 预设互异者。模型
+  实测选型：qwen3.8-max 大生成 510s→400 拉黑；开发 deepseek-v4-pro
+  （182s/8.1k tokens）、测试 glm-5.2（82s/4.4k tokens）健康。
+- **headless 可观测性**：`sessions/heartbeat.json` 心跳落盘（阶段/
+  最近事件/时间戳——黑盒长跑判活）；main.py 入口冒烟测试 4 项
+  （UnboundLocalError 类 bug 回归锁）。
+- 测试 **1120 → 1149 passed / 0 failed**（旅程验收 11、夹具 6、入口
+  8、心跳 2、恢复 4、韧性 +6 等新增 29 项）。
+
 ## v1.2 · factory26 参赛适配（2026-09-11）：平台单模型模式 + E2E 演练 P0 修复
 
 > ARC-Bench（arc-bench.com）参赛强化。真实网关（api.arc-bench.com/v1，

@@ -163,10 +163,21 @@ npm run compile        # 产物在 out/；消息协议契约测试：npm test
 ## 测试
 
 ```bash
-python -m pytest tests/ -q                  # 1116 项（全 stub，无需密钥）
+python -m pytest tests/ -q                  # 1149 项（全 stub，无需密钥）
 cd vscode-extension && npm test             # 插件消息协议契约测试 4 项
 python scripts/ab_triage_eval.py --mock     # 快慢双模式 A/B 自检（--real 走真实 LLM）
 ```
+
+## 基准口径（诚实边界）
+
+- **bench_v1（自建）**：10 类真实需求 greenfield 基准，模块通过率 71%、
+  任务交付 10/10、零预算超支（logs/bench_v1/full*）。
+- **SWE-bench Lite (50, 简化口径)**：deepseek-v4-pro、seed 42 分层抽样，
+  resolved 1/50（2%）、12 例环境错误、2.96M tokens——**验证为仓库根
+  直接 pytest FAIL_TO_PASS，未做官方 per-repo conda 环境**；同批补丁
+  可交官方 harness 复评。对照公开口径：Devin 首战 13.86%。
+  逐实例结果与成本见 logs/swebench_full/。失败归因与环境预检闸门
+  （env_unverifiable 零 token 跳过）见 CHANGELOG v1.2 S2。
 
 ## 发布
 
