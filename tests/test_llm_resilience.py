@@ -384,3 +384,46 @@ class TestEmptyContentBudgetExpansion:
         client = _client(completion=flaky, sleep=SleepRecorder())
         client.chat("gpt-4o", _MSG)
         assert flaky.calls[0]["max_tokens"] == client.settings.max_response_tokens
+
+
+class TestNullContentReasoningExhaustion:
+    """r7c-2 取证：glm-5.2 推理吃满预算返回 content=null（非空串）——
+    _get_content 原地抛错会绕过扩容通道，带同预算重试确定性复现。"""
+
+    def _resp_null(self):
+        return {"choices": [{"message": {"content": None},
+                             "finish_reason": "length"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 120}}
+
+    def test_null_content_with_length_yields_empty_for_expansion(self, gpt_key):
+        """finish=length + content=null → 空串放行（进扩容通道），不抛错。"""
+        from app.utils.model_client import _get_content
+
+        assert _get_content(self._resp_null()) == ""
+
+    def test_null_content_with_stop_still_raises(self, gpt_key):
+        """finish=stop + content=null：真异常响应，保留瞬态重试路径。"""
+        from app.utils.model_client import _get_content
+
+        resp = {"choices": [{"message": {"content": None},
+                             "finish_reason": "stop"}], "usage": {}}
+        with pytest.raises(RuntimeError, match="message.content"):
+            _get_content(resp)
+
+    def test_null_content_expands_budget_and_recovers(self, gpt_key):
+        """端到端：null+length → 空串 → 扩容翻倍重试 → 正常内容返回。"""
+        calls = []
+
+        def flaky(**kwargs):
+            calls.append(kwargs["max_tokens"])
+            if len(calls) == 1:
+                return self._resp_null()
+            return _resp("recovered")
+
+        recorder = SleepRecorder()
+        client = _client(completion=flaky, sleep=recorder,
+                         max_output_continuations=1)
+        result = client.chat("gpt-4o", _MSG)
+        assert result.content == "recovered"
+        assert calls[0] == Settings().max_response_tokens
+        assert calls[1] == Settings().max_response_tokens * 2  # 扩容翻倍

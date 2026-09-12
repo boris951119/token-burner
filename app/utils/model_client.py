@@ -517,6 +517,12 @@ def _get_content(response: Any) -> str:
     message = _index(choices[0], "message")
     content = _index(message, "content")
     if content is None:
+        # factory26 r7c-2 取证：glm-5.2 推理吃满 max_tokens 返回
+        # content=null（而非空串）——此时抛错会在扩容判断之前炸掉，
+        # 带着同一 max_tokens 重试必然确定性复现。finish=length 时按
+        # 空串放行，交给空内容扩容重试通道（翻倍至天花板）。
+        if _get_finish_reason(response) == "length":
+            return ""
         raise RuntimeError("LLM 响应缺少 message.content 字段")
     return str(content)
 
