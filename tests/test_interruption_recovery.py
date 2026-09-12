@@ -139,10 +139,19 @@ class TestInterruptionSnapshot:
         assert state["models"][0] == "gpt-4o"
 
     def test_unexpected_exception_persisted_then_reraised(self, tmp_path):
-        # 意外异常：先落盘现场再 re-raise（bug 暴露，不吞）
+        # 意外异常：先落盘现场再 re-raise（bug 暴露，不吞）。
+        # r7e 起单角色 LLM 异常会模型级降级（_chat_resilient），故此处
+        # 让「自该调用起全部模型持续失败」——降级也失败才上抛，语义不变。
         fm = FileManager(projects_root=tmp_path / "projects")
-        llm = ScriptedLLM(_TWO_MODULE_SCRIPTS + ["auth code"],
-                          raise_at=11, exc=RuntimeError("boom"))
+
+        class _BoomFrom11(ScriptedLLM):
+            def chat(self, model, messages, json_mode=False, **kw):
+                if self.calls >= 10:
+                    self.calls += 1
+                    raise RuntimeError("boom")
+                return super().chat(model, messages, json_mode=json_mode, **kw)
+
+        llm = _BoomFrom11(_TWO_MODULE_SCRIPTS + ["auth code"])
         pipeline = _pipeline(llm, fm)
         with pytest.raises(RuntimeError, match="boom"):
             pipeline.run("双模块系统",

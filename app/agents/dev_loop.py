@@ -124,10 +124,13 @@ class DevLoopEngine:
         file_manager: FileManager,
         budget_guard=None,
         research_context: str = "",
+        main_model: str | None = None,
     ):
         self.llm = llm
         self.dev_model = dev_model
         self.test_model = test_model
+        # factory26 r7e：模型级降级备胎（重试耗尽后回落，见 _chat_resilient）
+        self.main_model = main_model
         self.executor = executor
         self.settings = settings
         self.file_manager = file_manager
@@ -559,16 +562,35 @@ class DevLoopEngine:
                 "此前实测即有模块因此冻结）\n"
                 + "\n".join(api_lines)
             )
-        response = self.llm.chat(
+        response = self._chat_resilient(
             self.dev_model,
-            [
-                # M14-3：平台约束注入（windows 缺省禁 fcntl 等）
-                # M15-3：契约风格约束注入（function 缺省 / class / auto 弱引导）
-                {"role": "system", "content": WRITE_CODE_SYSTEM + self._platform_prompt + self._danger_prompt + self._style_prompt},
-                {"role": "user", "content": self._prompt_with_shared(user)},
-            ],
+            WRITE_CODE_SYSTEM + self._platform_prompt + self._danger_prompt + self._style_prompt,
+            self._prompt_with_shared(user),
         )
         return self._split_shared(_extract_code(response.content))
+
+    def _chat_resilient(self, model: str, system: str, user: str):
+        """重试耗尽后的模型级降级（factory26 r7e 取证）。
+
+        网关退化窗口内秒级退避重试会全部落窗（glm-5.2 连续 4 次
+        content 缺失即谋杀整个任务）；多模型中转下主模型是天然备胎——
+        副模型调用耗尽重试后回落主模型一次，仍失败才上抛。
+        """
+        try:
+            return self.llm.chat(model, [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ])
+        except RuntimeError:
+            fallback = self.main_model or (
+                self.dev_model if model == self.test_model else self.test_model
+            )
+            if fallback == model:
+                raise
+            return self.llm.chat(fallback, [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ])
 
     def _write_tests(
         self, module: str, code: str, contract: dict | None = None,
@@ -589,33 +611,26 @@ class DevLoopEngine:
         # M15-6：上一版测试的门禁缺陷清单（再生时定向修正）
         if defect_note:
             user += "\n\n## 上一版测试缺陷（本轮必须修正）\n" + defect_note
-        response = self.llm.chat(
+        response = self._chat_resilient(
             self.test_model,
-            [
-                # M14-3：测试同样受平台约束（测试 import fcntl 同样炸）
-                {"role": "system", "content": WRITE_TESTS_SYSTEM + self._platform_prompt},
-                {"role": "user", "content": user},
-            ],
+            WRITE_TESTS_SYSTEM + self._platform_prompt,
+            user,
         )
         return _extract_code(response.content)
 
     def _fix_code(self, module: str, code: str, tests: str, failure: str) -> str:
-        response = self.llm.chat(
+        response = self._chat_resilient(
             self.dev_model,
-            [
-                # M14-3：修复时保持平台约束（防修复又引入 fcntl）
-                # M15-3：修复时保持契约风格约束（防修复轮改风格再触发门禁）
-                {"role": "system", "content": FIX_CODE_SYSTEM + self._platform_prompt + self._danger_prompt + self._style_prompt},
-                {"role": "user", "content": self._prompt_with_shared(
-                    FIX_CODE_USER.format(
-                        module=module, code=code, tests=tests,
-                        # 问题 8：失败报告/用户反馈为不可信输入，注入前包裹数据边界
-                        failure=sanitize_untrusted(failure),
-                    )
-                    # M15-4：修复轮上下文增强（接口地图 + 依赖方调用示例）
-                    + self._fix_context(module)
-                )},
-            ],
+            FIX_CODE_SYSTEM + self._platform_prompt + self._danger_prompt + self._style_prompt,
+            self._prompt_with_shared(
+                FIX_CODE_USER.format(
+                    module=module, code=code, tests=tests,
+                    # 问题 8：失败报告/用户反馈为不可信输入，注入前包裹数据边界
+                    failure=sanitize_untrusted(failure),
+                )
+                # M15-4：修复轮上下文增强（接口地图 + 依赖方调用示例）
+                + self._fix_context(module)
+            ),
         )
         return self._split_shared(_extract_code(response.content))
 

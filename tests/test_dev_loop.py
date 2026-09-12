@@ -414,3 +414,65 @@ class TestExtractCode:
         assert result.fix_attempts == 0
         assert "```" not in result.code
         assert fm.read_file(pid, "code/_shared/util.py") is not None  # shared 块仍被拆出
+
+
+# ---- factory26 r7e：重试耗尽后的模型级降级 ----
+
+
+class _FailingThenMainLLM:
+    """dev 模型调用必炸（重试耗尽形态），main 模型正常。"""
+
+    def __init__(self):
+        self.called: list[str] = []
+
+    def chat(self, model, messages, **kwargs):
+        self.called.append(model)
+        if model == "dev":
+            raise RuntimeError("LLM 调用失败（dev，已重试 3 次）: 响应缺 content")
+        class _R:
+            content = "fallback code"
+        return _R()
+
+
+class TestChatResilient:
+    def _engine(self, llm):
+        from app.agents.dev_loop import DevLoopEngine
+
+        return DevLoopEngine(
+            llm=llm, dev_model="dev", test_model="test",
+            executor=object(), settings=Settings(),
+            file_manager=None, main_model="main",
+        )
+
+    def test_falls_back_to_main_model(self):
+        llm = _FailingThenMainLLM()
+        engine = self._engine(llm)
+        resp = engine._chat_resilient("dev", "system", "user")
+        assert resp.content == "fallback code"
+        assert llm.called == ["dev", "main"]
+
+    def test_both_models_failing_raises(self):
+        class _AlwaysFailing(_FailingThenMainLLM):
+            def chat(self, model, messages, **kwargs):
+                self.called.append(model)
+                raise RuntimeError("LLM 调用失败")
+
+        llm = _AlwaysFailing()
+        engine = self._engine(llm)
+        import pytest
+        with pytest.raises(RuntimeError):
+            engine._chat_resilient("dev", "s", "u")
+        assert llm.called == ["dev", "main"]
+
+    def test_cross_fallback_when_no_main(self):
+        """无主模型（缺省 None）：dev 失败回落 test，test 失败回落 dev。"""
+        llm = _FailingThenMainLLM()
+        from app.agents.dev_loop import DevLoopEngine
+
+        engine = DevLoopEngine(
+            llm=llm, dev_model="dev", test_model="test",
+            executor=object(), settings=Settings(), file_manager=None,
+        )
+        resp = engine._chat_resilient("dev", "s", "u")
+        assert resp.content == "fallback code"
+        assert llm.called == ["dev", "test"]

@@ -589,6 +589,7 @@ class Pipeline:
             file_manager=self.file_manager,
             budget_guard=guard,
             research_context=research_context,
+            main_model=team.main_model,  # factory26 r7e：模型级降级备胎
         )
         self._bind_executor_project(team.project_id)
         # 14.4：_shared/ 内容签名基线（变更检测）
