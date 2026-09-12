@@ -246,7 +246,9 @@ def env_precheck(repo_path: Path, p2p: list[str], f2p_files: list[str],
         files = sorted({n.split("::")[0] for n in nodes if "::" in n})
         if not files:
             return nodes, []
-        proc = run_pytest(["--co", "-q"] + files, 600)
+        # 注意 run_pytest 已追加 -q:再加 -q 会变双 -q,collect-only 输出
+        # 退化成 per-file 计数摘要(b7 取证),节点 ID 全部消失
+        proc = run_pytest(["--co"] + files, 600)
         collected = set()
         for line in (proc.stdout or "").splitlines():
             line = line.strip()
@@ -258,7 +260,8 @@ def env_precheck(repo_path: Path, p2p: list[str], f2p_files: list[str],
                 runnable.append(n)
                 continue
             head = n.split("[", 1)[0]
-            if head != n and head in collected:
+            if head != n and (head in collected or
+                              any(c.startswith(head + "[") for c in collected)):
                 runnable.append(head)
             else:
                 missing.append(n)
