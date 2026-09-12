@@ -83,9 +83,13 @@ print("SMOKE_OK")
 '''
 
 # 路由探测：与冒烟同一套 import 引导，定位组装模块并倾倒真实 url_map。
+# r7e 取证：查询参数名（origin vs from_station）只存在于视图函数源码里，
+# 只给路径+方法会让生成脚本瞎猜参数名 → 400。视图源码 .args.get 内省。
 _PROBE_TEMPLATE = '''\
 """ArcBench 路由探测（自动生成）：url_map -> @@ROUTES@@{json}。"""
+import inspect
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -115,12 +119,21 @@ for mod in mods:
 if app is None:
     raise SystemExit("没有任何模块提供 create_app")
 
-routes = sorted(
-    f"{rule} [{','.join(sorted(methods - {'HEAD', 'OPTIONS'}))}]"
-    for rule, methods in (
-        (r.rule, set(r.methods)) for r in app.url_map.iter_rules()
-    )
-)
+routes = []
+for rule in sorted(app.url_map.iter_rules(), key=lambda r: r.rule):
+    methods = sorted(set(rule.methods) - {"HEAD", "OPTIONS"})
+    params = set()
+    view = app.view_functions.get(rule.endpoint)
+    if view is not None:
+        try:
+            src = inspect.getsource(view)
+            params = set(re.findall(r"\\.args\\.get\\(\\s*['\\"](\\w+)", src))
+        except Exception:
+            params = set()
+    entry = f"{rule.rule} [{','.join(methods)}]"
+    if params:
+        entry += f" params:{','.join(sorted(params))}"
+    routes.append(entry)
 print("@@ROUTES@@" + json.dumps(
     {"app_module": app_module, "routes": routes}, ensure_ascii=False))
 '''
@@ -163,15 +176,15 @@ _JOURNEY_USER = """根据需求摘要与真实路由表，生成该 Web 应用�
 {requirement}
 
 应用组装模块名：{app_module}（框架已 import 并创建 app）
-真实路由表（仅供查对路径与参数名）：
+真实路由表（含查询参数名，仅供查对路径/方法/参数名）：
 {routes}
 
 硬性规则：
-1. 只走需求的主成功旅程（5-8 步，典型：注册→登录→核心查询→提交业务→
-   查记录），**禁止**逐个访问路由表里的所有路径，禁止测试内部/管理/
-   基建类端点（如建表、初始化、路由注册类）；
-2. 路径与参数名必须逐字取自上方路由表，**禁止访问表中不存在的路径**，
-   禁止发明任何端点；
+1. 只走需求的主成功旅程（5-8 步，典型：注册→登录→核心查询→
+   提交业务→查记录），**禁止**逐个访问路由表里的所有路径，禁止测试
+   内部/管理/基建类端点（如建表、初始化、路由注册类）；
+2. 路径、HTTP 方法与查询参数名必须逐字取自上方路由表，**禁止访问
+   表中不存在的路径**，禁止发明任何端点或参数；
 3. 覆盖 GET /api/health 返回 200 一条即可作为第 1 步；
 4. 业务数据现场创建（先注册的账号就用于登录；列表响应里的值取自
    实际响应再断言，不要凭空假设精确值）；
