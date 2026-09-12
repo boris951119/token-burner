@@ -154,6 +154,7 @@ for child in sorted(code.iterdir()):
 from __APP_MODULE__ import create_app
 app = create_app()
 c = app.test_client()
+client = c  # 别名：r11 取证 LLM 惯用 client，NameError 会被误判为应用缺陷
 
 # === JOURNEY BEGIN（LLM 生成段） ===
 __BODY__
@@ -172,6 +173,18 @@ _JOURNEY_SYSTEM = (
 
 # 旅程步数计数（缩水检测：c.get/c.post/c.put/c.delete 调用数）
 _JOURNEY_STEP_RE = re.compile(r"c\.(?:get|post|put|delete|patch)\(")
+
+# 脚本自身缺陷分类（r11 取证）：这些异常 + 脚本帧 = 脚本从未跑到断言，
+# 是脚本 bug 而非应用缺陷（AssertionError 排除——那可能是真断言失败）
+_SCRIPT_DEFECT_RE = re.compile(
+    r"\b(NameError|UnboundLocalError|AttributeError|KeyError|IndexError"
+    r"|TypeError|SyntaxError|IndentationError)\b\s*:")
+
+
+def _is_script_defect(report: str) -> bool:
+    """报告含脚本帧且终态异常属于「脚本自身写错」类 → 分类为脚本缺陷。"""
+    return bool(report) and "arcbench_journey.py" in report and bool(
+        _SCRIPT_DEFECT_RE.search(report[-400:]))
 
 _JOURNEY_USER = """根据需求摘要与真实路由表，生成该 Web 应用的主旅程验收代码体。
 
@@ -409,6 +422,36 @@ def _journey_gate(
         # 两版都没能产出可执行的合法脚本（扫描拦截/语法不合格）：
         # 不放行也不冤枉应用——SKIP 交人工
         notes.append("[journey] SKIP: 脚本两版均不可执行（扫描/语法）")
+        return True, "skip"
+
+    # r11 取证：脚本自身 NameError/AttributeError（如用错客户端变量名）
+    # 说明脚本从未跑到断言——这是【脚本缺陷】，送 RepoFixer 修应用注定
+    # 空转甚至误伤。再给一版重生成机会，仍败则 SKIP 交人工，绝不修应用。
+    if _is_script_defect(last_report):
+        notes.append("[journey] 脚本自身异常（非应用缺陷）→ 重生成第3版")
+        try:
+            body = gen("\n\n上一版脚本自身报错（修脚本，勿改应用行为假设）：\n"
+                       + last_report[-800:])
+        except Exception:
+            body = None
+        if body:
+            candidate = _JOURNEY_BOILERPLATE.replace(
+                "__APP_MODULE__", app_module
+            ).replace("__BODY__", body)
+            try:
+                compile(candidate, "<journey>", "exec")
+                script = candidate
+                jpath.write_text(script, encoding="utf-8")
+                ok, last_report = run_journey_script(jpath, code_dir)
+                if len(last_report) > len(best_report):
+                    best_report = last_report
+                    best_script = script
+                if ok:
+                    notes.append("[journey] PASS（第3版）")
+                    return True, ""
+            except SyntaxError:
+                pass
+        notes.append("[journey] SKIP: 脚本三版均自身异常（交人工，不修应用）")
         return True, "skip"
 
     # 脚本本身两轮收敛了但断言仍失败 → 应用缺陷，进入修复循环

@@ -405,3 +405,34 @@ class TestShrinkGuard:
         assert not ok  # 残缺应用 + 修复无效 → 诚实 FAIL
         assert any("缩水被拒收" in n for n in notes)
         assert fixed.get("called") is True  # 走了应用修复而非放行
+
+
+class TestScriptDefectClassification:
+    """r11 取证：脚本 NameError 曾被当应用缺陷送 RepoFixer（误伤方向）。"""
+
+    def test_nameerror_in_script_frame_is_script_defect(self):
+        from app.arcbench_smoke import _is_script_defect
+
+        report = (
+            'Traceback (most recent call last):\n'
+            '  File "C:\Temp\arcbench_journey.py", line 17, in <module>\n'
+            '    c = client\n'
+            'NameError: name \'client\' is not defined'
+        )
+        assert _is_script_defect(report)
+
+    def test_assertion_failure_is_not_script_defect(self):
+        from app.arcbench_smoke import _is_script_defect
+
+        report = (
+            '  File "C:\Temp\arcbench_journey.py", line 20, in <module>\n'
+            '    assert r.status_code == 201\n'
+            'AssertionError: assert 404 == 201'
+        )
+        assert not _is_script_defect(report)
+
+    def test_app_exception_without_script_frame_is_not(self):
+        from app.arcbench_smoke import _is_script_defect
+
+        report = "some app traceback\nTypeError: unsupported operand"
+        assert not _is_script_defect(report)
