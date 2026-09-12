@@ -123,7 +123,7 @@ FAMILY_CONDA: dict[str, dict] = {
     # hypothesis(新钩子签名)× 旧 pytest = PluginValidationError;
     # numpy 2.x × 旧 xarray = 收集失败;docutils 0.2x × 旧 sphinx = 导入炸。
     # 一律加"年代上限"cap,pip 先装 pin,后装 -e . 全依赖时满足即保留。
-    "flask":   {"python": "3.9",  "pip": ["werkzeug~=2.0", "pytest~=6.2",
+    "flask":   {"python": "3.9",  "pip": ["werkzeug~=2.0", "pytest~=7.2",
                                           "click==8.1.3"]},
     "pytest":  {"python": "3.11", "pip": ["hypothesis<6.80", "xmlschema"]},
     "sphinx":  {"python": "3.9",  "pip": ["docutils<0.18", "jinja2<3.0",
@@ -131,8 +131,8 @@ FAMILY_CONDA: dict[str, dict] = {
     "pylint":  {"python": "3.10", "pip": ["astroid~=2.15", "tomlkit"]},
     "astroid": {"python": "3.10", "pip": []},
     "requests": {"python": "3.9", "pip": ["urllib3<1.27", "pytest-httpbin", "pytest-mock"]},
-    "xarray":  {"python": "3.10", "pip": ["numpy<2", "pandas<2.1", "pytest"]},
-    "seaborn": {"python": "3.10", "pip": ["numpy<2", "pandas<2.1", "matplotlib"]},
+    "xarray":  {"python": "3.10", "pip": ["numpy<1.24", "pandas<1.5", "pytest"]},
+    "seaborn": {"python": "3.10", "pip": ["numpy<1.24", "pandas<1.5", "matplotlib"]},
 }
 
 
