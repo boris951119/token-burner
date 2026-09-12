@@ -68,6 +68,47 @@ class TestModelValidation:
                 mode="safe",
             )
 
+    def test_single_model_mode_allows_same_model(self, fm):
+        # factory26：平台单模型下发，三角色同模是合法形态（P2P 演练 P0 修复）
+        settings = Settings(
+            models=["openai/glm-5.3"], single_model_mode=True
+        )
+        builder = make_builder(fm, settings)
+        config = builder.build(
+            requirement="demo",
+            main_model="openai/glm-5.3",
+            dev_model="openai/glm-5.3",
+            test_model="openai/glm-5.3",
+            mode="safe",
+        )
+        assert config.main_model == config.dev_model == config.test_model
+
+    def test_single_model_mode_still_requires_preset_membership(self, fm):
+        # 互异放行，但预设列表校验不放行
+        settings = Settings(
+            models=["openai/glm-5.3"], single_model_mode=True
+        )
+        builder = make_builder(fm, settings)
+        with pytest.raises(TeamBuildError, match="列表"):
+            builder.build(
+                requirement="demo",
+                main_model="openai/glm-5.3",
+                dev_model="openai/glm-5.3",
+                test_model="unknown-model",
+                mode="safe",
+            )
+
+    def test_default_settings_still_enforce_distinct(self, fm):
+        # single_model_mode 缺省关：产品路径规格 3.3 行为不变
+        settings = Settings(models=["a", "b", "c"])
+        builder = make_builder(fm, settings)
+        with pytest.raises(TeamBuildError, match="不同"):
+            builder.build(
+                requirement="demo",
+                main_model="a", dev_model="a", test_model="b",
+                mode="safe",
+            )
+
     def test_extended_list_via_config_accepted(self, fm):
         # 3.3：用户可通过配置文件添加更多模型
         settings = Settings(models=["gpt-4o", "claude-3-5-sonnet", "qwen-max"])

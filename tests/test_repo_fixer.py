@@ -138,9 +138,15 @@ class TestRepoFixer:
         assert result.skipped_paths == ["../evil.py"]
         assert not (repo.parent / "evil.py").exists()
 
-    def test_requires_git_repo(self, tmp_path):
+    def test_no_git_repo_still_repairs(self, tmp_path):
+        """r4 修订：无 .git 照常修复（diff 为空）——平台路径 enable_git=False，
+        旧硬拒绝曾让交付修复安全网在参赛路径恒为死路。"""
         bare = tmp_path / "not_a_repo"
-        bare.mkdir()
-        fixer = _fixer(FakeLLM(PLAN, []), bare)
-        result = fixer.fix("任意")
-        assert result.ok is False and ".git" in result.error
+        (bare / "calc").mkdir(parents=True)
+        (bare / "calc" / "calc.py").write_text(BUGGY_CALC, encoding="utf-8")
+        (bare / "tests").mkdir()
+        (bare / "tests" / "test_calc.py").write_text(TEST_CALC, encoding="utf-8")
+        fixer = _fixer(FakeLLM(PLAN, [FIXED_CALC]), bare)
+        result = fixer.fix("add 应为加法")
+        assert result.ok is True
+        assert result.diff == ""  # 无 git，diff 报告为空但不影响修复

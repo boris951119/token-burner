@@ -61,8 +61,10 @@ class RepoFixer:
     # ---- 公共入口 ----
 
     def fix(self, issue: str, test_files: list[str] | None = None) -> RepoFixResult:
-        if not (self.repo / ".git").exists():
-            return RepoFixResult(ok=False, error="目标目录不是 git 仓库(无 .git)")
+        # 无 .git 照常修复：diff 仅是结果报告（_diff 无 git 时返回空串）。
+        # r4 取证：此前此处硬拒绝，而平台入口 enable_git=False（平台侧
+        # 统一走 runtime.git），导致交付修复安全网在参赛路径恒为死路
+        # （0 轮即返，LocalProxy 类组装缺陷无人生还）。
         plan = self._plan(issue)
         if plan is None:
             return RepoFixResult(ok=False, error="修复方案解析失败")

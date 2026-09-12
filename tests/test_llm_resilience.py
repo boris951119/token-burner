@@ -222,3 +222,70 @@ class TestSettingsValidation:
     def test_negative_backoff_rejected(self):
         with pytest.raises(ValueError, match="retry_backoff_base"):
             Settings(retry_backoff_base=-1.0)
+
+
+# ---------------------------------------------------------------------------
+# factory26 网关长挂防御（墙钟上限）
+# ---------------------------------------------------------------------------
+
+
+class HangingCompletion:
+    """模拟网关长挂：阻塞超过任何合理墙钟（滴字续命绕过 read timeout）。"""
+
+    def __init__(self, hold: float = 30.0):
+        self.hold = hold
+        self.calls = 0
+
+    def __call__(self, **kwargs):
+        import time
+
+        self.calls += 1
+        time.sleep(self.hold)
+        return _resp("too late")
+
+
+class TestWallClockDefense:
+    def test_off_by_default_passthrough(self, gpt_key):
+        """llm_wall_clock_seconds 缺省 0：产品路径零行为变化（无线程）。"""
+        flaky = FlakyCompletion(fail_times=0)
+        client = _client(completion=flaky, sleep=SleepRecorder())
+        resp = client.chat("gpt-4o", _MSG)
+        assert resp.content == "recovered"
+
+    def test_hanging_call_aborted_and_retried(self, gpt_key):
+        """长挂调用在墙钟处被打断 → TimeoutError（瞬态）→ 退避重试。"""
+        import threading
+
+        hanging = HangingCompletion(hold=30.0)
+        recorder = SleepRecorder()
+        client = _client(
+            completion=hanging,
+            sleep=recorder,
+            llm_wall_clock_seconds=1,
+            llm_max_retries=2,
+            retry_backoff_base=0.01,
+        )
+        with pytest.raises(RuntimeError, match="已重试 2 次"):
+            client.chat("gpt-4o", _MSG)
+        assert hanging.calls == 3  # 1 次首发 + 2 次重试，每次都被墙钟掐断
+        assert len(recorder.delays) == 2
+        # 守护线程遗留 ≤3，随 hold 到期自行消散
+        assert threading.active_count() >= 1
+
+    def test_fast_call_unaffected_by_wall_clock(self, gpt_key):
+        """正常速度调用在墙钟内完成：结果原样返回，不引入额外开销。"""
+        flaky = FlakyCompletion(fail_times=1, error="429 rate limit")
+        recorder = SleepRecorder()
+        client = _client(
+            completion=flaky,
+            sleep=recorder,
+            llm_wall_clock_seconds=10,
+            retry_backoff_base=0.01,
+        )
+        resp = client.chat("gpt-4o", _MSG)
+        assert resp.content == "recovered"
+
+    def test_timeout_error_is_transient_marker(self):
+        from app.utils.model_client import _is_transient
+
+        assert _is_transient(TimeoutError("墙钟 600s timed out"))

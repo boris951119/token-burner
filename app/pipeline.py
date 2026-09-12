@@ -54,6 +54,20 @@ def _sum_tokens(entries: list[dict]) -> int:
     )
 
 
+def _model_triplet(models) -> tuple[str, str, str]:
+    """三角色模型解析；不足 3 个时同模补位。
+
+    ARC-Bench 平台按单模型下发（MODEL 环境变量），headless 传入 1 元组
+    属合法形态（互异校验是 web 层规格 3.3 的职责，管线不重复设卡）。
+    """
+    models = tuple(models) or ("gpt-4o", "deepseek-chat", "claude-3-5-sonnet")
+    return (
+        models[0],
+        models[1] if len(models) > 1 else models[0],
+        models[2] if len(models) > 2 else models[0],
+    )
+
+
 @dataclass
 class PipelineResult:
     """管线执行结果（终点类型）。"""
@@ -122,12 +136,43 @@ class Pipeline:
         self._task_baseline = 0
         # v1.2 S0:并行模块开发下事件派发互斥(多 worker 同时 module_done)
         self._emit_lock = threading.Lock()
+        # factory26 r4:headless 长跑可观测性（stdout 缓冲期间的黑盒诊断）
+        self._heartbeat_root: Path | None = None
+        self._heartbeat_stage = ""
+
+    def _beat(self, event_type: str, data: dict) -> None:
+        """心跳落盘 sessions/heartbeat.json（每次 LLM 调用/阶段变更都会刷新）。
+
+        背景：headless 平台运行 stdout 全缓冲，单次调用可挂数分钟——
+        有时间戳的心跳让「慢」与「死」一眼可辨。失败静默，不影响任务。
+        """
+        root = self._heartbeat_root
+        if root is None:
+            return
+        try:
+            import json as _json
+            import time as _time
+
+            if event_type == "stage":
+                self._heartbeat_stage = str(data.get("stage") or "")
+            payload = {
+                "timestamp": _time.strftime("%Y-%m-%d %H:%M:%S"),
+                "stage": self._heartbeat_stage,
+                "last_event": event_type,
+                "module": data.get("module") or "",
+            }
+            (root / "sessions" / "heartbeat.json").write_text(
+                _json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+            )
+        except Exception:
+            pass
 
     def _emit(self, event_type: str, **data) -> None:
         """M8-4：发进度事件（轻量钩子，不改编排逻辑）。
 
         v1.2 S0:并行开发下多 worker 同时发事件 → 派发互斥。
         """
+        self._beat(event_type, data)
         with self._emit_lock:
             if self._on_event is None:
                 return
@@ -287,11 +332,12 @@ class Pipeline:
 
         # TEAM_FLOW：组队（3.3 / 11.0）
         models = self._resolve_models(route, models)
+        main_model, dev_model, test_model = _model_triplet(models)
         team = TeamBuilder(self.file_manager, self.settings).build(
             requirement=requirement,
-            main_model=models[0],
-            dev_model=models[1],
-            test_model=models[2],
+            main_model=main_model,
+            dev_model=dev_model,
+            test_model=test_model,
             project_dirname=project_dirname,
             mode=mode,
             auto_mode_confirmed=auto_mode_confirmed,
@@ -300,6 +346,7 @@ class Pipeline:
         self._bind_executor_project(team.project_id)
         # M8-4：项目目录就绪事件（异步任务据此落盘 task_state.json）
         _handle = self.file_manager.get_project(team.project_id)
+        self._heartbeat_root = _handle.root if _handle is not None else None
         self._emit(
             "project", project_id=team.project_id,
             project_dir=str(_handle.root) if _handle is not None else "",
@@ -445,6 +492,21 @@ class Pipeline:
                 )]
                 interfaces = {}
             order = builder.build_order(plans)
+            if interfaces:
+                # factory26：契约快照事件（平台桥接层登记 traceability，
+                # 工作台无消费者时零成本）
+                self._emit(
+                    "interfaces_ready",
+                    interfaces={
+                        name: {
+                            "exports": list(c.get("exports") or []),
+                            "public_api": list(c.get("public_api") or []),
+                            "dependencies": list(c.get("dependencies") or []),
+                        }
+                        for name, c in interfaces.items()
+                        if isinstance(c, dict)
+                    },
+                )
             stage_box[0] = "模块开发"
             self._emit("stage", stage=stage_box[0])  # M8-4
 
@@ -611,6 +673,14 @@ class Pipeline:
         ]
         if suggestions:
             self._emit("research_suggest", modules=suggestions)
+        # factory26：完成标记（--resume 恢复查找的判据——硬杀进程写不出
+        # interruption.md，只有 pipeline_state.json + 无完成标记 = 可恢复）
+        try:
+            (project_root / "sessions" / "completed.json").write_text(
+                '{"completed": true}', encoding="utf-8"
+            )
+        except Exception:
+            pass
         return PipelineResult(
             kind="team_flow",
             project_id=team.project_id,
@@ -754,12 +824,17 @@ class Pipeline:
         models = tuple(state.get("models") or ("gpt-4o", "deepseek-chat", "claude-3-5-sonnet"))
 
         # team 轻量重建（TeamConfig 字段子集）
+        main_model, dev_model, test_model = _model_triplet(models)
         team = SimpleNamespace(
             project_id=project_id,
-            main_model=models[0], dev_model=models[1], test_model=models[2],
+            main_model=main_model, dev_model=dev_model, test_model=test_model,
             budget_tokens=self.settings.task_token_budget(mode),
         )
         self._bind_executor_project(project_id)
+        _resume_handle = self.file_manager.get_project(project_id)
+        self._heartbeat_root = (
+            _resume_handle.root if _resume_handle is not None else None
+        )
 
         # 模块终态重建：validation.md（无报告 → 待重跑，不进 module_results）
         module_results: dict = {}
@@ -874,6 +949,7 @@ class Pipeline:
         handle = self.file_manager.get_project(project_id)
         if handle is None:
             return
+        main_model, dev_model, test_model = _model_triplet(models)
         lines = [
             "# 难度评估与路由决策（3.2）",
             "",
@@ -883,7 +959,7 @@ class Pipeline:
             f"- 预估源码文件数: {route.estimated_files}",
             f"- 路由决策: {route.route.value}",
             f"- 评估理由: {route.reason or '（未提供）'}",
-            f"- 团队模型: 主 {models[0]} / 开发 {models[1]} / 测试 {models[2]}",
+            f"- 团队模型: 主 {main_model} / 开发 {dev_model} / 测试 {test_model}",
             f"- 执行模式: {mode}",
         ]
         if route.rechecked:

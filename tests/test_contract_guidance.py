@@ -62,6 +62,15 @@ class TestGuidanceContent:
         assert "二选一" in extra.guidance
         assert "_FileManager" in extra.guidance    # 私有化路径
 
+    def test_extra_guidance_warns_against_privatizing_test_referenced_symbol(self):
+        """factory26 演练取证：测试已引用的符号禁止私有化（防震荡死路）。"""
+        issues = check_implementation("file_utils", CLASS_IMPL, FUNC_CONTRACT)
+        extra = next(i for i in issues if i.kind == "extra"
+                     and "FileManager" in i.detail)
+        assert "禁止选 ②" in extra.guidance
+        assert "ImportError" in extra.guidance
+        assert "只能选 ①" in extra.guidance
+
     def test_missing_no_public_api_falls_back_params(self):
         """无 public_api 时按 exports 参数生成模板。"""
         contract = {"exports": ["parse(path, strict)"], "public_api": [],

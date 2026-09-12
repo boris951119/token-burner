@@ -175,7 +175,10 @@ def check_implementation(
 
     for name, params in defs.items():
         if name not in declared:
-            # M15-2：extra 附处置指引（二选一：补声明或删实现）
+            # M15-2：extra 附处置指引（二选一：补声明或删实现）；
+            # factory26 演练取证：修复 LLM 选中 ② 私有化而测试已按原名
+            # import → ImportError，与门禁来回震荡（db_layer 连修 2 轮）。
+            # 指导必须显式禁止「测试已引用时私有化」这条死路。
             kind_hint = "函数" if params else "常量/类"
             issues.append(
                 InterfaceIssue(
@@ -185,7 +188,10 @@ def check_implementation(
                         f"处置二选一：① 若 {name}（{kind_hint}）是对外能力，"
                         f"请将其加入契约 exports/public_api；"
                         f"② 若只是内部辅助，请重命名为 _{name}（下划线私有，"
-                        f"门禁只校验公开符号）或删除"
+                        f"门禁只校验公开符号）或删除。"
+                        f"注意：若模块测试或其他模块已按 {name!r} 调用，"
+                        f"禁止选 ②——私有化必然导致测试 ImportError，"
+                        f"此时只能选 ①"
                     ),
                 )
             )
