@@ -4,6 +4,7 @@
   1. GET  /git/ref/heads/main        → 远端 main 提交与树
   2. POST /git/blobs                 → 逐文件上传（文本 utf-8 / 二进制 base64）
   3. POST /git/trees  (base_tree)    → 远端树 + 本地文件 = 合并树
+     （本地 index 已删除的文件以 sha:null 同步删除，含安全阈值）
   4. POST /git/commits (单亲=远端)   → 新提交（不覆盖远端历史）
   5. PATCH /git/refs/heads/main      → 快进更新引用
   6. 本地：复用 sync_local 链式重建提交（含签名提交），同步本地 main
@@ -76,9 +77,10 @@ def api_call(method: str, path: str, token: str, body: dict | None = None,
 
 def main() -> int:
     if len(sys.argv) < 2:
-        print("用法: python scripts/git_push_api.py <仓库URL>")
+        print("用法: python scripts/git_push_api.py <仓库URL> [--force-delete]")
         return 2
     owner_repo = sys.argv[1].split("github.com/")[-1].removesuffix(".git").strip("/")
+    force_delete = "--force-delete" in sys.argv[2:]
     token = os.environ.get("GITHUB_TOKEN", "")
     if not token:
         print("缺少 GITHUB_TOKEN 环境变量。")
@@ -91,10 +93,13 @@ def main() -> int:
     base_tree = commit["tree"]["sha"]
     log(f"远端 main: {remote_sha[:12]}  base_tree: {base_tree[:12]}")
 
-    # 2. 收集本地文件（.gitignore 规则复用）
-    rules = load_gitignore()
-    files = [p for p in ROOT.rglob("*") if p.is_file() and not is_ignored(p, rules)]
-    log(f"待上传文件: {len(files)} 个")
+    # 2. 收集本地文件（以 git index 为准，与提交内容严格一致；
+    #    工作区收集会把未跟踪文件误传、也无法推知删除意图）
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z"], cwd=ROOT, capture_output=True,
+    ).stdout.decode("utf-8", errors="replace").split("\0")
+    files = [ROOT / p for p in tracked if p and (ROOT / p).is_file()]
+    log(f"待上传文件: {len(files)} 个（git index）")
 
     # 2.5 远端现有 blob 清单（内容未变的文件由 base_tree 继承，跳过上传）
     base_listing = api_call(
@@ -146,10 +151,25 @@ def main() -> int:
             log(f"  blob 进度: {i}/{len(pending)}")
     log(f"blob 上传完成: {len(pending)} 个")
 
-    # 4. 合并树（base_tree 保留远端 README 等独有文件）
+    # 3.5 删除清单：远端有、本地 index 没有 → 合并树中以 sha:null 移除。
+    #     安全阈值：删除量异常大（疑似错误目录下运行/误清空）时中止。
+    tracked_rel = {p.relative_to(ROOT).as_posix() for p in files}
+    deletions = sorted(p for p in remote_sha_by_path if p not in tracked_rel)
+    if (len(deletions) > 200 and len(deletions) > 0.3 * len(remote_sha_by_path)
+            and not force_delete):
+        raise RuntimeError(
+            f"待删除 {len(deletions)} 个文件超过安全阈值（远端共 "
+            f"{len(remote_sha_by_path)} 个 blob），疑似误操作，中止推送；"
+            f"确属一次性大清理时加 --force-delete 放行。"
+        )
+    log(f"远端删除: {len(deletions)} 个" + (f"（前 5: {deletions[:5]}）" if deletions else ""))
+
+    # 4. 合并树（base_tree 继承未变更项；本地删除的文件以 sha:null 移除）
     tree = api_call(
         "POST", f"/repos/{owner_repo}/git/trees", token,
-        {"base_tree": base_tree, "tree": entries},
+        {"base_tree": base_tree, "tree": entries
+         + [{"path": p, "mode": "100644", "type": "blob", "sha": None}
+            for p in deletions]},
     )
     log(f"合并树: {tree['sha'][:12]}")
 

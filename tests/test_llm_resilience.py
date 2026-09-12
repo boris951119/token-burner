@@ -289,3 +289,49 @@ class TestWallClockDefense:
         from app.utils.model_client import _is_transient
 
         assert _is_transient(TimeoutError("墙钟 600s timed out"))
+
+
+class ContentlessThenGood:
+    """r7b 取证：网关偶发返回 message.content 缺失的响应（评审模型）。"""
+
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, **kwargs):
+        self.calls += 1
+        if self.calls == 1:
+            return {"choices": [{"message": {}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 0}}
+        return _resp("recovered")
+
+
+class TestContentlessResponse:
+    def test_contentless_is_transient_and_retried(self, gpt_key):
+        """content 缺失 = 网关抖动 → 瞬态重试恢复，不再当场谋杀任务。"""
+        flaky = ContentlessThenGood()
+        recorder = SleepRecorder()
+        client = _client(completion=flaky, sleep=recorder,
+                         retry_backoff_base=0.01)
+        result = client.chat("gpt-4o", _MSG)
+        assert result.content == "recovered"
+        assert flaky.calls == 2
+
+    def test_contentless_exhausted_raises_with_count(self, gpt_key):
+        from app.utils.model_client import _is_transient
+
+        class _AlwaysContentless:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, **kwargs):
+                self.calls += 1
+                return {"choices": [{"message": {}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 5, "completion_tokens": 0}}
+
+        flaky = _AlwaysContentless()
+        client = _client(completion=flaky, sleep=SleepRecorder(),
+                         llm_max_retries=1, retry_backoff_base=0.01)
+        with pytest.raises(RuntimeError, match="已重试 1 次"):
+            client.chat("gpt-4o", _MSG)
+        assert flaky.calls == 2  # 1 次首发 + 1 次重试（构建纳入重试范围）
+        assert _is_transient(RuntimeError("LLM 响应缺少 message.content 字段"))
