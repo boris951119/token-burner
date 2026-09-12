@@ -236,12 +236,45 @@ def env_precheck(repo_path: Path, p2p: list[str], f2p_files: list[str],
         argsfile.write_text("\n".join(nodes), encoding="utf-8")
         return argsfile
 
+    def _canonicalize_p2p(nodes: list[str]) -> tuple[list[str], list[str]]:
+        """数据集截断伪影修复(夜批 b6 取证):P2P 存的参数化 ID 是官方
+        `-v` 输出按空白解析的,含空格/引号参数被截断(如
+        `test[cliapp.factory-create_app2("foo",`)——任何环境都收集不出
+        该精确节点。先 --co 全量收集,精确节点保留;找不到的退到函数级
+        前缀(该函数任一参数可收集即环境无恙)。返回(可运行节点,真缺失)。
+        """
+        files = sorted({n.split("::")[0] for n in nodes if "::" in n})
+        if not files:
+            return nodes, []
+        proc = run_pytest(["--co", "-q"] + files, 600)
+        collected = set()
+        for line in (proc.stdout or "").splitlines():
+            line = line.strip()
+            if "::" in line and not line.startswith(("=", "!")):
+                collected.add(line)
+        runnable, missing = [], []
+        for n in nodes:
+            if n in collected:
+                runnable.append(n)
+                continue
+            head = n.split("[", 1)[0]
+            if head != n and head in collected:
+                runnable.append(head)
+            else:
+                missing.append(n)
+        return runnable, missing
+
     if p2p:
-        if len(" ".join(p2p)) > 6000:  # Windows 命令行 32k 上限(R1 xarray 取证)
-            argsfile = _write_argsfile(p2p)
+        runnable, missing = _canonicalize_p2p(list(p2p))
+        if missing:
+            return False, (
+                f"P2P 有 {len(missing)} 个节点无法收集(真缺失,环境不可评): "
+                f"{missing[0]}")
+        if len(" ".join(runnable)) > 6000:  # Windows 命令行 32k 上限(R1 xarray 取证)
+            argsfile = _write_argsfile(runnable)
             proc = run_pytest([f"@{argsfile.name}"], 900)
         else:
-            proc = run_pytest(list(p2p), 900)
+            proc = run_pytest(runnable, 900)
         if proc.returncode != 0:
             # stdout+stderr 合并取尾(夜批 b1 取证:pytest 启动即崩时
             # 诊断全在 stderr,只看 stdout 尾巴 → 空原因无从排查)

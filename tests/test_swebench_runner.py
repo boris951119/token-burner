@@ -55,6 +55,45 @@ class TestEnvPrecheckStderr:
         assert "ModuleNotFoundError" in reason, "stderr 必须进入失败原因"
 
 
+class TestCanonicalizeP2P:
+    def _patch_collect(self, monkeypatch, collected_lines):
+        import subprocess as sp
+
+        def fake_run(cmd, **kwargs):
+            if "--co" in cmd:
+                return sp.CompletedProcess(
+                    cmd, 0, stdout="\n".join(collected_lines), stderr="")
+            return sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(swebench_run.subprocess, "run", fake_run)
+
+    def test_truncated_param_id_falls_back_to_function(self, tmp_path, monkeypatch):
+        """b6 取证:P2P 参数化 ID 是官方 -v 输出按空白截断的伪影
+        (`test[create_app2("foo",`)——精确节点收集不到,须退到函数级。"""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._patch_collect(monkeypatch, [
+            "tests/test_cli.py::test_locate_app[cliapp.app-None-testapp]",
+            'tests/test_cli.py::test_locate_app[cliapp.factory-create_app2("foo", "bar")-x]',
+            "tests/test_cli.py::test_other",
+        ])
+        ok, reason = swebench_run.env_precheck(
+            repo,
+            ['tests/test_cli.py::test_locate_app[cliapp.factory-create_app2("foo",',
+             "tests/test_cli.py::test_other"],
+            [], "py")
+        assert ok, reason
+
+    def test_genuinely_missing_node_still_fails(self, tmp_path, monkeypatch):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        self._patch_collect(monkeypatch, ["tests/test_a.py::test_x"])
+        ok, reason = swebench_run.env_precheck(
+            repo, ["tests/test_a.py::test_gone"], [], "py")
+        assert not ok
+        assert "真缺失" in reason
+
+
 class TestLlmFallbackChain:
     def _make_runner(self, monkeypatch, failures_by_model):
         """构造 run_instance 的 llm 闭包等价物:按模型记录失败。"""
