@@ -181,9 +181,13 @@ VERIFY_DELIVERY **PASS**（冒烟+旅程全绿）。过程中实弹连修五层�
    越修越残）；终验用最佳脚本版本；路由探针参数内省（origin vs
    from_station 瞎猜 → 400 的根因）。
 
-**当前预设**：`models: [deepseek-v4-pro, glm-5.2, glm-5.3]` +
+**当前预设**：`models: [deepseek-v4-pro, minimax-m3, glm-5.3]` +
 `platform_multi_model: true`——注入模型任主，预设依序补位，预设不足
-自然回落单模型。回归 1157 passed / 0 failed。
+自然回落单模型。回归 1161 passed / 0 failed。
+
+测试副 LLM 定稿 **minimax-m3**（大生成 60s/4.8k tokens 实测最快；
+glm-5.2 在 content=null 扩容修复后亦可作备选）。另据 r7c-2 三库
+碎片化取证新增 ingest 契约第 14 条（唯一锚定数据库）。
 
 验收锚点（全绿才算演练通过）：
 
