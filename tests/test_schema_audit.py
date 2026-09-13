@@ -93,3 +93,43 @@ class TestAuditFindings:
                'x = "CREATE TABLE trains (train_id INTEGER)"')
         findings = audit_schema(tmp_path)
         assert any("多处 CREATE TABLE" in f for f in findings)
+
+
+class TestSelectListCoverage:
+    """r15 取证：SELECT 清单列名漂移（departure vs departure_time）
+    曾因清单不覆盖而漏检——恰为 search 500 的直接死因。"""
+
+    def test_select_list_drift_detected(self, tmp_path):
+        _write(tmp_path, "seed_data/seed_data.py", SEED)
+        _write(tmp_path, "search/search.py",
+               'sql = "SELECT train_number, departure, arrival FROM trains '
+               'WHERE origin = ?"\n')
+        findings = audit_schema(tmp_path)
+        assert any("departure" in f for f in findings), findings
+        assert any("arrival" in f for f in findings), findings
+
+    def test_select_clean_and_aggregates_skipped(self, tmp_path):
+        _write(tmp_path, "seed_data/seed_data.py", SEED)
+        _write(tmp_path, "search/search.py",
+               'sql = "SELECT DISTINCT number, origin, COUNT(*) AS n '
+               'FROM trains WHERE origin = ? GROUP BY number"\n')
+        assert audit_schema(tmp_path) == []
+
+
+class TestSelectLiteralFalsePositive:
+    """SELECT '字面量' 不是列——误报会把修复引向不存在的缺陷。"""
+
+    def test_string_literal_in_select_ignored(self, tmp_path):
+        _write(tmp_path, "seed_data/seed_data.py", SEED)
+        _write(tmp_path, "x/x.py",
+               'sql = "SELECT \'1\', number FROM trains WHERE origin = ?"\n')
+        findings = audit_schema(tmp_path)
+        assert all("'1'" not in f and "'1'" not in repr(f) or "SELECT '1'" not in f
+                   for f in findings), findings
+        assert not any("1'" in f and "不在 DDL" in f for f in findings), findings
+
+    def test_bare_numeric_literal_ignored(self, tmp_path):
+        _write(tmp_path, "seed_data/seed_data.py", SEED)
+        _write(tmp_path, "x/x.py",
+               'sql = "SELECT 1 FROM trains WHERE origin = ?"\n')
+        assert audit_schema(tmp_path) == []

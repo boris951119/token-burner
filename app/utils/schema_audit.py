@@ -114,6 +114,32 @@ def _known_single_table(sql: str, tables: dict) -> str | None:
     return known.pop() if len(known) == 1 else None
 
 
+def _select_list_columns(select_list: str) -> list[str]:
+    """SELECT 清单 → 纯列名（剔除 *、聚合/函数、别名、DISTINCT、字面量）。
+
+    r15 取证：`SELECT departure, arrival FROM trains`（DDL 为
+    departure_time/arrival_time）曾因清单不覆盖而漏检。
+    """
+    cols: list[str] = []
+    text = re.sub(r"\bDISTINCT\b", "", select_list, flags=re.IGNORECASE)
+    for part in text.split(","):
+        part = part.strip()
+        if not part or "*" in part or "(" in part:
+            continue  # *、COUNT(...)、函数表达式一律跳过（宁漏不误）
+        token = re.split(r"\s+AS\s+|\s+", part, flags=re.IGNORECASE)[0]
+        # 带引号的字符串常量与裸数字（SELECT 'x' / SELECT 1）不是列
+        if len(token) >= 2 and token[0] in "'\"" and token[-1] == token[0]:
+            continue
+        if token.replace(".", "", 1).isdigit():
+            continue
+        token = token.strip("'\"[]`")
+        if "." in token:  # t.col → 取列段
+            token = token.rsplit(".", 1)[1]
+        if token and token.lower() not in _SQL_KEYWORDS:
+            cols.append(token.lower())
+    return cols
+
+
 def audit_schema(code_dir: Path) -> list[str]:
     """审计目录内 SQL 引用与 DDL 的列名漂移。
 
@@ -175,6 +201,20 @@ def audit_schema(code_dir: Path) -> list[str]:
                         f"{where}: 查询 {table} 时 WHERE 谓词引用 {col!r} "
                         f"不在 DDL（列: "
                         f"{', '.join(tables[table]['columns'])}）")
+
+            # 4) 单表语句的 SELECT 列清单（r15 取证盲区：SELECT
+            #    departure, arrival 而 DDL 是 departure_time/arrival_time
+            #    ——恰好是 search 500 的直接死因）
+            sm = re.search(
+                r"\bSELECT\s+(.+?)\s+FROM\b", sql, re.IGNORECASE | re.DOTALL)
+            if sm:
+                cols = _select_list_columns(sm.group(1))
+                for col in cols:
+                    if col not in tables[table]["columns"]:
+                        _flag(
+                            f"{where}: SELECT {col!r} FROM {table} —— 列 "
+                            f"{col!r} 不在 DDL（列: "
+                            f"{', '.join(tables[table]['columns'])}）")
 
     # 4) 同名表多处定义（两套 DDL 本身就是漂移源）
     for name, info in tables.items():
