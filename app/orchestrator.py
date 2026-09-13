@@ -749,7 +749,21 @@ class DiscussionEngine:
         return response.content
 
     def _chat(self, model: str, messages: list[dict]) -> str:
-        return self.llm.chat(model, messages).content
+        # keep1 取证：32 需求规模下讨论单次推理可超墙钟（glm-5.3
+        # 600s×3 重试全灭），且讨论路径此前没有模型级备胎——按
+        # dev_loop._chat_resilient 同款，主模型失败后依
+        # settings.models 逐备胎，全败才上抛。
+        try:
+            return self.llm.chat(model, messages).content
+        except RuntimeError:
+            fallbacks = [m for m in (self.settings.models or [])
+                         if m != model]
+            for fb in fallbacks:
+                try:
+                    return self.llm.chat(fb, messages).content
+                except RuntimeError:
+                    continue
+            raise
 
     def _persist_discussion(self, pid: str | None, outcome: DiscussionOutcome) -> None:
         """讨论结果落盘（6.3：spec.md + sessions/discussion_summary.md）。
