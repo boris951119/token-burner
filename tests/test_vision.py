@@ -13,9 +13,10 @@ from app.utils.vision import (
 
 
 def _tree_with_imgs(*refs: str) -> dict:
+    desc = f"首页见 ![{refs[0]}]({refs[0]})" if refs else "纯文本需求"
     return {
         "id": "ROOT", "type": "FOLDER",
-        "description": f"首页见 ![{refs[0]}]({refs[0]})",
+        "description": desc,
         "children": [
             {"id": "REQ-1", "type": "ATOMIC",
              "description": f"表单见 ![]({r})" if r else "",
