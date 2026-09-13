@@ -39,6 +39,21 @@ Runtime 5s；第 6-8 名 Token 3.96M-9.09M、Runtime 10-11m 仍 100 分。
 deepseek-v4-flash 单模型编制对比 pass/CNY，若通过率不降则切换。
 （榜上 5s/0.00M 疑似微型任务或计入口径特例，不影响上述结论。）
 
+**官方基准仓库与初赛裁决（2026-09-13/14 情报）**：
+
+- 管理员公开官方仓库 `github.com/code-philia/arc-bench`：6 个基准应用
+  （keep 32 需求 / bookstack 34 / stackoverflow 66 / prestashop 86 /
+  12306 117 / ctrip 125），含官方需求树 + Playwright 测试 + 参考截图；
+  需求格式与我方管线输入完全同源（FOLDER/ATOMIC + GIVEN/WHEN/THEN）；
+- **管理员裁决：初赛题目=同编译器新生成**（非 6 公开应用）→ 过拟合
+  公开题不可行，通用能力是唯一路线；6 应用作为规模/格式教材
+  （keep 32 需求=我方玩具演练的 5 倍体量）；
+- **管理员裁决：参考截图会提供** → 视觉转写通道已上线（kimi-k3 当眼，
+  截图→结构化描述注入需求文本；管线保持纯文本）；
+- 规模墙实测：32 需求即令 glm-5.3 讨论超 600s 墙钟、pro 模块生成超
+  600s——墙钟已提至 1200s，讨论/拆分分层压缩（讨论吃 FOLDER 摘要）
+  是初赛前必须完成的规模架构工程。
+
 **任务形态**：平台下发 `requirements.yaml` 需求树（FOLDER/ATOMIC 两级，
 ATOMIC 节点与 Playwright 端到端用例一一对应，"需求即测试"）。
 
