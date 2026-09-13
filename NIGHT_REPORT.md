@@ -300,3 +300,23 @@ r15 SELECT 漂移 → 行为级 409/硬编码兜底）。下一步建议：
 **元结论**：确定性诊断是把双刃剑——诊断注入必须配套"修复形态
 约束"，否则 LLM 会用过度工程"回应"诊断而不是"服从"诊断。
 r17 将带此约束跑。
+
+## 九、r17：冒烟级新缺陷族（09-13 下午）
+
+**结果**：FAIL（退出码 1）——死于冒烟阶段（比旅程更早）：
+`import web_ui: ModuleNotFoundError("No module named 'auth'")`。
+
+**根因（确定性确诊）**：计划/接口/真代码全部叫 `f1_auth/f2_search/
+f3_booking`，组装模块 web_ui 却按语义名 `import auth/search/booking`；
+目录里另有三个只有 `__init__.py` 的**空壳包**（auth/search/booking）
+把水搅浑。模块命名漂移 + 空壳包干扰，smoke auto_repair 的诊断里
+没有实际包名映射，修不动。
+
+**对策（已提交）**：`_package_layout_section` 包结构审计——零 LLM 扫
+顶层 import 对照"有实现的包"，近名（f1_auth~auth）即报映射；空壳包
+单独警示"不要为它补代码"。对 r17 真 app 验证：3 漂移 + 3 空壳全部
+命中（3 项测试）。已注入 smoke auto_repair 指令。r18 带 此跑。
+
+**缺陷族谱系更新**：INSERT 漂移(r13) → SELECT 漂移(r15) → 修复
+反噬(r16) → 命名漂移+空壳包(r17)。每个族都有确定性检测器 + 真
+app 实证。初赛倒计时 8 天，管线在可见地变厚。

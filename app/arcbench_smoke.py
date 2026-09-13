@@ -590,6 +590,74 @@ def verify_delivery(
     return ok and jok, "\n".join(notes + ([jreport] if jreport else []))
 
 
+def _package_layout_section(code_dir: Path) -> str:
+    """确定性包结构审计（r17 取证：组装模块 import auth，实际包
+    f1_auth；目录里还躺着 auth/ 空壳包——ModuleNotFoundError 的
+    真凶是命名漂移，不是缺模块）。
+
+    零 LLM：扫全部本地 .py 的顶层 import，凡导入名不是实际包但有
+    近名实际包（f1_auth~auth 后缀/包含关系）即报告映射；同时报告
+    只含 __init__.py 的空壳包。无发现返回空串（宁漏不误）。
+    """
+    try:
+        code_dir = Path(code_dir)
+        packages = {
+            child.name for child in code_dir.iterdir()
+            if child.is_dir() and not child.name.startswith(("_", "."))
+            and (child / "__init__.py").exists()
+        }
+        # 空壳包不算真实实现（r17 病理：import auth 命中的是空壳包，
+        # 真实代码在 f1_auth——对齐目标必须是有实现的包）
+        real = {
+            p for p in packages
+            if any(
+                c.suffix == ".py" and c.name != "__init__.py"
+                for c in (code_dir / p).iterdir()
+            )
+        }
+        if not packages:
+            return ""
+
+        local_imports: dict[str, list[str]] = {}
+        for py in code_dir.rglob("*.py"):
+            if "__pycache__" in py.parts:
+                continue
+            try:
+                src = py.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for m in re.finditer(
+                    r"^\s*(?:from|import)\s+(\w+)", src, re.MULTILINE):
+                name = m.group(1)
+                if name not in real:
+                    local_imports.setdefault(name, []).append(
+                        py.relative_to(code_dir).as_posix())
+
+        lines: list[str] = []
+        for name, files in sorted(local_imports.items()):
+            near = [p for p in real
+                    if p.endswith("_" + name) or p.startswith(name)
+                    or name in p]
+            if near:
+                lines.append(
+                    f"- {files[0]}: import {name} —— 实际包名是 "
+                    f"{near[0]}（请把 import 对齐为 {near[0]}）")
+        for pkg in sorted(packages):
+            pkg_dir = code_dir / pkg
+            contents = [c.name for c in pkg_dir.iterdir()
+                        if c.name not in ("__pycache__",)]
+            if contents == ["__init__.py"] or not contents:
+                lines.append(f"- {pkg}/ 是空壳包（仅 __init__.py），"
+                             "真实实现不在这里——不要为它补代码，"
+                             "把调用方指向真实模块")
+        if not lines:
+            return ""
+        return ("【确定性包结构审计（正则扫描，优先按此对齐命名）】\n"
+                + "\n".join(lines[:10]) + "\n\n")
+    except Exception:
+        return ""
+
+
 def auto_repair(
     project_dir: Path, settings, max_rounds: int = 3,
     test_cmd: list[str] | None = None,
@@ -624,7 +692,9 @@ def auto_repair(
         "集成冒烟失败（评测方以「import 全部模块 + create_app() + "
         "GET /api/health 返回 200」验收），失败报告如下：\n"
         + report[-1500:]
-        + "\n请最小化修复使冒烟通过：可新增缺失函数、注册缺失路由、"
+        + "\n"
+        + _package_layout_section(code_dir)
+        + "请最小化修复使冒烟通过：可新增缺失函数、注册缺失路由、"
         "托管缺失静态页面（index.html 等，放模块目录 static/ 下），"
         "保证所有模块可导入、create_app 可用、健康检查 200。\n"
         "硬性约束（r8 取证）：**禁止删除或绕过 create_app 中已有的业务"
