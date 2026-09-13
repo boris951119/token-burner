@@ -201,7 +201,10 @@ def _schema_audit_section(code_dir: Path, findings: list[str] | None = None) -> 
         "【确定性 schema 审计（正则 diff，优先按此修复）】\n"
         + "\n".join(f"- {f}" for f in findings[:10])
         + "\n表结构唯一权威是 seed_data 模块的 DDL；请把查询/插入改为"
-        "使用 DDL 实际存在的列。\n\n"
+        "使用 DDL 实际存在的列。\n"
+        "修复形态约束（r16 实证）：直接改 SQL 字面量为 DDL 真实列名，"
+        "**严禁**新增运行时 schema 探测/列名自适应/兼容层/防御性校验——"
+        "此类代码自身失灵时会把正常请求整体打死（如注册全部 500）。\n\n"
     )
 
 
