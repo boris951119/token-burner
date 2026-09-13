@@ -66,14 +66,26 @@ if app is None:
     raise SystemExit(1)
 
 if hasattr(app, "test_client"):        # Flask
-    resp = app.test_client().get("/api/health")
+    client = app.test_client()
+    resp = client.get("/api/health")
     ok = resp.status_code == 200
     detail = f"/api/health -> {resp.status_code}"
+    # r18 取证：入口 URL 必须活着（评测从首页开始走旅程）——
+    # 组装层漏注册 `/` 时 health 照样绿，冒烟必须拦住首页 404
+    home = client.get("/")
+    if home.status_code != 200:
+        failures.append(f"GET / -> {home.status_code}（入口路由缺失？）")
+        ok = False
 else:                                   # FastAPI
     from fastapi.testclient import TestClient
-    resp = TestClient(app).get("/api/health")
+    client = TestClient(app)
+    resp = client.get("/api/health")
     ok = resp.status_code == 200
     detail = f"/api/health -> {resp.status_code}"
+    home = client.get("/")
+    if home.status_code != 200:
+        failures.append(f"GET / -> {home.status_code}（入口路由缺失？）")
+        ok = False
 
 if not ok:
     failures.append(detail)
@@ -562,6 +574,24 @@ def _journey_gate(
     return True, ""
 
 
+def _beat(project_dir: Path, stage: str, detail: str = "") -> None:
+    """验收阶段直接写心跳（r18 误判教训：verify 阶段心跳冻结 6 小时
+    被误判为挂死——排障者需要「验收进行到哪一步」的实时信号）。"""
+    try:
+        import time as _time
+
+        hb = Path(project_dir) / "sessions" / "heartbeat.json"
+        hb.parent.mkdir(parents=True, exist_ok=True)
+        hb.write_text(json.dumps({
+            "timestamp": _time.strftime("%Y-%m-%d %H:%M:%S"),
+            "stage": stage,
+            "last_event": "verify",
+            "module": detail[:60],
+        }, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def verify_delivery(
     project_dir: Path,
     requirement: str,
@@ -572,10 +602,12 @@ def verify_delivery(
     project_dir = Path(project_dir).resolve()
     code_dir = project_dir / "code"
     notes: list[str] = []
+    _beat(project_dir, "验收-冒烟")
 
     ok, report = run_smoke(code_dir)
     if not ok:
         notes.append(f"[smoke] FAIL → auto_repair: {report[-200:]}")
+        _beat(project_dir, "验收-冒烟修复")
         ok, report = auto_repair(
             project_dir, settings, max_rounds=max_app_rounds
         )
@@ -583,10 +615,12 @@ def verify_delivery(
     if not ok:
         return False, "\n".join(notes + [report[-300:]])
 
+    _beat(project_dir, "验收-旅程")
     llm = _llm_from(settings)
     jok, jreport = _journey_gate(
         code_dir, project_dir, requirement, llm, max_app_rounds, notes
     )
+    _beat(project_dir, "验收-完成", "PASS" if ok and jok else "FAIL")
     return ok and jok, "\n".join(notes + ([jreport] if jreport else []))
 
 
