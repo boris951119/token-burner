@@ -103,6 +103,23 @@ def collect_ddl(code_dir: Path) -> dict[str, dict[str, list[str]]]:
     return tables
 
 
+def _near_table(ref: str, tables: dict) -> str | None:
+    """ref 的近名 DDL 表；无高置信近名返回 None（宁漏不误）。
+
+    只认两种形态：包含关系（booking~bookings）与单复数/尾 y 变换
+    （user~users, category~categories）。前缀相似但语义无关的表
+    （user_roles vs user_notes）不算近名。
+    """
+    for name in tables:
+        if ref.startswith(name) or name.startswith(ref):
+            return name
+        stem = name[:-1] if name.endswith("s") else name
+        if ref in (stem + "s", stem + "es",
+                   stem[:-1] + "ies" if stem.endswith("y") else stem):
+            return name
+    return None
+
+
 def _statement_tables(sql: str) -> set[str]:
     return {t.lower() for t in _TABLE_RE.findall(sql)}
 
@@ -189,6 +206,22 @@ def audit_schema(code_dir: Path) -> list[str]:
                         f"{where}: {table}.{col} —— 列 {col!r} 不在表 "
                         f"{table} 的 DDL（列: "
                         f"{', '.join(tables[table]['columns'])}）")
+
+            # 5) 表名漂移：引用的表不在 DDL，但存在近名 DDL 表
+            #    （train/train_plural、user/users 这类单复数错位）。
+            #    只在有近名时报告；sqlite 内部表/未知孤立表跳过（宁漏不误）。
+            #    注意：必须在 _known_single_table 闸门之前——表未知恰是
+            #    本检查的工作场景。
+            for tm in _TABLE_RE.finditer(sql):
+                ref = tm.group(1).lower()
+                if ref in tables or ref.startswith("sqlite_"):
+                    continue
+                near = _near_table(ref, tables)
+                if near is not None:
+                    _flag(
+                        f"{where}: 引用表 {ref!r} 不在 DDL，疑似应为近名表 "
+                        f"{near!r}（DDL 列: "
+                        f"{', '.join(tables[near]['columns'])}）")
 
             # 3) 单表语句的 WHERE/AND/OR 谓词首标识符
             table = _known_single_table(sql, tables)

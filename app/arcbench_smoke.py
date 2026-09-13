@@ -181,18 +181,20 @@ _SCRIPT_DEFECT_RE = re.compile(
     r"|TypeError|SyntaxError|IndentationError)\b\s*:")
 
 
-def _schema_audit_section(code_dir: Path) -> str:
+def _schema_audit_section(code_dir: Path, findings: list[str] | None = None) -> str:
     """确定性 schema 审计结论注入修复指令（r13 取证：列名漂移 2 轮未定位）。
 
     零 LLM 正则 diff：DDL 列 vs SQL 引用列。宁漏不误——发现即高置信，
     直接给出表名/文件/行与 DDL 权威列清单；无发现则不占提示词。
+    findings 可传入已算好的结果（动态轮次与注入共用一次审计）。
     """
-    try:
-        from app.utils.schema_audit import audit_schema
+    if findings is None:
+        try:
+            from app.utils.schema_audit import audit_schema
 
-        findings = audit_schema(code_dir)
-    except Exception:
-        return ""
+            findings = audit_schema(code_dir)
+        except Exception:
+            return ""
     if not findings:
         return ""
     return (
@@ -230,6 +232,16 @@ _JOURNEY_USER = """根据需求摘要与真实路由表，生成该 Web 应用�
 5. 业务数据现场创建（先注册的账号就用于登录；列表响应里的值取自
    实际响应再断言，不要凭空假设精确值）；
 6. 每步 resp = c.post(...)/c.get(...) 后立刻 assert，断言消息含步骤名。
+
+行为探针（除主旅程外必须包含，各 1-2 步即可）：
+A. 重复注册拒绝：用已注册成功的同一用户名再注册一次，断言
+   `resp.status_code in (400, 401, 403, 409)`——需求几乎总是要求
+   重复注册被拒绝，200/201 属于静默成功违约（r15 实证）；
+B. 种子字符串断言：需求给出的精确数据（如车次号、站点名、用户名）
+   若出现在查询/列表响应中，用这些精确字符串断言存在性——这是
+   评测方 e2e 夹具的断言方式；
+C. 错误密码登录：断言 `resp.status_code in (400, 401, 403)`，
+   不得放行 2xx。
 """
 
 
@@ -489,18 +501,32 @@ def _journey_gate(
         pass
     try:
         from app.agents.repo_fixer import RepoFixer
+        from app.utils.schema_audit import audit_schema
+
+        # r15 取证：诊断发现数应兑换成修复轮次——带着确定性结论却只有
+        # 基础轮次，等于把到手的定位信息浪费掉。
+        try:
+            audit_findings = audit_schema(code_dir)
+        except Exception:
+            audit_findings = []
+        extra_rounds = min(len(audit_findings), 4) // 2  # 0-2 轮增量
+        rounds = max_app_rounds + extra_rounds
+        if extra_rounds:
+            notes.append(
+                f"[journey] 审计发现 {len(audit_findings)} 处 → "
+                f"修复轮次 {max_app_rounds}+{extra_rounds}")
 
         fixer = RepoFixer(
             llm, project_dir,
             test_cmd=[sys.executable, str(jpath), str(code_dir)],
-            max_rounds=max_app_rounds,
+            max_rounds=rounds,
         )
         fixer.fix(
             "旅程验收失败（评测方以真实浏览器走用户旅程，本脚本是同进程"
             "等价验收）。失败输出如下，请最小化修复使旅程通过（典型："
             "查询/列表必须返回数据库种子数据而非硬编码列表、缺失页面/"
             "路由补齐、响应字段补齐）。\n"
-            + _schema_audit_section(code_dir)
+            + _schema_audit_section(code_dir, findings=audit_findings)
             + "硬性约束：修复后应用必须仍注册下列全部路由（方法不得改动、"
             "不得删除任何既有路由）——\n"
             + "\n".join(routes)

@@ -133,3 +133,26 @@ class TestSelectLiteralFalsePositive:
         _write(tmp_path, "x/x.py",
                'sql = "SELECT 1 FROM trains WHERE origin = ?"\n')
         assert audit_schema(tmp_path) == []
+
+
+class TestTableDrift:
+    """表名漂移：引用不存在的表但存在近名 DDL 表（单复数错位）。"""
+
+    def test_singular_plural_drift_detected(self, tmp_path):
+        _write(tmp_path, "seed_data/seed_data.py", SEED)
+        _write(tmp_path, "auth/auth.py",
+               'sql = "SELECT username FROM user WHERE username = ?"\n')
+        findings = audit_schema(tmp_path)
+        assert any("疑似应为" in f and "users" in f for f in findings), findings
+
+    def test_unrelated_unknown_table_still_ignored(self, tmp_path):
+        _write(tmp_path, "seed_data/seed_data.py", SEED)
+        _write(tmp_path, "x/x.py",
+               'sql = "SELECT * FROM orders WHERE order_id = ?"\n')
+        assert audit_schema(tmp_path) == []
+
+    def test_sqlite_internals_ignored(self, tmp_path):
+        _write(tmp_path, "seed_data/seed_data.py", SEED)
+        _write(tmp_path, "x/x.py",
+               'sql = "SELECT name FROM sqlite_master WHERE type = ?"\n')
+        assert audit_schema(tmp_path) == []
