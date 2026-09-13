@@ -8,7 +8,7 @@
   "llm_max_retries": 3,
   "retry_backoff_base": 10.0,
   "llm_timeout_seconds": 600,
-  "llm_wall_clock_seconds": 0,
+  "llm_wall_clock_seconds": 1200,
   "max_response_tokens": 12000,
   "max_task_tokens": 800000
 }
