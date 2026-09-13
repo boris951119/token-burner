@@ -293,6 +293,27 @@ def env_precheck(repo_path: Path, p2p: list[str], f2p_files: list[str],
     return True, ""
 
 
+def chat_resilient(client, model: str, fallbacks: list[str],
+                   deadline: float | None, messages: list[dict]) -> str:
+    """备胎链调用 + 实例级硬顶（b9 取证 8396s 单实例）。
+
+    主模型重试耗尽后逐个备胎；deadline 到点（或已过）立即 RuntimeError，
+    不再发起任何调用——由 RepoFixer 的失败路径收敛实例记录。
+    """
+    chain = [model, *fallbacks]
+    for i, m in enumerate(chain):
+        if deadline is not None and time.time() > deadline:
+            raise RuntimeError(
+                f"实例时间预算耗尽（deadline 已过，跳过 {m} 及后续调用）")
+        try:
+            return client.chat(m, messages).content
+        except RuntimeError:
+            if i == len(chain) - 1:
+                raise
+            continue
+    raise RuntimeError("unreachable: empty model chain")
+
+
 def run_instance(instance: dict, cache: Path, model: str,
                  max_rounds: int, pip_install: bool = True,
                  use_venv: bool = True, env_backend: str = "venv",
@@ -387,9 +408,14 @@ def run_instance(instance: dict, cache: Path, model: str,
         # SWEBENCH_WALL_CLOCK=秒数   单次 LLM 调用墙钟上限(网关长挂防御;
         #                            取证:旧批一实例无墙钟烧 6023s 后超时)
         # SWEBENCH_FALLBACK_MODELS=m1,m2  重试耗尽后的模型级降级链
+        # SWEBENCH_MAX_INSTANCE_SECONDS=秒数  实例级总时限(b9 取证:单实例
+        #                            8396s——墙钟×重试×备胎链合法叠加可至小时级)
         wall = int(os.environ.get("SWEBENCH_WALL_CLOCK", "0") or 0)
         if wall > 0:
             settings.llm_wall_clock_seconds = wall
+        max_instance_s = float(
+            os.environ.get("SWEBENCH_MAX_INSTANCE_SECONDS", "0") or 0)
+        deadline = (time.time() + max_instance_s) if max_instance_s > 0 else None
         fallbacks = [m.strip() for m in
                      os.environ.get("SWEBENCH_FALLBACK_MODELS", "").split(",")
                      if m.strip() and m.strip() != model]
@@ -398,17 +424,11 @@ def run_instance(instance: dict, cache: Path, model: str,
 
         def llm(system, user):
             # dev_loop._chat_resilient 同款:网关退化窗口内同模型重试
-            # 全部落窗,按降级链逐个备胎(全部失败才上抛)。
+            # 全部落窗,按降级链逐个备胎(全部失败才上抛);
+            # deadline 为实例级硬顶,到点立即失败不再发起调用。
             messages = [{"role": "system", "content": system},
                         {"role": "user", "content": user}]
-            chain = [model, *fallbacks]
-            for i, m in enumerate(chain):
-                try:
-                    return client.chat(m, messages).content
-                except RuntimeError:
-                    if i == len(chain) - 1:
-                        raise
-                    continue
+            return chat_resilient(client, model, fallbacks, deadline, messages)
 
         issue = instance.get("problem_statement", "")
         hints = instance.get("hints_text") or ""

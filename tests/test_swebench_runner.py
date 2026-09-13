@@ -138,3 +138,50 @@ class TestLlmFallbackChain:
         llm, _ = self._make_runner(None, {"primary", "backup"})
         with pytest.raises(RuntimeError):
             llm("s", "u", _chain=["primary", "backup"])
+
+
+class TestChatResilientDeadline:
+    """b9 取证：单实例 8396s——实例级硬顶到点必须立即拒绝。"""
+
+    def _client(self, fail_models):
+        class _R:
+            content = "ok"
+
+        class _C:
+            def chat(self, model, messages):
+                if model in fail_models:
+                    raise RuntimeError(f"degraded: {model}")
+                return _R()
+
+        return _C()
+
+    def test_deadline_exhausted_raises_before_calling(self):
+        import swebench_run as sr
+
+        called = []
+
+        class _C:
+            def chat(self, model, messages):
+                called.append(model)
+                raise RuntimeError("nope")
+
+        with pytest.raises(RuntimeError, match="时间预算"):
+            sr.chat_resilient(_C(), "m1", ["m2"], deadline=0.0,
+                              messages=[])
+        assert called == [], "deadline 已过不得发起任何调用"
+
+    def test_chain_still_works_without_deadline(self):
+        import swebench_run as sr
+
+        out = sr.chat_resilient(self._client({"m1"}), "m1", ["m2"],
+                                deadline=None, messages=[])
+        assert out == "ok"
+
+    def test_deadline_in_future_allows_call(self):
+        import time as _t
+
+        import swebench_run as sr
+
+        out = sr.chat_resilient(self._client(set()), "m1", [],
+                                deadline=_t.time() + 60, messages=[])
+        assert out == "ok"
