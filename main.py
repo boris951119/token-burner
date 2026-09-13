@@ -177,6 +177,17 @@ def main(argv: list[str] | None = None) -> int:
                 "种子字符串契约缺失，生成数据易与评测断言漂移"
             )
         requirement = render_requirement_text(tree, fixture_hint=fixture_hint)
+        # 视觉转写通道（初赛裁决：参考截图会提供）：需求树内嵌
+        # reference/*.png 时用视觉模型转写为结构化描述并注入——
+        # 主力模型拒图（r17 探测 glm-5.3 HTTP 400），管线保持纯文本。
+        from app.utils.vision import enrich_requirement
+
+        requirement = enrich_requirement(
+            requirement, req_dir, tree,
+            key=os.environ.get("OPENAI_API_KEY", ""),
+            base=os.environ.get("OPENAI_BASE_URL")
+            or os.environ.get("OPENAI_API_BASE", ""),
+        )
     else:
         tree = None
         # 非目录输入：文本文件或内联需求文本（本地调试用）
