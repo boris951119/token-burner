@@ -181,6 +181,28 @@ _SCRIPT_DEFECT_RE = re.compile(
     r"|TypeError|SyntaxError|IndentationError)\b\s*:")
 
 
+def _schema_audit_section(code_dir: Path) -> str:
+    """确定性 schema 审计结论注入修复指令（r13 取证：列名漂移 2 轮未定位）。
+
+    零 LLM 正则 diff：DDL 列 vs SQL 引用列。宁漏不误——发现即高置信，
+    直接给出表名/文件/行与 DDL 权威列清单；无发现则不占提示词。
+    """
+    try:
+        from app.utils.schema_audit import audit_schema
+
+        findings = audit_schema(code_dir)
+    except Exception:
+        return ""
+    if not findings:
+        return ""
+    return (
+        "【确定性 schema 审计（正则 diff，优先按此修复）】\n"
+        + "\n".join(f"- {f}" for f in findings[:10])
+        + "\n表结构唯一权威是 seed_data 模块的 DDL；请把查询/插入改为"
+        "使用 DDL 实际存在的列。\n\n"
+    )
+
+
 def _is_script_defect(report: str) -> bool:
     """报告含脚本帧且终态异常属于「脚本自身写错」类 → 分类为脚本缺陷。"""
     return bool(report) and "arcbench_journey.py" in report and bool(
@@ -478,7 +500,8 @@ def _journey_gate(
             "等价验收）。失败输出如下，请最小化修复使旅程通过（典型："
             "查询/列表必须返回数据库种子数据而非硬编码列表、缺失页面/"
             "路由补齐、响应字段补齐）。\n"
-            "硬性约束：修复后应用必须仍注册下列全部路由（方法不得改动、"
+            + _schema_audit_section(code_dir)
+            + "硬性约束：修复后应用必须仍注册下列全部路由（方法不得改动、"
             "不得删除任何既有路由）——\n"
             + "\n".join(routes)
             + "\n禁止修改 tests/ 目录与旅程脚本。\n"
