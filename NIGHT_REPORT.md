@@ -455,3 +455,25 @@ gen-3 home）。
 （gen-3 修复轮返回空内容）——升级为**冒烟期机械 shim 自动修复**：
 检测到本地导入名无实包但有近名真实包时，自动生成别名垫片文件
 （纯机械、零 LLM、加法不改行为），smoke 即时复验。
+
+
+## 十五、generation-4 启动（09-15 06:03，通宵收官）
+
+**全部修复装配完毕的实弹**（run 0754405db924，Train Ticket 143 需求）：
+- 模型链全链保护（generation-2 死因修复）
+- 模块级优雅冻结（单模块失败不再全盘归零）
+- sys.path 遮蔽修复（keep4 尸检：包目录入 path 致子模块遮蔽包——
+  冒烟/探针/旅程三模板同修）
+- 冒烟开 TESTING+PROPAGATE（smoke 失败即带 file:line traceback）
+- 预算 800k → 2M
+
+**keep4 终局补充**：管线完整交付 8/8 模块（completed.json ✓），
+验收拒收于 `from seed_data import seed_data` 符号漂移——尸检发现
+双重真相：①我方冒烟引导 sys.path 污染（包目录入 path 致子模块
+遮蔽包，假 ImportError）已修；②遮蔽消除后暴露真 bug（包/子模块/
+函数三层同名，db_core.py:73 TypeError）——冒烟开 PROPAGATE 后
+该 traceback 完整可见，auto_repair 拿到精确证据。
+
+**晨间预期**：generation-4 预计 09:30-11:00 到达 Stage 3
+（Playwright 真实评分）——你醒来时运行应仍在进行或刚出结果，
+页面 https://arc-bench.com/runs/0754405db924 刷新即可查看。
