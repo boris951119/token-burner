@@ -126,8 +126,8 @@ if not ok:
     failures.append(detail)
     print("\\n".join(failures))
     raise SystemExit(1)
-    print(f"@@MEM@@{_peak_mem_mb():.1f}")
-    print("SMOKE_OK")
+print(f"@@MEM@@{_peak_mem_mb():.1f}")
+print("SMOKE_OK")
 '''
 
 # 路由探测：与冒烟同一套 import 引导，定位组装模块并倾倒真实 url_map。
