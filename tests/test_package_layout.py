@@ -49,3 +49,34 @@ def test_third_party_imports_ignored(tmp_path):
         "web_ui.py": "import flask\nimport os\nfrom sqlite3 import connect\n",
     })
     assert _package_layout_section(tmp_path) == ""
+
+
+class TestMemSentinel:
+    """内存哨兵（官方 2GB 内存取证）：峰值超限判 FAIL。"""
+
+    def test_parse_mem_peak(self):
+        from app.arcbench_smoke import _parse_mem_peak
+
+        assert _parse_mem_peak("SMOKE_OK\n@@MEM@@86.3") == 86.3
+        assert _parse_mem_peak("no marker") == -1.0
+
+    def test_run_smoke_reports_mem_marker(self, tmp_path):
+        """真实冒烟：模板必须产出 @@MEM@@ 行（无阈值误伤时放行）。"""
+        pkg = tmp_path / "app_main"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("", encoding="utf-8")
+        (pkg / "app_main.py").write_text(
+            "from flask import Flask\n"
+            "def create_app():\n"
+            "    app = Flask(__name__)\n"
+            "    @app.route('/api/health')\n"
+            "    def h(): return {'ok': True}\n"
+            "    @app.route('/')\n"
+            "    def idx(): return 'home'\n"
+            "    return app\n",
+            encoding="utf-8")
+        from app.arcbench_smoke import run_smoke
+
+        ok, report = run_smoke(tmp_path)
+        assert ok, report
+        assert "@@MEM@@" in report

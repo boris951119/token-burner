@@ -25,6 +25,7 @@ SKIP，基础冒烟结果兜底。
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -36,6 +37,40 @@ _VERIFY_TEMPLATE = '''\
 """ArcBench 集成冒烟（自动生成）：import 全模块 + create_app + /api/health。"""
 import sys
 from pathlib import Path
+
+def _peak_mem_mb():
+    """进程峰值内存 MB（官方环境 2GB 内存——应用膨胀必须在演练期暴露）。"""
+    try:
+        import ctypes
+        import ctypes.wintypes
+
+        class _PMC(ctypes.Structure):
+            _fields_ = [
+                ("cb", ctypes.wintypes.DWORD),
+                ("PageFaultCount", ctypes.wintypes.DWORD),
+                ("PeakWorkingSetSize", ctypes.c_size_t),
+                ("WorkingSetSize", ctypes.c_size_t),
+                ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                ("PagefileUsage", ctypes.c_size_t),
+                ("PeakPagefileUsage", ctypes.c_size_t),
+            ]
+        pmc = _PMC()
+        pmc.cb = ctypes.sizeof(_PMC)
+        if ctypes.windll.psapi.GetProcessMemoryInfo(
+            ctypes.windll.kernel32.GetCurrentProcess(),
+            ctypes.byref(pmc), pmc.cb,
+        ):
+            return pmc.PeakWorkingSetSize / 1048576
+    except Exception:
+        pass
+    try:
+        import resource
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    except Exception:
+        return -1.0
 
 code = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(code))
@@ -91,7 +126,8 @@ if not ok:
     failures.append(detail)
     print("\\n".join(failures))
     raise SystemExit(1)
-print("SMOKE_OK")
+    print(f"@@MEM@@{_peak_mem_mb():.1f}")
+    print("SMOKE_OK")
 '''
 
 # 路由探测：与冒烟同一套 import 引导，定位组装模块并倾倒真实 url_map。
@@ -304,7 +340,23 @@ def run_smoke(code_dir: Path, python: str | None = None) -> tuple[bool, str]:
         cwd=str(code_dir),
     )
     report = (proc.stdout or "") + (proc.stderr or "")[-500:]
-    return proc.returncode == 0, report.strip()
+    ok = proc.returncode == 0
+    # 内存哨兵（官方环境 2GB 内存取证）：应用进程峰值超限判 FAIL——
+    # Chromium 约占 1GB，应用必须留足余量。阈值环境变量可调。
+    mem_mb = _parse_mem_peak(report)
+    limit_mb = float(os.environ.get("ARCBENCH_MEM_LIMIT_MB", "512") or 512)
+    if mem_mb >= 0 and mem_mb > limit_mb:
+        ok = False
+        report = report + (
+            f"\n[mem] 应用峰值内存 {mem_mb:.0f}MB 超过 {limit_mb:.0f}MB 限额"
+            "（官方运行环境仅 2GB，含浏览器）")
+    return ok, report.strip()
+
+
+def _parse_mem_peak(report: str) -> float:
+    """从冒烟报告中解析 @@MEM@@ 峰值内存；缺失返回 -1（不判罚）。"""
+    m = re.search(r"@@MEM@@(-?\d+(?:\.\d+)?)", report or "")
+    return float(m.group(1)) if m else -1.0
 
 
 def _llm_from(settings):
