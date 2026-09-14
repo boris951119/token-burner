@@ -17,7 +17,11 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.agents.dev_loop import DevLoopEngine, ModuleStatus
+from app.agents.dev_loop import (
+    DevLoopEngine,
+    ModelChainExhausted,
+    ModuleStatus,
+)
 from app.agents.module_builder import ModuleBuilder, should_modularize
 from app.agents.researcher import (
     ResearchCache,
@@ -622,14 +626,28 @@ class Pipeline:
 
         def _develop_one(name: str) -> None:
             plan = next(p for p in plans if p.name == name)
-            module_results[name] = dev_loop.run_module(
-                name,
-                project_id=team.project_id,
-                responsibility=plan.responsibility,
-                contract=interfaces.get(name),
-                project_modules=set(order),
-                user_feedback=user_feedback,
-            )
+            try:
+                module_results[name] = dev_loop.run_module(
+                    name,
+                    project_id=team.project_id,
+                    responsibility=plan.responsibility,
+                    contract=interfaces.get(name),
+                    project_modules=set(order),
+                    user_feedback=user_feedback,
+                )
+            except ModelChainExhausted as exc:
+                # generation-2 取证：单模块 LLM 全灭曾崩穿管线——143 需求
+                # 2 小时工作量归零。该模块冻结（FROZEN），继续其余模块：
+                # 部分交付仍进 Stage 3 评测拿部分分 > 零分。
+                # 只捕模型链耗尽专类型：预算闸门与意外 bug 仍按原语义上抛。
+                from app.agents.dev_loop import ModuleResult
+
+                module_results[name] = ModuleResult(
+                    module=name,
+                    status=ModuleStatus.FROZEN,
+                    fix_attempts=0,
+                    message=f"模型级全链失败（模块冻结，优雅降级）: {exc}"[:200],
+                )
 
         # v1.2 S0:按契约依赖分层;同层无依赖可并发(默认 1 = 完全串行,
         # 行为与 v1.0 逐字节一致)。层间仍按拓扑序,层结束后统一做

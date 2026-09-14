@@ -140,27 +140,28 @@ class TestInterruptionSnapshot:
 
     def test_unexpected_exception_persisted_then_reraised(self, tmp_path):
         # 意外异常：先落盘现场再 re-raise（bug 暴露，不吞）。
-        # r7e 起单角色 LLM 异常会模型级降级（_chat_resilient），故此处
-        # 让「自该调用起全部模型持续失败」——降级也失败才上抛，语义不变。
+        # generation-2 起全模型 LLM 失败有了专类型 ModelChainExhausted
+        # （模块层冻结继续）——「意外异常」须用非 LLM 异常表达：
+        # TypeError 自 chat 冒泡 → 落盘 → re-raise，语义不变。
         fm = FileManager(projects_root=tmp_path / "projects")
 
         class _BoomFrom11(ScriptedLLM):
             def chat(self, model, messages, json_mode=False, **kw):
                 if self.calls >= 10:
                     self.calls += 1
-                    raise RuntimeError("boom")
+                    raise TypeError("boom")
                 return super().chat(model, messages, json_mode=json_mode, **kw)
 
         llm = _BoomFrom11(_TWO_MODULE_SCRIPTS + ["auth code"])
         pipeline = _pipeline(llm, fm)
-        with pytest.raises(RuntimeError, match="boom"):
+        with pytest.raises(TypeError, match="boom"):
             pipeline.run("双模块系统",
                          models=("gpt-4o", "deepseek-chat", "claude-3-5-sonnet"),
                          mode="safe", spec_confirm="确认")
         # 现场已落盘（恢复信息不丢失）
         projects = list((tmp_path / "projects").iterdir())
         report = (projects[0] / "sessions" / "interruption.md").read_text(encoding="utf-8")
-        assert "RuntimeError" in report
+        assert "TypeError" in report
 
     def test_budget_guard_detached_after_interrupt(self, tmp_path):
         # 中断后护栏卸载（不污染同客户端后续任务）

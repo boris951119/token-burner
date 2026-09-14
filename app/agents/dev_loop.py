@@ -20,6 +20,7 @@ from enum import Enum
 from pathlib import Path
 
 from app.config import Settings
+from app.utils.budget import BudgetExceededError
 from app.execution.executor import ExecutionResult, ExecutionStatus, Executor
 from app.tools.file_manager import FileManager
 from app.tools.prompt_templates import (
@@ -90,6 +91,11 @@ def _extract_shared_blocks(content: str) -> tuple[dict[str, str], str]:
 
     rest = _SHARED_BLOCK.sub(_strip, content)
     return shared, rest
+
+
+class ModelChainExhausted(RuntimeError):
+    """模型级全链失败（generation-2 取证）：备胎裸抛曾崩穿管线。
+    专类型让模块层可精确冻结本模块，而不误吞预算闸门与意外 bug。"""
 
 
 class ModuleStatus(Enum):
@@ -570,27 +576,32 @@ class DevLoopEngine:
         return self._split_shared(_extract_code(response.content))
 
     def _chat_resilient(self, model: str, system: str, user: str):
-        """重试耗尽后的模型级降级（factory26 r7e 取证）。
+        """模型级全链降级（generation-2 取证：旧版备胎调用裸奔——备胎
+        再超时即崩穿整条管线，143 需求 2 小时工作量归零）。
 
-        网关退化窗口内秒级退避重试会全部落窗（glm-5.2 连续 4 次
-        content 缺失即谋杀整个任务）；多模型中转下主模型是天然备胎——
-        副模型调用耗尽重试后回落主模型一次，仍失败才上抛。
+        网关退化窗口内秒级退避重试会全部落窗；三角色按序各自独立
+        受护尝试（主模型 ∈ 链尾兜底），全灭才上抛带全链信息的异常。
         """
-        try:
-            return self.llm.chat(model, [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ])
-        except RuntimeError:
-            fallback = self.main_model or (
-                self.dev_model if model == self.test_model else self.test_model
-            )
-            if fallback == model:
-                raise
-            return self.llm.chat(fallback, [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ])
+        chain = [model]
+        for candidate in (self.main_model, self.dev_model, self.test_model):
+            if candidate and candidate not in chain:
+                chain.append(candidate)
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        last_exc: Exception | None = None
+        for candidate in chain:
+            try:
+                return self.llm.chat(candidate, messages)
+            except BudgetExceededError:
+                raise                      # 总闸：预算超支绝不换模型续烧
+            except RuntimeError as exc:
+                last_exc = exc
+                continue
+        raise ModelChainExhausted(
+            f"模型级全链失败（{' → '.join(chain)}）: {last_exc}"
+        ) from last_exc
 
     def _write_tests(
         self, module: str, code: str, contract: dict | None = None,

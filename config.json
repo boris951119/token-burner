@@ -10,5 +10,5 @@
   "llm_timeout_seconds": 600,
   "llm_wall_clock_seconds": 1200,
   "max_response_tokens": 12000,
-  "max_task_tokens": 800000
+  "max_task_tokens": 2000000
 }

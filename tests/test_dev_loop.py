@@ -462,7 +462,8 @@ class TestChatResilient:
         import pytest
         with pytest.raises(RuntimeError):
             engine._chat_resilient("dev", "s", "u")
-        assert llm.called == ["dev", "main"]
+        # generation-2 后全链保护：dev → main → test 三棒各试一次
+        assert llm.called == ["dev", "main", "test"]
 
     def test_cross_fallback_when_no_main(self):
         """无主模型（缺省 None）：dev 失败回落 test，test 失败回落 dev。"""
