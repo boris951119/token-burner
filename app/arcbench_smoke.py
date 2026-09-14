@@ -767,6 +767,44 @@ def _package_layout_section(code_dir: Path) -> str:
                 lines.append(f"- {pkg}/ 是空壳包（仅 __init__.py），"
                              "真实实现不在这里——不要为它补代码，"
                              "把调用方指向真实模块")
+
+        # 符号级（keep3 终局取证）：from X import sym 而 X 未定义 sym
+        # （模块导出 bp、组装要 auth_bp 这类命名漂移）→ ImportError
+        pkg_src_cache: dict[str, str] = {}
+        for py in code_dir.rglob("*.py"):
+            if "__pycache__" in py.parts:
+                continue
+            try:
+                src = py.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            rel = py.relative_to(code_dir).as_posix()
+            for m in re.finditer(
+                    r"^\s*from\s+(\w+)\s+import\s+([^\n#]+)", src, re.MULTILINE):
+                pkg, syms = m.group(1), m.group(2)
+                if pkg not in real:
+                    continue
+                if pkg not in pkg_src_cache:
+                    pkg_src_cache[pkg] = "\n".join(
+                        f.read_text(encoding="utf-8", errors="replace")
+                        for f in (code_dir / pkg).rglob("*.py")
+                        if "__pycache__" not in f.parts
+                    )
+                pkg_src = pkg_src_cache[pkg]
+                for raw in syms.split(","):
+                    sym = raw.strip().split(" as ")[0].strip().strip("()")
+                    if not sym or sym == "*" or not re.match(r"^\w+$", sym):
+                        continue
+                    defined = re.search(
+                        rf"^\s*(?:def|class)\s+{sym}\b|^\s*{sym}\s*=|"
+                        rf"\bas\s+{sym}\b|import\s+.*\b{sym}\b|"
+                        rf"from\s+\S+\s+import\s+[^\n]*\b{sym}\b",
+                        pkg_src, re.MULTILINE)
+                    if not defined:
+                        lines.append(
+                            f"- {rel}: from {pkg} import {sym} —— 包 {pkg} "
+                            f"未定义 {sym}（检查模块内 Blueprint/函数的实际命名，"
+                            "对齐 import 或补导出）")
         if not lines:
             return ""
         return ("【确定性包结构审计（正则扫描，优先按此对齐命名）】\n"

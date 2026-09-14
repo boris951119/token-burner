@@ -37,7 +37,7 @@ def test_r17_case_import_drift_and_empty_shell(tmp_path):
 
 
 def test_clean_layout_no_findings(tmp_path):
-    _mk_pkg(tmp_path, "auth", {"auth.py": "x = 1\n"})
+    _mk_pkg(tmp_path, "auth", {"auth.py": "def register():\n    return 1\n"})
     _mk_pkg(tmp_path, "web_ui", {
         "web_ui.py": "import auth\nfrom auth import register\n",
     })
@@ -80,3 +80,34 @@ class TestMemSentinel:
         ok, report = run_smoke(tmp_path)
         assert ok, report
         assert "@@MEM@@" in report
+
+
+class TestSymbolImportAudit:
+    """keep3 终局取证：from auth import auth_bp 而 auth 导出 bp——
+    符号级导入漂移必须被确定性发现。"""
+
+    def _layout(self, tmp_path):
+        auth = tmp_path / "auth"
+        auth.mkdir(parents=True)
+        (auth / "__init__.py").write_text(
+            "from auth.auth import *  # noqa\n", encoding="utf-8")
+        (auth / "auth.py").write_text(
+            'from flask import Blueprint\n'
+            'bp = Blueprint("auth", __name__)\n', encoding="utf-8")
+        web = tmp_path / "web_ui"
+        web.mkdir(parents=True)
+        (web / "__init__.py").write_text("", encoding="utf-8")
+        (web / "web_ui.py").write_text(
+            "from auth import auth_bp\n", encoding="utf-8")
+
+    def test_symbol_drift_detected(self, tmp_path):
+        self._layout(tmp_path)
+        section = _package_layout_section(tmp_path)
+        assert "auth_bp" in section and "未定义" in section, section
+
+    def test_correct_symbol_no_finding(self, tmp_path):
+        self._layout(tmp_path)
+        (tmp_path / "web_ui" / "web_ui.py").write_text(
+            "from auth import bp\n", encoding="utf-8")
+        section = _package_layout_section(tmp_path)
+        assert "未定义" not in section, section
