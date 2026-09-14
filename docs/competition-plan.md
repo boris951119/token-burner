@@ -66,6 +66,18 @@ deepseek-v4-flash 单模型编制对比 pass/CNY，若通过率不降则切换�
   FAIL，Chromium 约占 1GB 余量必须留足）；③模拟 docker 发布当天
   全流程彩排（上传格式/调用方式以实测为准）。
 
+**首次实弹运行确认（09-14，run 3b6a9d10cb60）**：
+
+- 提交表单=上传 agent 快照 + LLM 配置（BaseURL/APIKey/模型——即 runner
+  注入的三环境变量）；上传的 zip 挂接成功（文件页签可见 project.zip）；
+- 官方 Linux 环境依赖安装成功（requirements.txt 含 pillow/httpx 全通）；
+- **生成阶段无超时**：后端日志明示 "Waiting for container to exit
+  without timeout"——规模墙不再致命，慢只影响成本与耐心，不影响得分
+  资格；计费基线已捕获（pass/CNY 计量启动）；
+- 运行容器化（arcbench-runner 镜像，路径含 generation-1 编号——
+  疑似支持多轮重新生成）；任务=Train Ticket 全量包（143 需求/135 场景）；
+- 流程三段：准备环境 → 运行代理 → 验证结果（Playwright）。
+
 **任务形态**：平台下发 `requirements.yaml` 需求树（FOLDER/ATOMIC 两级，
 ATOMIC 节点与 Playwright 端到端用例一一对应，"需求即测试"）。
 
