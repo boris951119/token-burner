@@ -111,3 +111,62 @@ class TestSymbolImportAudit:
             "from auth import bp\n", encoding="utf-8")
         section = _package_layout_section(tmp_path)
         assert "未定义" not in section, section
+
+
+class TestAutoShim:
+    """机械垫片（gen-3 取证：命名漂移家族第四次杀伤，LLM 修复不可靠）——
+    缺失导入名 + 唯一近名真实包 → 自动生成 re-export 垫片。"""
+
+    def _layout_with_drift(self, tmp_path):
+        # 真实包 note_home（实现 home 的功能）
+        pkg = tmp_path / "note_home"
+        pkg.mkdir(parents=True)
+        (pkg / "__init__.py").write_text("", encoding="utf-8")
+        (pkg / "note_home.py").write_text(
+            "def home_page():\n    return 'HOME'\n"
+            "HOME_KEY = 'home'\n", encoding="utf-8")
+        # 组装模块 import home（不存在）
+        web = tmp_path / "web_frontend"
+        web.mkdir(parents=True)
+        (web / "__init__.py").write_text("", encoding="utf-8")
+        (web / "web_frontend.py").write_text(
+            "import home\n"
+            "def build():\n    return home.home_page()\n", encoding="utf-8")
+
+    def test_shim_generated_and_importable(self, tmp_path):
+        from app.arcbench_smoke import auto_shim_imports
+
+        self._layout_with_drift(tmp_path)
+        shims = auto_shim_imports(tmp_path)
+        assert shims == ["home"], shims
+        # 垫片可导入且 re-export 真实符号
+        import importlib, sys
+
+        sys.path.insert(0, str(tmp_path))
+        try:
+            mod = importlib.import_module("home")
+            assert mod.home_page() == "HOME"
+            assert mod.HOME_KEY == "home"
+        finally:
+            sys.path.remove(str(tmp_path))
+
+    def test_existing_module_not_shimmed(self, tmp_path):
+        from app.arcbench_smoke import auto_shim_imports
+
+        self._layout_with_drift(tmp_path)
+        (tmp_path / "home.py").write_text(
+            "def home_page():\n    return 'REAL'\n", encoding="utf-8")
+        assert auto_shim_imports(tmp_path) == []
+
+    def test_no_near_name_no_shim(self, tmp_path):
+        from app.arcbench_smoke import auto_shim_imports
+
+        pkg = tmp_path / "note_home"
+        pkg.mkdir(parents=True)
+        (pkg / "__init__.py").write_text("", encoding="utf-8")
+        web = tmp_path / "web_frontend"
+        web.mkdir(parents=True)
+        (web / "__init__.py").write_text("", encoding="utf-8")
+        (web / "web_frontend.py").write_text(
+            "import totally_unrelated\n", encoding="utf-8")
+        assert auto_shim_imports(tmp_path) == []

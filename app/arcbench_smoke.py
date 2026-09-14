@@ -324,12 +324,102 @@ def _clear_pycache(code_dir: Path) -> None:
             pass
 
 
+def auto_shim_imports(code_dir: Path) -> list[str]:
+    """机械命名漂移垫片（gen-3 取证：命名漂移家族第四次杀伤，LLM 修复
+    不可靠——r17 auth_bp / keep3 auth_bp / keep4 seed_data / gen-3 home）。
+
+    扫描全库顶层 import：被导入的名字 X 不存在（无 X.py 无 X/ 包）但
+    存在近名真实包 P（包含关系/下划线后缀）时，生成 X.py 垫片——
+    re-export 包 P 全部公开名（含各子模块）。纯加法、零 LLM、smoke
+    即时复验。返回生成的垫片文件名列表（空 = 无漂移或无高置信近名）。
+    """
+    code_dir = Path(code_dir)
+    if not code_dir.is_dir():
+        return []
+    real: dict[str, Path] = {}
+    for child in code_dir.iterdir():
+        if child.name.startswith(("_", ".")) or child.name == "tests":
+            continue
+        if child.is_dir() and (child / "__init__.py").exists():
+            real[child.name] = child
+        elif child.suffix == ".py":
+            real[child.stem] = child
+    if not real:
+        return []
+
+    # 收集顶层缺失导入名及其 wanted 符号
+    missing: dict[str, set[str]] = {}
+    for py in code_dir.rglob("*.py"):
+        if "__pycache__" in py.parts:
+            continue
+        try:
+            src = py.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for m in re.finditer(r"^\s*(?:import|from)\s+(\w+)", src, re.MULTILINE):
+            name = m.group(1)
+            if name in real or name in missing:
+                continue
+            missing[name] = set()
+        for m in re.finditer(
+                r"^\s*from\s+(\w+)\s+import\s+([^\n#]+)", src, re.MULTILINE):
+            pkg, syms = m.group(1), m.group(2)
+            if pkg in real:
+                continue
+            for raw in syms.split(","):
+                sym = raw.strip().split(" as ")[0].strip()
+                if re.match(r"^\w+$", sym) and sym != "*":
+                    missing.setdefault(pkg, set()).add(sym)
+
+    shims: list[str] = []
+    for name in sorted(missing):
+        if (code_dir / f"{name}.py").exists() or (code_dir / name).is_dir():
+            continue  # 已存在（可能为上轮垫片）——不重复
+        near = [p for p in real
+                if p.endswith("_" + name) or p.startswith(name) or name in p]
+        if len(near) != 1:
+            continue  # 无唯一高置信近名 → 不垫（宁漏不误）
+        target = near[0]
+        shim_lines = [
+            f"# Auto shim（命名漂移机械修复）：{name} ⇒ {target}（零 LLM，加法不改行为）",
+            "import importlib as _il",
+            "import pkgutil as _pu",
+            f"_pkg = _il.import_module({target!r})",
+            "_names = {}",
+            "for _n in dir(_pkg):",
+            "    _names.setdefault(_n, getattr(_pkg, _n))",
+            "for _mi in _pu.iter_modules(getattr(_pkg, '__path__', [])):",
+            "    try:",
+            f"        _sub = _il.import_module({target!r} + '.' + _mi.name)",
+            "        for _n in dir(_sub):",
+            "            _names.setdefault(_n, getattr(_sub, _n))",
+            "    except Exception:",
+            "        pass",
+            "globals().update(_names)",
+        ]
+        wanted = sorted(missing[name])
+        if wanted:
+            shim_lines.append(
+                "for _w in " + repr(wanted) + ":")
+            shim_lines.append(
+                "    if _w not in globals() and hasattr(_pkg, _w):"
+                " globals()[_w] = getattr(_pkg, _w)")
+        (code_dir / f"{name}.py").write_text(
+            "\n".join(shim_lines) + "\n", encoding="utf-8")
+        shims.append(name)
+    return shims
+
+
 def run_smoke(code_dir: Path, python: str | None = None) -> tuple[bool, str]:
     """确定性集成冒烟。返回 (是否通过, 报告文本)。"""
     code_dir = Path(code_dir).resolve()
     if not code_dir.is_dir():
         return False, f"code 目录不存在: {code_dir}"
 
+    try:
+        shims = auto_shim_imports(code_dir)
+    except Exception:
+        shims = []
     _clear_pycache(code_dir)
     verify = Path(tempfile.gettempdir()) / "arcbench_smoke_verify.py"
     verify.write_text(_VERIFY_TEMPLATE, encoding="utf-8")
@@ -350,6 +440,8 @@ def run_smoke(code_dir: Path, python: str | None = None) -> tuple[bool, str]:
         report = report + (
             f"\n[mem] 应用峰值内存 {mem_mb:.0f}MB 超过 {limit_mb:.0f}MB 限额"
             "（官方运行环境仅 2GB，含浏览器）")
+    if shims:
+        report = "[shim] 机械垫片已生成: " + ", ".join(shims) + " → " + report
     return ok, report.strip()
 
 
