@@ -362,6 +362,19 @@ resilient 同款，settings.models 逐备胎，3 项测试）。
 讨论阶段吃 FOLDER 级摘要，拆分阶段才吃 ATOMIC 明细。这是比换模型
 更本质的规模解，列入初赛备战的核心工程。
 
+## 提交包就绪（09-14 上午）
+
+**`token-burner-submission.zip`（344KB，150 文件）已生成**，结构=
+官方 Blank Template 骨架（README/skills/examples/SDK）+ 我方实现
+（main.py/app/config.json/requirements.txt）。
+
+- 依赖审计补齐：pillow（视觉通道）、httpx（显式化）——此前仅传递
+  依赖不保证在官方环境可用；
+- 敏感文件扫描：干净（无 .env/密钥）；
+- 导入链冒烟：--help 与 main 模块全链可达；
+- **用户手动实弹**：登录平台 → Smoke Competition 提交入口 → 上传
+  此 zip → 触发运行 → 看榜单（首单价值=流程与平台侧未知，不是分数）。
+
 ## 十二、晨间速览（8:30 版，随 keep2 结果更新）
 
 **昨夜到今晨的产品资产净增**：
