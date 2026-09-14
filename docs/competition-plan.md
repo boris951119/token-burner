@@ -54,6 +54,18 @@ deepseek-v4-flash 单模型编制对比 pass/CNY，若通过率不降则切换�
   600s——墙钟已提至 1200s，讨论/拆分分层压缩（讨论吃 FOLDER 摘要）
   是初赛前必须完成的规模架构工程。
 
+**官方补充裁决（09-14）**：
+
+- **Feature implementation rate 仅作参考，不纳入评分**——Playwright
+  Pass Rate 仍是唯一主分，诚实验收路线不受影响；
+- **arc-bench 仓库不是模拟竞赛环境**；官方将推出模拟竞赛 docker
+  （上传 → 运行智能体 → 执行 Playwright 测试），**正式赛以平台环境
+  为准**；官方运行环境内存 2G，磁盘另行评估；
+- 我方对策：①提交包 Linux 兼容审计已过（无 Windows-only 代码，
+  requirements 全跨平台）；②内存哨兵已上线（应用峰值 >512MB 判
+  FAIL，Chromium 约占 1GB 余量必须留足）；③模拟 docker 发布当天
+  全流程彩排（上传格式/调用方式以实测为准）。
+
 **任务形态**：平台下发 `requirements.yaml` 需求树（FOLDER/ATOMIC 两级，
 ATOMIC 节点与 Playwright 端到端用例一一对应，"需求即测试"）。
 
