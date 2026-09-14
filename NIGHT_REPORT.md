@@ -436,3 +436,22 @@ FOLDER 摘要、拆分吃 ATOMIC 明细的分层管线）→ keep 系列迭代�
 
 **预算调整**：max_task_tokens 800k → 2M（gen-1 实证 Train Ticket 规模
 1.2M token 起步即超 800k——闸门语义不变，超了照样干净中止）。
+
+
+## 十四、generation-3 + keep4 终局（09-15 凌晨）
+
+**generation-3（平台 Keep 45 需求）**：FAIL（2.3h，1.04M token =
+¥24.50）。**优雅降级首次实战生效**：验收 FAIL 干净退出（无崩溃穿透），
+管线交付完整。死因=组装层 `import home` 而实际包名不同——**命名漂移
+家族第四次杀伤**（r17 auth_bp / keep3 auth_bp / keep4 seed_data /
+gen-3 home）。
+
+**keep4（本地 keep 32 需求）**：FAIL（verify）——管线完整交付 8/8
+模块（completed.json ✓，比 keep3 前进一整步），验收拒收于同族符号
+漂移（`from seed_data import seed_data`）+ auto_repair 未收敛
+（keep4 进程为旧代码无优雅降级，秒崩——新代码已修）。
+
+**对策决定（比 LLM 修复更强）**：该家族四次杀伤且 LLM 修复不可靠
+（gen-3 修复轮返回空内容）——升级为**冒烟期机械 shim 自动修复**：
+检测到本地导入名无实包但有近名真实包时，自动生成别名垫片文件
+（纯机械、零 LLM、加法不改行为），smoke 即时复验。
