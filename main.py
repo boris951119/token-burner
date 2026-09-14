@@ -166,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:
 
     req_dir = Path(args.requirement_path)
     fixture_warning = ""
+    requirement_brief = None
     if req_dir.is_dir():
         tree, _ = load_requirement_tree(req_dir)
         fixture_hint = load_fixture_hint(req_dir)
@@ -177,17 +178,24 @@ def main(argv: list[str] | None = None) -> int:
                 "种子字符串契约缺失，生成数据易与评测断言漂移"
             )
         requirement = render_requirement_text(tree, fixture_hint=fixture_hint)
+        # 规模工程（keep1 取证：32 需求全量文本令讨论超墙钟）：
+        # 讨论阶段吃 FOLDER 摘要（26% 体量），拆分/开发阶段吃全文
+        from app.arcbench_ingest import render_folder_summary
+
+        requirement_brief = render_folder_summary(tree)
         # 视觉转写通道（初赛裁决：参考截图会提供）：需求树内嵌
         # reference/*.png 时用视觉模型转写为结构化描述并注入——
         # 主力模型拒图（r17 探测 glm-5.3 HTTP 400），管线保持纯文本。
+        # 摘要与全文都注入（缓存命中，不重复计费）。
         from app.utils.vision import enrich_requirement
 
+        vkey = os.environ.get("OPENAI_API_KEY", "")
+        vbase = (os.environ.get("OPENAI_BASE_URL")
+                 or os.environ.get("OPENAI_API_BASE", ""))
         requirement = enrich_requirement(
-            requirement, req_dir, tree,
-            key=os.environ.get("OPENAI_API_KEY", ""),
-            base=os.environ.get("OPENAI_BASE_URL")
-            or os.environ.get("OPENAI_API_BASE", ""),
-        )
+            requirement, req_dir, tree, key=vkey, base=vbase)
+        requirement_brief = enrich_requirement(
+            requirement_brief, req_dir, tree, key=vkey, base=vbase)
     else:
         tree = None
         # 非目录输入：文本文件或内联需求文本（本地调试用）
@@ -253,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
                 auto_mode_confirmed=True,
                 spec_confirm="确认",
                 project_dirname="arcbench-app",
+                requirement_brief=requirement_brief,
             )
     except Exception as exc:  # 平台需要明确的失败终态
         import traceback

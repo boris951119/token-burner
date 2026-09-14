@@ -260,6 +260,7 @@ class Pipeline:
         research_material: str = "",
         budget_override: int | None = None,
         project_dirname: str | None = None,
+        requirement_brief: str | None = None,
     ) -> PipelineResult:
         """执行完整管线。交互参数由外层（CLI）收集后传入。
 
@@ -459,7 +460,9 @@ class Pipeline:
                 project_id=team.project_id,
                 budget_guard=guard,
             )
-            outcome = discussion.run_discussion(requirement, team.project_id)
+            outcome = discussion.run_discussion(
+                requirement_brief or requirement, team.project_id
+            )
             confirm = discussion.confirm_spec(outcome, spec_confirm)
             final_spec = confirm.spec_md
 
@@ -481,7 +484,12 @@ class Pipeline:
                 route.difficulty_score, route.estimated_files, self.settings
             ):
                 # 12.2：难度 ≥5 或预估文件数 ≥6 → 模块化拆分
-                plans = builder.split_spec(final_spec, project_id=team.project_id)
+                # 规模工程：讨论吃 FOLDER 摘要，拆分补全量需求原文
+                # （原子验收细节/场景/夹具契约在此回到拆分视野）
+                plans = builder.split_spec(
+                    final_spec, project_id=team.project_id,
+                    requirement=requirement,
+                )
                 interfaces = builder.generate_interfaces(
                     plans, project_id=team.project_id
                 )

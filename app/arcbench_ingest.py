@@ -54,6 +54,53 @@ def _render_scenario(atomic: dict) -> str:
     return "\n".join(lines)
 
 
+def render_folder_summary(tree: dict, *, web_port: int = 3301) -> str:
+    """FOLDER 级需求摘要——规模工程（keep1 取证：32 需求全量文本令
+    glm-5.3 讨论超墙钟）。讨论阶段吃摘要（架构/职责/模块地图），
+    ATOMIC 明细与场景步骤不进入讨论，由拆分与模块开发阶段消费全文。
+
+    实现：渲染全文后截取「简介 + 技术规则 1-16」头部（与全文共用
+    同一份规则，永不漂移），再重建 FOLDER 摘要段（职责 + 原子标题
+    清单，无场景步骤）；夹具契约原文不进摘要，仅提示其存在。
+    """
+    full = render_requirement_text(tree, web_port=web_port)
+    marker = "功能与验收要求（模块划分必须与下列功能模块一一对应，不要合并、不要增删）："
+    head = full.split(marker, 1)[0]
+
+    lines: list[str] = [head, marker]
+    folders = [
+        child
+        for child in tree.get("children") or []
+        if child.get("type") == "FOLDER"
+    ]
+    atomic_total = 0
+    for folder in folders:
+        atomics = _atomic_nodes(folder)
+        atomic_total += len(atomics)
+        deps = ", ".join(folder.get("dependencies") or []) or "无"
+        desc = (folder.get("description") or "").strip()
+        if len(desc) > 400:
+            desc = desc[:400] + "…"
+        lines.append("")
+        lines.append(
+            f"## 模块：{folder.get('id', '')} {folder.get('name', '')}"
+            f"（{len(atomics)} 条原子需求）"
+        )
+        lines.append(f"依赖：{deps}")
+        lines.append(desc)
+        for atomic in atomics:
+            lines.append(f"- {atomic.get('id', '')} {atomic.get('name', '')}")
+    if atomic_total:
+        lines.append("")
+        lines.append(
+            f"共 {len(folders)} 个功能模块、{atomic_total} 条原子验收需求。"
+            "以上为模块地图级摘要；每条原子需求的验收标准原文、场景步骤与"
+            "种子夹具契约将在拆分与模块开发阶段提供全文。讨论阶段只做"
+            "架构/职责/风险评估，不要展开单条需求的实现细节。"
+        )
+    return "\n".join(lines)
+
+
 def render_requirement_text(
     tree: dict,
     *,

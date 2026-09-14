@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 from app.config import Settings
 from app.tools.file_manager import FileManager
+from app.utils.untrusted import sanitize_untrusted
 from app.tools.prompt_templates import (
     INTERFACE_SYSTEM,
     INTERFACE_USER,
@@ -80,8 +81,21 @@ class ModuleBuilder:
 
     # ------------------------------------------------------------------
 
-    def split_spec(self, spec_md: str, project_id: str | None = None) -> list[ModulePlan]:
-        """主 LLM 拆分 spec 为模块列表（含重试与确定性校验）。"""
+    def split_spec(self, spec_md: str, project_id: str | None = None,
+                   requirement: str = "") -> list[ModulePlan]:
+        """主 LLM 拆分 spec 为模块列表（含重试与确定性校验）。
+
+        requirement（规模工程）：讨论阶段吃 FOLDER 摘要产出的 spec 不含
+        原子验收细节——拆分时把原始需求全文作为补充上下文注入，模块
+        职责必须引用其中的验收细节与种子契约，否则细节在讨论层丢失。
+        """
+        user_content = SPLIT_USER.format(spec=spec_md)
+        if requirement.strip():
+            user_content += (
+                "\n\n【原始需求全文（模块职责必须引用其中的验收细节、"
+                "种子数据与夹具契约）】\n"
+                + sanitize_untrusted(requirement)
+            )
         attempts = 1 + self.settings.max_parse_retries
         last_error = "未知错误"
         for _ in range(attempts):
@@ -89,7 +103,7 @@ class ModuleBuilder:
                 self.main_model,
                 [
                     {"role": "system", "content": SPLIT_SYSTEM},
-                    {"role": "user", "content": SPLIT_USER.format(spec=spec_md)},
+                    {"role": "user", "content": user_content},
                 ],
                 json_mode=True,
             )
