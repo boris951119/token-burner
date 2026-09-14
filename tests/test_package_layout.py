@@ -64,7 +64,8 @@ class TestMemSentinel:
         """真实冒烟：模板必须产出 @@MEM@@ 行（无阈值误伤时放行）。"""
         pkg = tmp_path / "app_main"
         pkg.mkdir()
-        (pkg / "__init__.py").write_text("", encoding="utf-8")
+        (pkg / "__init__.py").write_text(
+            "from app_main.app_main import *  # noqa\n", encoding="utf-8")
         (pkg / "app_main.py").write_text(
             "from flask import Flask\n"
             "def create_app():\n"
@@ -170,3 +171,42 @@ class TestAutoShim:
         (web / "web_frontend.py").write_text(
             "import totally_unrelated\n", encoding="utf-8")
         assert auto_shim_imports(tmp_path) == []
+
+
+class TestAutoBindSubmodules:
+    """keep4 终局取证：from seed_data import seed_data（同名子模块）
+    ——包 __init__ 未绑定子模块属性时 ImportError。"""
+
+    def test_submodule_auto_bound(self, tmp_path):
+        from app.arcbench_smoke import auto_bind_submodules
+
+        pkg = tmp_path / "seed_data"
+        pkg.mkdir(parents=True)
+        (pkg / "__init__.py").write_text("", encoding="utf-8")
+        (pkg / "seed_data.py").write_text(
+            "SEED = 'G101'\n", encoding="utf-8")
+        web = tmp_path / "web_ui"
+        web.mkdir(parents=True)
+        (web / "__init__.py").write_text("", encoding="utf-8")
+        (web / "web_ui.py").write_text(
+            "from seed_data import seed_data\n", encoding="utf-8")
+
+        fixed = auto_bind_submodules(tmp_path)
+        assert fixed == ["seed_data"]
+        init_src = (pkg / "__init__.py").read_text(encoding="utf-8")
+        assert "from . import seed_data" in init_src
+
+    def test_already_bound_no_change(self, tmp_path):
+        from app.arcbench_smoke import auto_bind_submodules
+
+        pkg = tmp_path / "seed_data"
+        pkg.mkdir(parents=True)
+        (pkg / "__init__.py").write_text(
+            "from . import seed_data  # noqa\n", encoding="utf-8")
+        (pkg / "seed_data.py").write_text("S = 1\n", encoding="utf-8")
+        web = tmp_path / "web_ui"
+        web.mkdir(parents=True)
+        (web / "__init__.py").write_text("", encoding="utf-8")
+        (web / "web_ui.py").write_text(
+            "from seed_data import seed_data\n", encoding="utf-8")
+        assert auto_bind_submodules(tmp_path) == []

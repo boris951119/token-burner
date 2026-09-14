@@ -75,7 +75,10 @@ def _peak_mem_mb():
 code = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(code))
 for child in sorted(code.iterdir()):
-    if child.is_dir() and not child.name.startswith("_"):
+    # keep4 尸检：含 __init__.py 的包目录不得入 path——其下同名子模块
+    # 文件会遮蔽包本身（seed_data 包 vs seed_data.py）
+    if (child.is_dir() and not child.name.startswith("_")
+            and not (child / "__init__.py").exists()):
         sys.path.insert(0, str(child))
 
 failures = []
@@ -99,6 +102,9 @@ if app is None:
     failures.append("没有任何模块提供 create_app")
     print("\\n".join(failures))
     raise SystemExit(1)
+
+app.config["TESTING"] = True
+app.config["PROPAGATE_EXCEPTIONS"] = True
 
 if hasattr(app, "test_client"):        # Flask
     client = app.test_client()
@@ -144,7 +150,10 @@ from pathlib import Path
 code = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(code))
 for child in sorted(code.iterdir()):
-    if child.is_dir() and not child.name.startswith("_"):
+    # keep4 尸检：含 __init__.py 的包目录不得入 path——其下同名子模块
+    # 文件会遮蔽包本身（seed_data 包 vs seed_data.py）
+    if (child.is_dir() and not child.name.startswith("_")
+            and not (child / "__init__.py").exists()):
         sys.path.insert(0, str(child))
 
 mods = []
@@ -196,7 +205,10 @@ from pathlib import Path
 code = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(code))
 for child in sorted(code.iterdir()):
-    if child.is_dir() and not child.name.startswith("_"):
+    # keep4 尸检：含 __init__.py 的包目录不得入 path——其下同名子模块
+    # 文件会遮蔽包本身（seed_data 包 vs seed_data.py）
+    if (child.is_dir() and not child.name.startswith("_")
+            and not (child / "__init__.py").exists()):
         sys.path.insert(0, str(child))
 
 from __APP_MODULE__ import create_app
@@ -410,6 +422,50 @@ def auto_shim_imports(code_dir: Path) -> list[str]:
     return shims
 
 
+def auto_bind_submodules(code_dir: Path) -> list[str]:
+    """子模块属性绑定修复（keep4 终局取证）：`from seed_data import
+    seed_data` 要的是同名子模块——包 __init__ 未 `from . import 子模块`
+    时该导入报 ImportError。纯加法（往 __init__ 追加一行绑定），零 LLM。
+    返回修复的包名列表。
+    """
+    code_dir = Path(code_dir)
+    fixed: list[str] = []
+    wanted: dict[str, set[str]] = {}
+    for py in code_dir.rglob("*.py"):
+        if "__pycache__" in py.parts:
+            continue
+        try:
+            src = py.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for m in re.finditer(r"^\s*from\s+(\w+)\s+import\s+([^\n#]+)",
+                             src, re.MULTILINE):
+            pkg = m.group(1)
+            pkg_dir = code_dir / pkg
+            if not (pkg_dir / "__init__.py").exists():
+                continue
+            for raw in m.group(2).split(","):
+                sym = raw.strip().split(" as ")[0].strip()
+                if re.match(r"^\w+$", sym) and sym != "*" \
+                        and (pkg_dir / f"{sym}.py").exists():
+                    wanted.setdefault(pkg, set()).add(sym)
+    for pkg, syms in sorted(wanted.items()):
+        init = code_dir / pkg / "__init__.py"
+        init_src = init.read_text(encoding="utf-8", errors="replace")
+        missing = [s for s in sorted(syms)
+                   if not re.search(rf"^\s*from\s+\.?\s*import\s+.*\b{s}\b"
+                                    rf"|^\s*import\s+\.{s}\b|^\s*from\s+{pkg}\s+import"
+                                    rf"|^\s*from\s+{s}\.", init_src, re.MULTILINE)]
+        if not missing:
+            continue
+        init.write_text(
+            init_src.rstrip() + "\n\n# auto-bind（命名漂移机械修复）\n"
+            + "\n".join(f"from . import {s}  # noqa: F401" for s in missing)
+            + "\n", encoding="utf-8")
+        fixed.append(pkg)
+    return fixed
+
+
 def run_smoke(code_dir: Path, python: str | None = None) -> tuple[bool, str]:
     """确定性集成冒烟。返回 (是否通过, 报告文本)。"""
     code_dir = Path(code_dir).resolve()
@@ -420,6 +476,11 @@ def run_smoke(code_dir: Path, python: str | None = None) -> tuple[bool, str]:
         shims = auto_shim_imports(code_dir)
     except Exception:
         shims = []
+    try:
+        bound = auto_bind_submodules(code_dir)
+        shims = shims + [f"{p}(子模块绑定)" for p in bound]
+    except Exception:
+        pass
     _clear_pycache(code_dir)
     verify = Path(tempfile.gettempdir()) / "arcbench_smoke_verify.py"
     verify.write_text(_VERIFY_TEMPLATE, encoding="utf-8")
