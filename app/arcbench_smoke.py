@@ -360,20 +360,27 @@ def _parse_mem_peak(report: str) -> float:
 
 
 def _llm_from(settings):
-    """平台侧验收 LLM（主模型）；fast 副本不再另设——验收调用少。"""
+    """平台侧验收 LLM。模型级备胎链（平台首单取证：验收修复阶段
+    pro 超时×3 全灭且无备胎，RuntimeError 崩穿 main → 平台 exit 1）
+    ——主模型失败后依 settings.models 逐备胎，全灭上抛由调用方容错。"""
     from app.utils.model_client import ModelClient
 
     mc = ModelClient(settings)
-    model = tuple(settings.models[:3])[0]
+    chain = tuple(settings.models[:3]) or ("openai/gpt-4o",)
 
     def llm(system: str, user: str) -> str:
-        return mc.chat(
-            model,
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-        ).content
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        last_exc: Exception | None = None
+        for model in chain:
+            try:
+                return mc.chat(model, messages).content
+            except RuntimeError as exc:
+                last_exc = exc
+                continue
+        raise RuntimeError(f"验收 LLM 全链失败（{chain}）: {last_exc}")
 
     return llm
 
@@ -674,18 +681,28 @@ def verify_delivery(
     if not ok:
         notes.append(f"[smoke] FAIL → auto_repair: {report[-200:]}")
         _beat(project_dir, "验收-冒烟修复")
-        ok, report = auto_repair(
-            project_dir, settings, max_rounds=max_app_rounds
-        )
+        try:
+            ok, report = auto_repair(
+                project_dir, settings, max_rounds=max_app_rounds
+            )
+        except Exception as exc:
+            # 平台首单取证：验收修复阶段的 LLM 异常曾崩穿 main →
+            # 平台 exit 1 + 无报告。优雅 FAIL：保留现场，绝不崩穿。
+            ok = False
+            report = f"自动修复通道异常（优雅降级）: {exc!r}"[:400]
     notes.append(f"[smoke] {'PASS' if ok else 'FAIL'}")
     if not ok:
         return False, "\n".join(notes + [report[-300:]])
 
     _beat(project_dir, "验收-旅程")
     llm = _llm_from(settings)
-    jok, jreport = _journey_gate(
-        code_dir, project_dir, requirement, llm, max_app_rounds, notes
-    )
+    try:
+        jok, jreport = _journey_gate(
+            code_dir, project_dir, requirement, llm, max_app_rounds, notes
+        )
+    except Exception as exc:
+        # 同上：旅程闸门内部异常（含 LLM 全链失败）优雅降级为 FAIL
+        jok, jreport = False, f"旅程闸门异常（优雅降级）: {exc!r}"[:400]
     _beat(project_dir, "验收-完成", "PASS" if ok and jok else "FAIL")
     return ok and jok, "\n".join(notes + ([jreport] if jreport else []))
 
@@ -775,14 +792,23 @@ def auto_repair(
 
     def llm(system: str, user: str) -> str:
         models = tuple(settings.models[:3]) or ("openai/gpt-4o",)
-        resp = mc.chat(
-            models[1] if len(models) > 1 else models[0],
-            [
+        # 原语义:修复从开发模型起步(省主帅额度);备胎链补齐全员
+        chain = (models[1:] + models[:1]) if len(models) > 1 else models
+
+        def llm(system: str, user: str) -> str:
+            # 平台首单取证:验收修复阶段无备胎,pro 超时×3 崩穿 main
+            messages = [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
-            ],
-        )
-        return resp.content
+            ]
+            last_exc: Exception | None = None
+            for m in chain:
+                try:
+                    return mc.chat(m, messages).content
+                except RuntimeError as exc:
+                    last_exc = exc
+                    continue
+            raise RuntimeError(f"验收 LLM 全链失败（{chain}）: {last_exc}")
 
     ok, report = run_smoke(code_dir)
     if ok:
