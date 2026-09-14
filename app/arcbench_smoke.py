@@ -167,6 +167,10 @@ from __APP_MODULE__ import create_app
 app = create_app()
 c = app.test_client()
 client = c  # 别名：r11 取证 LLM 惯用 client，NameError 会被误判为应用缺陷
+# 轨迹取证（r12/r13/r15 手工诊断的产品化）：应用侧异常直接带着
+# file:line 冒泡进报告，修复指令不再只看 HTTP 状态码瞎猜。
+app.config["TESTING"] = True
+app.config["PROPAGATE_EXCEPTIONS"] = True
 
 # === JOURNEY BEGIN（LLM 生成段） ===
 __BODY__
@@ -221,9 +225,19 @@ def _schema_audit_section(code_dir: Path, findings: list[str] | None = None) -> 
 
 
 def _is_script_defect(report: str) -> bool:
-    """报告含脚本帧且终态异常属于「脚本自身写错」类 → 分类为脚本缺陷。"""
-    return bool(report) and "arcbench_journey.py" in report and bool(
-        _SCRIPT_DEFECT_RE.search(report[-400:]))
+    """报告含脚本帧且终态异常属于「脚本自身写错」类 → 分类为脚本缺陷。
+
+    轨迹取证后（TESTING+PROPAGATE）应用侧异常也会带脚本帧出现在
+    报告里——判定必须看**最深处帧**：异常最终抛出的文件是旅程脚本
+    才算脚本缺陷；最深帧在应用代码里 = 应用缺陷（送 RepoFixer）。
+    """
+    if not report or "arcbench_journey.py" not in report:
+        return False
+    if not _SCRIPT_DEFECT_RE.search(report[-400:]):
+        return False
+    frames = re.findall(r'File "([^"]+)"', report)
+    deepest = frames[-1] if frames else ""
+    return "arcbench_journey.py" in deepest
 
 _JOURNEY_USER = """根据需求摘要与真实路由表，生成该 Web 应用的主旅程验收代码体。
 

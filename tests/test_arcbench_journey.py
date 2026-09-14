@@ -436,3 +436,34 @@ class TestScriptDefectClassification:
 
         report = "some app traceback\nTypeError: unsupported operand"
         assert not _is_script_defect(report)
+
+
+class TestTracebackForensics:
+    """轨迹取证（TESTING+PROPAGATE）后的分类精度：
+    异常最深处帧决定归属——脚本帧=脚本缺陷，应用帧=应用缺陷。"""
+
+    def test_app_side_typeerror_is_not_script_defect(self):
+        from app.arcbench_smoke import _is_script_defect
+
+        report = (
+            "Traceback (most recent call last):\n"
+            '  File "C:/Temp/arcbench_journey.py", line 30, in <module>\n'
+            "    resp = c.post('/api/register', json=payload)\n"
+            '  File "C:/app/auth/auth.py", line 92, in register_view\n'
+            "    body, status = register(username, password)\n"
+            '  File "C:/app/auth/auth.py", line 40, in register\n'
+            "    raise TypeError('users table schema unsupported')\n"
+            "TypeError: users table schema unsupported"
+        )
+        assert not _is_script_defect(report), "应用侧异常必须送应用修复"
+
+    def test_script_side_nameerror_still_detected(self):
+        from app.arcbench_smoke import _is_script_defect
+
+        report = (
+            "Traceback (most recent call last):\n"
+            '  File "C:/Temp/arcbench_journey.py", line 29, in <module>\n'
+            "    c = client\n"
+            "NameError: name 'client' is not defined"
+        )
+        assert _is_script_defect(report)
