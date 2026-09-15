@@ -491,9 +491,25 @@ gen-3 home）。
 **晨间更新（08:55）**：generation-4 于 98 分钟处 exit 1（比 gen-1
 的 3.5h 更早——死于管线更早阶段，具体死因待读容器 stderr：打开
 run 页面 → stdout 页签 → 末尾 Traceback 即是）。Stage 3 已收集
-artifacts（部分成品已进 Playwright 评测）。**你的第一个动作**：
-打开该 run 页面点 stdout 页签，把最后一段截图给我，5 分钟出诊断。
-（注：keep5 仍在本地跑，完成自动通知。）
+artifacts（部分成品已进 Playwright 评测）。
+
+**generation-6 / generation-7 补充（09-15 白天）**：
+- generation-6 = 0b56d74eb380（Train Ticket 143 需求全流程 10h，
+  3.48M token = ¥71.06）：8/8 模块交付、命名零漂移（审计器生效），
+  旅程 Step 2 拦于首页缺 "Quick Guide" 区块，修复 4 轮未收敛；
+- generation-7 = 0754405db924（同任务全套修复版，98min）：
+  exit 1 于更早阶段——模块开发 `from seed_data import seed_data`
+  试图调用**同名子模块**（Python 解析成模块对象非函数）→
+  `TypeError: 'module' object is not callable`。同时验证：
+  `[config]` 行实证配置正确加载（models=[pro,minimax,glm]、
+  wall_clock=1200、budget=2M 全生效），此前"配置未加载"推断被证伪——
+  真正根因是**生成器同名冲突**（包 seed_data / 模块 seed_data.py /
+  函数 seed_data() 三层同名）。
+- 用户手动在官方网页重交 generation-7 前先上传了 v3 快照
+  （token-burner-submission.zip 09:01 版）；0754405db924 即其运行。
+
+**当前进行**：keep5-resume（断点续跑，6/8 模块已完成保留，全器官在位）
+——完成后自动分析。
 
 
 ## 十六、generation-4 死因修复完成（09-15 08:5x，等你重交 gen-5）
