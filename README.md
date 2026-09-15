@@ -1,6 +1,6 @@
 # token-burner
 
-文档消耗器 · AI 多智能体项目团队系统（v1.0.0）
+文档消耗器 · AI 多智能体项目团队系统（v2.0 竞赛版）
 
 Set your tokens on fire!
 
@@ -46,6 +46,33 @@ spec 确认 → 模块拆分 → 逐模块「写码 → 测试 → 执行」循�
 
 - **可视化**：Web 工作台实时监控（阶段耗时 / token 曲线 / 模块全景）、
   对话流图、模式推荐、深浅主题、分类设置页
+
+### 竞赛版新增（v2.0，ARC-Bench 实弹打磨）
+
+- **七类确定性审计器**（零 LLM、纯机械，全部由实弹失败取证驱动）：
+  schema 审计（DDL vs SQL 列名 diff，5 类检查）、包结构审计（import
+  名 ↔ 实际包名/空壳包）、符号级导入审计、机械垫片自动生成（命名
+  漂移家族的终结手段）、子模块自动绑定、内存哨兵（应用峰值 >512MB
+  判 FAIL，对齐官方 2GB 环境）
+
+- **模型链全链保护**：单模型超时自动接力编队内其余模型
+  （`ModelChainExhausted` 专类型），模块级优雅冻结——单模块 LLM 全灭
+  不再拖死全局，部分交付仍进评测拿部分分
+
+- **视觉转写通道**：需求树内嵌参考截图（`reference/*.png`）自动经
+  视觉模型转写为结构化描述注入需求文本；官方 `VISUAL_BASE_URL`/
+  `VISUAL_MODEL` 环境变量优先，中转站视觉模型兜底；带缓存与幻觉防线
+
+- **分层讨论管线**：讨论阶段吃 FOLDER 级摘要（keep 实测 26% 体量），
+  拆分/开发阶段才消费 ATOMIC 全文——大规模需求树（117-143 需求）
+  不再撞模型推理墙钟
+
+- **轨迹取证 + 验收实时心跳**：smoke/旅程失败自动携带应用侧
+  traceback（file:line）注入修复指令；验收各阶段实时写心跳
+
+- **交付韧性**：验收失败优雅退出（报告完整保留，绝不崩穿平台进程）；
+  LLM 空响应当失败自动接力备胎；配置文件随提交包锚定（CWD 解耦）+
+  官方中转站编制自动补全（单模型注入自动扩为三模型编队）
 
 ## 快速开始
 
@@ -163,7 +190,7 @@ npm run compile        # 产物在 out/；消息协议契约测试：npm test
 ## 测试
 
 ```bash
-python -m pytest tests/ -q                  # 1149 项（全 stub，无需密钥）
+python -m pytest tests/ -q                  # 1231 项（全 stub，无需密钥）
 cd vscode-extension && npm test             # 插件消息协议契约测试 4 项
 python scripts/ab_triage_eval.py --mock     # 快慢双模式 A/B 自检（--real 走真实 LLM）
 ```
@@ -172,12 +199,19 @@ python scripts/ab_triage_eval.py --mock     # 快慢双模式 A/B 自检（--rea
 
 - **bench_v1（自建）**：10 类真实需求 greenfield 基准，模块通过率 71%、
   任务交付 10/10、零预算超支（logs/bench_v1/full*）。
-- **SWE-bench Lite (50, 简化口径)**：deepseek-v4-pro、seed 42 分层抽样，
-  resolved 1/50（2%）、12 例环境错误、2.96M tokens——**验证为仓库根
-  直接 pytest FAIL_TO_PASS，未做官方 per-repo conda 环境**；同批补丁
-  可交官方 harness 复评。对照公开口径：Devin 首战 13.86%。
-  逐实例结果与成本见 logs/swebench_full/。失败归因与环境预检闸门
-  （env_unverifiable 零 token 跳过）见 CHANGELOG v1.2 S2。
+- **SWE-bench Lite**：修复前基线 seed 42/50 例 resolved 1（2%）、
+  2.96M tokens；环境适配域修复后（9 个 commit：stderr 取证/setuptools
+  考古/包结构/符号审计/备胎链），同域新样本批次达 **resolved 3/5
+  （60%）、0 error**——环境类失败由环境预检闸门零 token 拦截。
+  **验证为仓库根直接 pytest FAIL_TO_PASS，未做官方 per-repo conda
+  环境**；同批补丁可交官方 harness 复评。
+
+- **ARC-Bench 平台实弹**（官方容器环境，Train Ticket 143 需求）：
+  管线在官方 Linux 容器完成 讨论→拆分→模块开发→交付 全流程
+  （分层讨论 26% 体量生效）；四次运行暴露并修复 12+ 产品缺陷
+  （命名漂移垫片/模型链保护/轨迹取证/配置锚定等，全部带回归测试）。
+  逐次运行日志与成本（¥15-30/单）见 NIGHT_REPORT.md 与
+  logs/rehearsal-*。
 
 ## 发布
 
@@ -199,9 +233,13 @@ python main.py <requirements_dir> --output-dir <output_dir> --type web --mode au
   （`app/arcbench_ingest.py`）
 - 过程上报：Pipeline 事件 → 官方 SDK 翻译（事件流 + traceability + git 提交），
   本地无 SDK 自动 no-op（`app/arcbench_bridge.py`）
-- 交付后集成冒烟：import 全模块 + `create_app()` + `/api/health` 200，
-  失败自动修复 ≤3 轮（`app/arcbench_smoke.py`）
-- 中断恢复：`--resume` 跳过已完成模块续跑
+- 交付后两段式验收：确定性冒烟（import 全模块 + `create_app()` +
+  `/api/health` 200 + 首页 200 + 内存哨兵）→ 旅程闸门（完整用户
+  旅程 + 行为探针 + 应用侧 traceback 取证），失败自动修复（模型链
+  备胎 + 确定性审计器注入 + 优雅降级）
+- 机械自愈：命名漂移自动垫片、子模块自动绑定、符号级审计——
+  块间缝隙零 LLM 修复
+- 中断恢复：`--resume` 跳过已完成模块续跑；单模块失败优雅冻结继续
 
 赛制理解 / 提交契约 / 演练计划见 [docs/competition-plan.md](docs/competition-plan.md)。
 
