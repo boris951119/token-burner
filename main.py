@@ -105,6 +105,9 @@ def _gateway_preflight(settings) -> None:
     print("[gateway] preflight OK", flush=True)
 
 
+_KNOWN_RELAY_FALLBACKS = ("openai/minimax-m3", "openai/glm-5.3")
+
+
 def _apply_runner_model(settings) -> None:
     """平台 runner 注入 MODEL（OpenAI 兼容网关，litellm 需 openai/ 前缀）。
 
@@ -113,6 +116,11 @@ def _apply_runner_model(settings) -> None:
     config `platform_multi_model=true`（r6 探测：网关为多模型中转，
     单 key 11 模型全通可并发）：注入模型任主 LLM，开发/测试副 LLM
     取 config 预设中与其互异的前两个；预设不足或全同自然回落单模型。
+
+    generation-5 取证（官方容器 CWD≠提交目录 → config.json 可能不
+    生效 → 编制退化为注入单模型、备胎链为空 → 任何一次网关超时
+    崩穿）：官方中转站上编制不足三模型时，用已知可用编队自动补全
+    ——备胎链的存在不再依赖 config.json 是否存活。
     """
     model = os.environ.get("MODEL", "").strip()
     if not model:
@@ -122,10 +130,23 @@ def _apply_runner_model(settings) -> None:
         preset = [m for m in settings.models if m != litellm_name]
         settings.models = [litellm_name] + preset[:2]
         settings.single_model_mode = len(set(settings.models)) < 3
-        return
-    settings.models = [litellm_name]
-    # TeamBuilder 互异校验放行（三角色同模）；预设列表校验仍生效
-    settings.single_model_mode = True
+    else:
+        settings.models = [litellm_name]
+        # TeamBuilder 互异校验放行（三角色同模）；预设列表校验仍生效
+        settings.single_model_mode = True
+    # 官方中转站编制补全：仅当注入端点确为 arc-bench 中转站且编制
+    # 不足三模型（config.json 未生效等）时启用
+    base = (os.environ.get("OPENAI_BASE_URL")
+            or os.environ.get("OPENAI_API_BASE") or "")
+    if ("arc-bench.com" in base and settings.single_model_mode
+            and len(settings.models) < 3):
+        for fb in _KNOWN_RELAY_FALLBACKS:
+            if fb != litellm_name and fb not in settings.models \
+                    and len(settings.models) < 3:
+                settings.models.append(fb)
+        settings.single_model_mode = len(set(settings.models)) < 3
+        print(f"[config] 单模型编制自动补全 → {list(settings.models)}",
+              flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -217,14 +238,30 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             pass
     diag = _align_gateway_env()
-    settings = load_settings()
+    # 配置三重锚定（generation-5 取证：平台 CWD≠提交目录，CWD/config.json
+    # 找不到 → 静默回退默认值 → 单模型无备胎 → 四连败同源）：config 跟随
+    # 提交包，与 CWD 解耦
+    config_file = Path(__file__).resolve().parent / "config.json"
+    settings = load_settings(config_file=config_file)
     _apply_runner_model(settings)
+    # 诊断实证：配置实况打印进容器 stdout——平台侧故障的第一手证据
+    print(f"[config] file={config_file} exists={config_file.is_file()} "
+          f"models={list(settings.models)} "
+          f"multi={settings.platform_multi_model} "
+          f"single={settings.single_model_mode} "
+          f"wall_clock={settings.llm_wall_clock_seconds} "
+          f"budget={settings.max_task_tokens}", flush=True)
     # 网关长挂防御：单请求实测可挂 25 分钟+（httpx read timeout 是字节
     # 间隙口径，滴字续命永不触发）；墙钟 600s 超时走退避重试
     if settings.llm_wall_clock_seconds <= 0:
         settings.llm_wall_clock_seconds = 600
     # 平台侧提交统一走 runtime.git（桥接层），双 git 会互相污染提交历史
     settings.enable_git = False
+    print(f"[config] 最终编制: models={list(settings.models)} "
+          f"multi={settings.platform_multi_model} "
+          f"single={settings.single_model_mode} "
+          f"wall_clock={settings.llm_wall_clock_seconds} "
+          f"budget={settings.max_task_tokens}", flush=True)
 
     bridge = ArcBenchBridge()
     # 诊断信息走 SDK 事件流（runner_event_lines 可见；stdout 采集不全）

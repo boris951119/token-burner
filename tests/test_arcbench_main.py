@@ -83,7 +83,8 @@ def _patch_llm_paths(monkeypatch, result, verify=(True, "verify ok")):
     """屏蔽真实网关与真实验收，替换管线为假件。"""
     captured = {}
 
-    def fake_load_settings():
+    def fake_load_settings(config_file=None, **kw):
+        captured["config_file"] = str(config_file) if config_file else None
         captured["settings"] = Settings(models=["openai/glm-5.3"])
         return captured["settings"]
 
@@ -227,3 +228,45 @@ def test_flag_off_keeps_strict_single_model(monkeypatch):
     entry._apply_runner_model(settings)
     assert settings.models == ["openai/glm-5.3"]
     assert settings.single_model_mode is True
+
+
+class TestRunnerModelAutocomplete:
+    """generation-5 取证：容器 CWD≠提交目录时 config.json 可能不生效，
+    编制退化为注入单模型、备胎链为空——官方中转站上必须自动补全。"""
+
+    def _apply(self, monkeypatch, model, base, platform_multi, models):
+        from app.config import Settings
+        import os
+
+        monkeypatch.setenv("MODEL", model)
+        monkeypatch.setenv("OPENAI_BASE_URL", base)
+        monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+        settings = Settings(models=list(models),
+                            platform_multi_model=platform_multi)
+        from main import _apply_runner_model
+        _apply_runner_model(settings)
+        return settings
+
+    def test_official_relay_single_model_autocompletes(self, monkeypatch):
+        s = self._apply(monkeypatch, "deepseek-v4-pro",
+                        "https://api.arc-bench.com/v1",
+                        False, ["deepseek-v4-pro"])
+        assert s.single_model_mode is False
+        assert s.models == ["openai/deepseek-v4-pro", "openai/minimax-m3",
+                            "openai/glm-5.3"]
+
+    def test_non_official_relay_stays_single(self, monkeypatch):
+        s = self._apply(monkeypatch, "deepseek-v4-pro",
+                        "https://other-relay.example/v1",
+                        False, ["deepseek-v4-pro"])
+        assert s.single_model_mode is True
+        assert s.models == ["openai/deepseek-v4-pro"]
+
+    def test_platform_multi_path_unaffected(self, monkeypatch):
+        s = self._apply(monkeypatch, "deepseek-v4-pro",
+                        "https://api.arc-bench.com/v1",
+                        True, ["openai/deepseek-v4-pro", "openai/minimax-m3",
+                               "openai/glm-5.3"])
+        assert s.single_model_mode is False
+        assert s.models[0] == "openai/deepseek-v4-pro"
+        assert len(s.models) == 3
