@@ -50,3 +50,27 @@ class TestGuards:
 
     def test_render_empty(self):
         assert render_image_section({}) == ""
+
+
+class TestVisionEndpoints:
+    """gen-4 取证：平台注入 VISUAL_BASE_URL/VISUAL_MODEL=gpt-5.5——
+    官方视觉通道必须优先于中转站兜底链。"""
+
+    def test_official_channel_first(self, monkeypatch):
+        from app.utils import vision
+
+        monkeypatch.setenv("VISUAL_BASE_URL", "https://api.key7qi.com/v1")
+        monkeypatch.setenv("VISUAL_MODEL", "gpt-5.5")
+        eps = vision._vision_endpoints("key", "https://relay.example/v1")
+        assert eps[0][0] == "gpt-5.5"
+        assert eps[0][1] == "https://api.key7qi.com/v1"
+        assert [e[0] for e in eps][1:] == ["kimi-k3", "minimax-m3"], (
+            "中转站兜底链必须跟在官方通道后")
+
+    def test_no_env_falls_back_to_relay_chain(self, monkeypatch):
+        from app.utils import vision
+
+        monkeypatch.delenv("VISUAL_BASE_URL", raising=False)
+        monkeypatch.delenv("VISUAL_MODEL", raising=False)
+        eps = vision._vision_endpoints("key", "https://relay.example/v1")
+        assert [e[0] for e in eps][:2] == ["kimi-k3", "minimax-m3"]

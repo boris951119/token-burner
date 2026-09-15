@@ -529,10 +529,16 @@ def _llm_from(settings):
         last_exc: Exception | None = None
         for model in chain:
             try:
-                return mc.chat(model, messages).content
+                content = mc.chat(model, messages).content or ""
             except RuntimeError as exc:
                 last_exc = exc
                 continue
+            if not content.strip():
+                # gen-4 取证:空响应会让下游 plan 解析"输入文本为空"
+                # 直接死——视为该模型失败,接力下一模型
+                last_exc = RuntimeError(f"{model} 返回空内容")
+                continue
+            return content
         raise RuntimeError(f"验收 LLM 全链失败（{chain}）: {last_exc}")
 
     return llm
@@ -995,10 +1001,15 @@ def auto_repair(
             last_exc: Exception | None = None
             for m in chain:
                 try:
-                    return mc.chat(m, messages).content
+                    content = mc.chat(m, messages).content or ""
                 except RuntimeError as exc:
                     last_exc = exc
                     continue
+                if not content.strip():
+                    # gen-4 取证:空响应当失败,接力下一模型
+                    last_exc = RuntimeError(f"{m} 返回空内容")
+                    continue
+                return content
             raise RuntimeError(f"验收 LLM 全链失败（{chain}）: {last_exc}")
 
     ok, report = run_smoke(code_dir)

@@ -102,6 +102,25 @@ def _describe_one(model: str, b64: str, key: str, base: str,
     return str(txt).strip()
 
 
+def _vision_endpoints(key: str, base: str) -> list[tuple[str, str, str]]:
+    """视觉端点有序链：(model, base, key)。
+
+    官方通道优先（gen-4 容器日志取证：平台注入 VISUAL_BASE_URL/
+    VISUAL_MODEL=gpt-5.5 @ api.key7qi.com）——平台给的视觉端点
+    用同一把注入 key；中转站 kimi-k3/minimax-m3 作兜底。
+    """
+    endpoints: list[tuple[str, str, str]] = []
+    vbase = os.environ.get("VISUAL_BASE_URL", "").strip()
+    vmodel = os.environ.get("VISUAL_MODEL", "").strip()
+    if vbase and vmodel:
+        endpoints.append((vmodel, vbase, key))
+    for m in VISION_MODELS:
+        model = m.removeprefix("openai/")
+        if all(model != e[0] for e in endpoints):
+            endpoints.append((model, base, key))
+    return endpoints
+
+
 def describe_images(req_dir: Path, refs: list[str],
                     key: str, base: str) -> dict[str, str]:
     """转写需求目录下引用的截图，返回 {相对路径: 描述}（带缓存）。"""
@@ -114,6 +133,7 @@ def describe_images(req_dir: Path, refs: list[str],
         except Exception:
             cache = {}
 
+    endpoints = _vision_endpoints(key, base)
     todo = [r for r in refs if r not in cache][: _MAX_IMAGES]
     for ref in todo:
         img = (req_dir / ref)
@@ -124,9 +144,9 @@ def describe_images(req_dir: Path, refs: list[str],
         b64 = _downscale_b64(img)
         if b64 is None:
             continue
-        for model in VISION_MODELS:
+        for model, ebase, ekey in endpoints:
             try:
-                cache[ref] = _describe_one(model, b64, key, base)
+                cache[ref] = _describe_one(model, b64, ekey, ebase)
                 break
             except Exception:
                 continue               # 逐备胎，全败则该图无描述

@@ -92,3 +92,32 @@ class TestVerifyGracefulDegradation:
         ok, report = sm.verify_delivery(project, "需求", Settings())
         assert ok is False
         assert "优雅降级" in report
+
+
+class TestEmptyContentGuard:
+    """gen-4 取证：修复计划 LLM 返回空内容（"输入文本为空"）——
+    空响应必须视为该模型失败，接力备胎。"""
+
+    def test_empty_content_falls_to_next_model(self, monkeypatch):
+        import app.arcbench_smoke as sm
+
+        class _R:
+            content = ""
+
+        class _MC:
+            def __init__(self, settings):
+                self.calls = []
+
+            def chat(self, model, messages):
+                self.calls.append(model)
+                if model == "openai/glm-5.3":
+                    return _R()          # 空内容
+                return type("R2", (), {"content": "真实方案"})()
+
+        monkeypatch.setattr("app.utils.model_client.ModelClient", _MC)
+        settings = Settings(models=["openai/glm-5.3",
+                                    "openai/deepseek-v4-pro",
+                                    "openai/minimax-m3"])
+        llm = sm._llm_from(settings)
+        out = llm("s", "u")
+        assert out == "真实方案"
