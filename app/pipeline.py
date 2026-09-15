@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -46,6 +47,19 @@ from app.orchestrator import (
 from app.tools.file_manager import FileManager
 from app.tools.git_manager import GitManager
 from app.utils.budget import BudgetExceededError, BudgetGuard
+
+# 看门狗数据源：全局最近进度时间戳（keep5 取证：进程可楔死在墙钟
+# 保护之外的子进程/库内部，心跳冻结数小时无法取证——由 main.py 的
+# 看门狗线程消费；Pipeline._emit 每个事件都会刷新它）
+LAST_PROGRESS = time.time()
+
+
+def touch_progress() -> None:
+    """刷新全局最近进度时间戳（看门狗阈值判断依据）。"""
+    global LAST_PROGRESS
+    LAST_PROGRESS = time.time()
+
+
 from app.utils.model_client import ModelClient
 from app.utils.untrusted import sanitize_untrusted
 
@@ -176,6 +190,7 @@ class Pipeline:
 
         v1.2 S0:并行开发下多 worker 同时发事件 → 派发互斥。
         """
+        touch_progress()
         self._beat(event_type, data)
         with self._emit_lock:
             if self._on_event is None:

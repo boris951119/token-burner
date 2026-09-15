@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import threading
 from pathlib import Path
 
 from app.arcbench_bridge import ArcBenchBridge
@@ -262,6 +263,39 @@ def main(argv: list[str] | None = None) -> int:
           f"single={settings.single_model_mode} "
           f"wall_clock={settings.llm_wall_clock_seconds} "
           f"budget={settings.max_task_tokens}", flush=True)
+
+    # 看门狗线程（keep5 取证：进程楔死在墙钟保护之外 7.7h 零取证）——
+    # 全局进度时间戳超阈值 → 全线程栈 dump 落盘 → 非零退出。
+    # 阈值需覆盖合法长窗口（1200s 墙钟 × 3 重试 × 3 模型 ≈ 3h），故默认 200 分钟。
+    _watchdog_min = float(os.environ.get("WATCHDOG_MINUTES", "200") or 0)
+    if _watchdog_min > 0:
+        import time as _time
+        import traceback as _tb
+        from app import pipeline as _pl
+
+        def _watchdog():
+            while True:
+                _time.sleep(60)
+                idle = _time.time() - _pl.LAST_PROGRESS
+                if idle <= _watchdog_min * 60:
+                    continue
+                dump_path = (Path(os.environ.get("ARCBENCH_OUTPUT_DIR",
+                             str(workdir))) / "logs" / "watchdog_dump.txt")
+                try:
+                    dump_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(dump_path, "w", encoding="utf-8") as fh:
+                        fh.write(f"watchdog: no progress {idle/60:.0f} min\n")
+                        for tid, frame in sys._current_frames().items():
+                            fh.write(f"\n--- thread {tid} ---\n")
+                            fh.write("".join(_tb.format_stack(frame)))
+                except Exception:
+                    pass
+                print(f"[watchdog] {idle/60:.0f} 分钟无进展，楔死强制退出"
+                      f"（现场: {dump_path}）", flush=True)
+                os._exit(75)
+
+        threading.Thread(target=_watchdog, daemon=True).start()
+        print(f"[watchdog] 已启动（阈值 {_watchdog_min:.0f} 分钟）", flush=True)
 
     bridge = ArcBenchBridge()
     # 诊断信息走 SDK 事件流（runner_event_lines 可见；stdout 采集不全）
