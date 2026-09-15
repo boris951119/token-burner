@@ -488,6 +488,9 @@ gen-3 home）。
 函数三层同名，db_core.py:73 TypeError）——冒烟开 PROPAGATE 后
 该 traceback 完整可见，auto_repair 拿到精确证据。
 
-**晨间预期**：generation-4 预计 09:30-11:00 到达 Stage 3
-（Playwright 真实评分）——你醒来时运行应仍在进行或刚出结果，
-页面 https://arc-bench.com/runs/0754405db924 刷新即可查看。
+**晨间更新（08:55）**：generation-4 于 98 分钟处 exit 1（比 gen-1
+的 3.5h 更早——死于管线更早阶段，具体死因待读容器 stderr：打开
+run 页面 → stdout 页签 → 末尾 Traceback 即是）。Stage 3 已收集
+artifacts（部分成品已进 Playwright 评测）。**你的第一个动作**：
+打开该 run 页面点 stdout 页签，把最后一段截图给我，5 分钟出诊断。
+（注：keep5 仍在本地跑，完成自动通知。）
