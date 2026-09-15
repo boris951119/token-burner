@@ -494,3 +494,22 @@ run 页面 → stdout 页签 → 末尾 Traceback 即是）。Stage 3 已收集
 artifacts（部分成品已进 Playwright 评测）。**你的第一个动作**：
 打开该 run 页面点 stdout 页签，把最后一段截图给我，5 分钟出诊断。
 （注：keep5 仍在本地跑，完成自动通知。）
+
+
+## 十六、generation-4 死因修复完成（09-15 08:5x，等你重交 gen-5）
+
+你的截图提供的容器日志揭示了两个新事实，均已修复：
+
+1. **官方视觉通道**：平台注入 `VISUAL_BASE_URL=api.key7qi.com` +
+   `VISUAL_MODEL=gpt-5.5`——vision.py 已改为官方通道优先
+   （gpt-5.5 描述截图），中转站 kimi/minimax 降为兜底；
+2. **空内容防线**：gen-4 的修复计划 LLM 调用返回空内容（"输入文本
+   为空"）直接致死——两处验收闭包已把空响应当失败接力备胎。
+
+gen-4 的失败链条：生成的 app 在 create_app 防御性 raise（r16 反噬
+变体）→ smoke 抓住 ✓ → auto_repair 修复计划空内容死 → 优雅 FAIL ✓
+（韧性生效，582k token = ¥20.22 干净退出）。
+
+**新包 token-burner-submission.zip（347KB）已重建**：导入链冒烟 ✓、
+敏感文件扫描干净 ✓、包内视觉链验证 = [gpt-5.5@key7qi → kimi →
+minimax] ✓。**请重交 generation-5**（表单配置不变）。
