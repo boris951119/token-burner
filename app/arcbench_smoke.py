@@ -136,6 +136,52 @@ print(f"@@MEM@@{_peak_mem_mb():.1f}")
 print("SMOKE_OK")
 '''
 
+# 锚点覆盖探针：全 GET 页面响应采样（gen-6 取证家族的通用化——
+# 需求承诺的 UI 锚点必须出现在页面响应中，机械校验零 LLM）。
+_ANCHOR_COVERAGE_TEMPLATE = '''\
+"""ArcBench 锚点覆盖探针（自动生成）：页面响应采样 -> @@PAGES@@{json}。"""
+import json
+import sys
+from pathlib import Path
+
+code = Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(code))
+for child in sorted(code.iterdir()):
+    if (child.is_dir() and not child.name.startswith("_")
+            and not (child / "__init__.py").exists()):
+        sys.path.insert(0, str(child))
+mods = []
+for child in sorted(code.iterdir()):
+    if child.is_dir() and child.name not in ("_shared", "__pycache__"):
+        for py in sorted(child.glob("*.py")):
+            if not py.name.startswith("_") and py.stem not in sys.modules:
+                try:
+                    mods.append(__import__(py.stem))
+                except Exception:
+                    pass
+app = None
+for mod in mods:
+    if hasattr(mod, "create_app"):
+        app = mod.create_app()
+        break
+if app is None:
+    raise SystemExit("no create_app")
+client = app.test_client()
+pages = {}
+for rule in sorted(app.url_map.iter_rules(), key=lambda r: str(r)):
+    p = str(rule)
+    if "GET" not in rule.methods or "<" in p:
+        continue
+    if p.startswith("/api") or "static" in p:
+        continue
+    try:
+        r = client.get(p)
+        pages[p] = r.data.decode("utf-8", "replace")[:4000]
+    except Exception as exc:
+        pages[p] = "__ERROR__ " + repr(exc)
+print("@@PAGES@@" + json.dumps(pages))
+'''
+
 # 路由探测：与冒烟同一套 import 引导，定位组装模块并倾倒真实 url_map。
 # r7e 取证：查询参数名（origin vs from_station）只存在于视图函数源码里，
 # 只给路径+方法会让生成脚本瞎猜参数名 → 400。视图源码 .args.get 内省。
@@ -244,6 +290,50 @@ _SCRIPT_DEFECT_RE = re.compile(
     r"\b(NameError|UnboundLocalError|AttributeError|KeyError|IndexError"
     r"|TypeError|SyntaxError|IndentationError)\b\s*:")
 
+
+def _anchor_coverage_section(code_dir: Path, requirement: str) -> str:
+    """锚点覆盖探针段（gen-6 取证家族通用化）：需求承诺的锚点文案
+    在页面响应中的覆盖情况——机械校验，零 LLM。
+
+    通过子进程探针（_ANCHOR_COVERAGE_TEMPLATE）采集全部 GET 页面响应
+    样本，再与需求文本机械提取的锚点做覆盖比对。返回 markdown 段
+    （无锚点/全覆盖/异常返回空串——宁漏不误）。
+    """
+    try:
+        from app.utils.requirement_anchors import (
+            collect_anchors_from_text,
+            compute_coverage,
+        )
+
+        buckets = collect_anchors_from_text(requirement)
+        anchors = sorted({a for lst in buckets.values() for a in lst})
+        if not anchors:
+            return ""
+
+        probe = Path(tempfile.gettempdir()) / "arcbench_anchor_pages.py"
+        probe.write_text(_ANCHOR_COVERAGE_TEMPLATE, encoding="utf-8")
+        proc = subprocess.run(
+            [sys.executable, str(probe), str(code_dir)],
+            capture_output=True, text=True, timeout=240, cwd=str(code_dir))
+        pages: dict[str, str] = {}
+        for line in (proc.stdout or "").splitlines():
+            if line.startswith("@@PAGES@@"):
+                try:
+                    pages = json.loads(line[len("@@PAGES@@"):])
+                except ValueError:
+                    pass
+        if not pages:
+            return ""
+        cov = compute_coverage(pages, anchors)
+        lines = ["", "## 锚点覆盖探针（机械校验）"]
+        for a in cov["missing"][:14]:
+            lines.append(f"- 需求锚点 {a!r} 未出现在任何页面响应中——"
+                         "请在对应页面原文补齐该文案/区块")
+        for a, hits in sorted(cov["where"].items())[:8]:
+            lines.append(f"- 需求锚点 {a!r} 已出现在: {', '.join(hits[:2])}")
+        return "\n".join(lines) + "\n\n"
+    except Exception:
+        return ""
 
 def _schema_audit_section(code_dir: Path, findings: list[str] | None = None) -> str:
     """确定性 schema 审计结论注入修复指令（r13 取证：列名漂移 2 轮未定位）。
@@ -774,6 +864,7 @@ def _journey_gate(
             "查询/列表必须返回数据库种子数据而非硬编码列表、缺失页面/"
             "路由补齐、响应字段补齐）。\n"
             + _schema_audit_section(code_dir, findings=audit_findings)
+            + _anchor_coverage_section(code_dir, requirement)
             + "硬性约束：修复后应用必须仍注册下列全部路由（方法不得改动、"
             "不得删除任何既有路由）——\n"
             + "\n".join(routes)

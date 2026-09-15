@@ -210,3 +210,37 @@ class TestAutoBindSubmodules:
         (web / "web_ui.py").write_text(
             "from seed_data import seed_data\n", encoding="utf-8")
         assert auto_bind_submodules(tmp_path) == []
+
+
+class TestAnchorCoverageSection:
+    """gen-6 取证家族通用化：需求锚点（机械提取）在页面响应中的
+    覆盖探针——Quick Guide 类内容缺陷的确定性检测。"""
+
+    def _app(self, tmp_path, home_body):
+        pkg = tmp_path / "web_frontend"
+        pkg.mkdir(parents=True)
+        (pkg / "__init__.py").write_text(
+            "from web_frontend.web_frontend import *  # noqa\n",
+            encoding="utf-8")
+        (pkg / "web_frontend.py").write_text(
+            "from flask import Flask\n"
+            "def create_app():\n"
+            "    app = Flask(__name__)\n"
+            "    @app.route('/api/health')\n"
+            "    def h(): return {'ok': True}\n"
+            f"    @app.route('/')\n    def i(): return {home_body!r}\n"
+            "    return app\n", encoding="utf-8")
+
+    def test_missing_anchor_reported(self, tmp_path):
+        self._app(tmp_path, "Home without guide")
+        from app.arcbench_smoke import _anchor_coverage_section
+
+        section = _anchor_coverage_section(tmp_path, '需求含 "Quick Guide" 导航')
+        assert "Quick Guide" in section and "未出现" in section, section
+
+    def test_covered_anchor_no_finding(self, tmp_path):
+        self._app(tmp_path, "Home with Quick Guide link")
+        from app.arcbench_smoke import _anchor_coverage_section
+
+        section = _anchor_coverage_section(tmp_path, '需求含 "Quick Guide" 导航')
+        assert section == "" or "Quick Guide" not in section.split("已出现")[-1], section
