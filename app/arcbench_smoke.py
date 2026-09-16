@@ -920,41 +920,62 @@ def verify_delivery(
     requirement: str,
     settings,
     max_app_rounds: int = 3,
+    max_verify_rounds: int = 3,
 ) -> tuple[bool, str]:
-    """交付两段式验收：基础冒烟 + 旅程级验收。返回 (是否通过, 报告)。"""
+    """交付前自检闭环：冒烟→修复→旅程→修复→循环直到全过或轮次耗尽。
+
+    generation-5 取证：旧版为一次性串行（冒烟→旅程），任何一段失败
+    直接返回 FAIL，即使 auto_repair 已部分修好了代码也不会再试。
+    新版将冒烟+旅程作为统一自检循环：每轮修复后从头验证，
+    全部通过才交付——「验收是教练，不是评判者」。
+    """
     project_dir = Path(project_dir).resolve()
     code_dir = project_dir / "code"
     notes: list[str] = []
-    _beat(project_dir, "验收-冒烟")
+    all_reports: list[str] = []
+    _beat(project_dir, "验收-启动")
 
-    ok, report = run_smoke(code_dir)
-    if not ok:
-        notes.append(f"[smoke] FAIL → auto_repair: {report[-200:]}")
-        _beat(project_dir, "验收-冒烟修复")
+    for verify_round in range(1, max_verify_rounds + 1):
+        _beat(project_dir, f"验收-第{verify_round}轮")
+
+        # --- Phase 1: 冒烟 ---
+        ok, report = run_smoke(code_dir)
+        if not ok:
+            notes.append(f"[R{verify_round}][smoke] FAIL → auto_repair")
+            _beat(project_dir, f"验收-R{verify_round}-冒烟修复")
+            try:
+                ok, report = auto_repair(
+                    project_dir, settings, max_rounds=max_app_rounds
+                )
+            except Exception as exc:
+                ok = False
+                report = f"自动修复异常: {exc!r}"[:400]
+            notes.append(f"[R{verify_round}][smoke] {'PASS' if ok else 'FAIL'}")
+            if not ok:
+                all_reports.append(f"[R{verify_round}] smoke FAIL: {report[-200:]}")
+                continue  # smoke 还没过，不进旅程，直接下一轮
+
+        # --- Phase 2: 旅程 ---
+        notes.append(f"[R{verify_round}][smoke] PASS")
+        _beat(project_dir, f"验收-R{verify_round}-旅程")
+        llm = _llm_from(settings)
         try:
-            ok, report = auto_repair(
-                project_dir, settings, max_rounds=max_app_rounds
+            jok, jreport = _journey_gate(
+                code_dir, project_dir, requirement, llm, max_app_rounds, notes
             )
         except Exception as exc:
-            # 平台首单取证：验收修复阶段的 LLM 异常曾崩穿 main →
-            # 平台 exit 1 + 无报告。优雅 FAIL：保留现场，绝不崩穿。
-            ok = False
-            report = f"自动修复通道异常（优雅降级）: {exc!r}"[:400]
-    notes.append(f"[smoke] {'PASS' if ok else 'FAIL'}")
-    if not ok:
-        return False, "\n".join(notes + [report[-300:]])
+            jok = False
+            jreport = f"旅程闸门异常: {exc!r}"[:400]
+        notes.append(f"[R{verify_round}][journey] {'PASS' if jok else 'FAIL'}")
 
-    _beat(project_dir, "验收-旅程")
-    llm = _llm_from(settings)
-    try:
-        jok, jreport = _journey_gate(
-            code_dir, project_dir, requirement, llm, max_app_rounds, notes
-        )
-    except Exception as exc:
-        # 同上：旅程闸门内部异常（含 LLM 全链失败）优雅降级为 FAIL
-        jok, jreport = False, f"旅程闸门异常（优雅降级）: {exc!r}"[:400]
-    _beat(project_dir, "验收-完成", "PASS" if ok and jok else "FAIL")
-    return ok and jok, "\n".join(notes + ([jreport] if jreport else []))
+        if ok and jok:
+            _beat(project_dir, "验收-通过")
+            return True, "\n".join(notes)
+        # 未全过 → 下一轮（auto_repair/journey 内部已有修复逻辑）
+        all_reports.append(f"[R{verify_round}] journey FAIL: {jreport[-200:]}")
+
+    _beat(project_dir, "验收-全部轮次耗尽")
+    return False, "\n".join(notes + all_reports[-3:])
 
 
 def _package_layout_section(code_dir: Path) -> str:

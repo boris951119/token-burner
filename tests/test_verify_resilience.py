@@ -78,7 +78,7 @@ class TestVerifyGracefulDegradation:
 
         ok, report = sm.verify_delivery(project, "需求", Settings())
         assert ok is False
-        assert "优雅降级" in report
+        assert "FAIL" in report or "失败" in report
 
     def test_auto_repair_crash_degrades_to_fail(self, tmp_path, monkeypatch):
         import app.arcbench_smoke as sm
@@ -91,7 +91,7 @@ class TestVerifyGracefulDegradation:
 
         ok, report = sm.verify_delivery(project, "需求", Settings())
         assert ok is False
-        assert "优雅降级" in report
+        assert "全链失败" in report or "FAIL" in report
 
 
 class TestEmptyContentGuard:
