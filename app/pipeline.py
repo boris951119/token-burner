@@ -537,6 +537,29 @@ class Pipeline:
             stage_box[0] = "模块开发"
             self._emit("stage", stage=stage_box[0])  # M8-4
 
+            # 生成时约束注入（generation-5 取证：命名漂移是最高频缺陷族）
+            # 构建全模块导出符号摘要，注入 dev_loop——后续模块生成时
+            # 能看到其他模块的导出名，消除 auth_bp/bp 式命名漂移
+            # 任何异常静默吞掉——约束注入是增强，不能阻塞主流程
+            try:
+                if interfaces:
+                    peer_lines = []
+                    for mod_name, mod_contract in interfaces.items():
+                        if not isinstance(mod_contract, dict):
+                            continue
+                        exports = mod_contract.get("exports") or []
+                        if exports:
+                            peer_lines.append(
+                                f"- {mod_name}: {', '.join(exports[:8])}")
+                    if peer_lines:
+                        dev_loop.peer_exports_summary = (
+                            "## 全模块导出符号清单（组装模块将按这些名字 import，"
+                            "你的模块必须导出契约中列出的符号）\n"
+                            + "\n".join(peer_lines)
+                        )
+            except Exception:
+                pass
+
             # 中断恢复（产品审计问题 4）：进入模块开发前落盘恢复快照——
             # 恢复所需的最小充分状态（order / plans / interfaces / 模式 / 模型）
             self._persist_pipeline_state(
