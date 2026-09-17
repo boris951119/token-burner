@@ -246,6 +246,12 @@ class ModelClient:
             try:
                 return self._call_with_wall_clock(fn, kwargs)
             except Exception as exc:
+                # keep7v 取证：墙钟超时已实打实耗掉 limit 秒，同腿重试
+                # 只会再耗一次（网关挂连接 ×(1+重试)×20min 可烧穿整条
+                # 链）。换腿才是正确重试——立即上抛交给上层模型备胎链。
+                if isinstance(exc, TimeoutError):
+                    raise RuntimeError(
+                        f"{error_prefix}（{model}）: {exc}") from exc
                 if not _is_transient(exc):
                     raise RuntimeError(
                         f"{error_prefix}（{model}）: {exc}"

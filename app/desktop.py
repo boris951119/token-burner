@@ -43,14 +43,22 @@ class Bridge:
         from app.server import create_app
         from starlette.testclient import TestClient
 
-        self._client = TestClient(create_app())
+        self._app = create_app()
+        self._client = TestClient(self._app)
         self._lock = threading.Lock()
 
     def request(self, method: str, path: str, body: str | None) -> dict:
-        kwargs: dict = {}
+        # 工作台 403 取证：_require_session 校验 X-Session-Token，
+        # 桥接层注入自家 app 签发的令牌（CSRF 防护只防浏览器跨站，
+        # 同进程桥接天然可信）。__new__ 手工构造的实例无 _app →
+        # 回退 TestClient.app（二者同源）。
+        app = getattr(self, "_app", None) or self._client.app
+        kwargs: dict = {
+            "headers": {"X-Session-Token": app.state.session_token}
+        }
         if body is not None:
             kwargs["content"] = body.encode("utf-8")
-            kwargs["headers"] = {"Content-Type": "application/json"}
+            kwargs["headers"]["Content-Type"] = "application/json"
         with self._lock:
             resp = self._client.request(method, path, **kwargs)
         return {"status": resp.status_code, "body": resp.text}

@@ -338,6 +338,15 @@ def main(argv: list[str] | None = None) -> int:
         import traceback
 
         traceback.print_exc()  # 平台侧也需可追溯；本地调试靠 stderr
+        # stdout 重定向丢失时仍有现场（keep7 取证：traceback 只进
+        # stderr 曾导致尸检无崩溃证据）
+        try:
+            crash = Path(workdir) / "logs" / "crash.txt"
+            crash.parent.mkdir(parents=True, exist_ok=True)
+            crash.write_text(
+                traceback.format_exc(), encoding="utf-8")
+        except Exception:
+            pass
         bridge.run_failed(f"管线异常: {exc}")
         return 1
 

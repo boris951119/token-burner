@@ -87,3 +87,27 @@ class TestBridgeRequest:
             t.join()
         assert len(results) == 8
         assert all(r["status"] == 200 for r in results)
+
+
+class TestBridgeSessionToken:
+    """工作台 403 取证（用户白天实测）：_require_session 校验
+    X-Session-Token，桥接层必须注入自家 app 签发的令牌，否则桌面
+    模式写端点全 403。"""
+
+    def test_bridge_write_connection_succeeds(self, bridge):
+        r = bridge.request(
+            "POST", "/api/connections",
+            '{"name": "t", "base_url": "https://x/v1", '
+            '"api_key": "sk-test-123", "models": ["openai/m"]}')
+        assert r["status"] == 200, r["body"]
+        import json as _json
+        cid = _json.loads(r["body"])["connection"]["id"]
+        # 清理，避免污染其它测试的连接库状态
+        bridge.request("DELETE", f"/api/connections/{cid}", None)
+
+    def test_bridge_token_matches_app_state(self, bridge):
+        assert bridge._app.state.session_token
+        issued = bridge.request("GET", "/api/session", None)
+        import json as _json
+        assert _json.loads(issued["body"])["token"] == \
+            bridge._app.state.session_token

@@ -15,7 +15,9 @@ import pytest
 
 from app.arcbench_smoke import (
     _extract_body,
+    _is_script_defect,
     _journey_gate,
+    _JOURNEY_BOILERPLATE,
     _probe_routes,
     run_smoke,
 )
@@ -467,3 +469,56 @@ class TestTracebackForensics:
             "NameError: name 'client' is not defined"
         )
         assert _is_script_defect(report)
+
+
+# ---- keep7w 取证：旅程脚本直连数据库 / 302 误杀 → 生成期拦截家族 ----
+
+
+class TestKeep7wGuards:
+    def test_script_defect_regex_catches_sqlite_error(self):
+        """脚本直连连错库（no such table）= 脚本缺陷，不送应用修复。"""
+        report = (
+            "Traceback (most recent call last):\n"
+            '  File "C:/Temp/arcbench_journey.py", line 12, in <module>\n'
+            '    row = db.execute("SELECT id FROM users").fetchone()\n'
+            "sqlite3.OperationalError: no such table: users"
+        )
+        assert _is_script_defect(report)
+
+    def test_journey_user_prompts_carry_new_rules(self):
+        from app.arcbench_smoke import _JOURNEY_USER
+
+        assert "follow_redirects=True" in _JOURNEY_USER
+        assert "禁止 import sqlite3" in _JOURNEY_USER
+        assert "禁止 import 应用内部模块" in _JOURNEY_USER
+
+    def test_scan_blocks_sqlite_and_internal_imports(self, app_code):
+        from app.arcbench_smoke import _journey_script_dangers
+
+        body_bad = (
+            "import sqlite3\n"
+            "from web.web import bp\n"
+            "resp = c.get('/api/health')\n"
+        )
+        dangers = _journey_script_dangers(body_bad, "web.web", app_code)
+        assert any("sqlite3" in d for d in dangers)
+        assert any("web" in d for d in dangers)
+
+    def test_scan_passes_clean_body(self, app_code):
+        from app.arcbench_smoke import _journey_script_dangers
+
+        assert _journey_script_dangers(
+            _GOOD_BODY, "app_main", app_code) == []
+
+    def test_sqlite_body_intercepted_then_regen_passes(self, app_code):
+        """v1 带 import sqlite3 → 扫描拦截重生成；v2 干净 → PASS，
+        全程不进应用修复通道。"""
+        notes: list[str] = []
+        bad = "import sqlite3\ndb = sqlite3.connect('x.db')\n" + _GOOD_BODY
+        llm = _ScriptedLLM([bad, _GOOD_BODY])
+        ok, report = _journey_gate(
+            app_code, app_code.parent, "t", llm, 3, notes
+        )
+        assert ok, (notes, report)
+        assert any("扫描拦截" in n for n in notes)
+        assert not any("RepoFixer" in n for n in notes)

@@ -121,3 +121,138 @@ class TestEmptyContentGuard:
         llm = sm._llm_from(settings)
         out = llm("s", "u")
         assert out == "真实方案"
+
+
+class TestAutoRepairLlmCallable:
+    """keep7 取证：auto_repair 的 llm 曾被内层同名函数遮蔽且漏 return，
+    RepoFixer 拿到 None→空文本→rounds=0，修复通道整体静默失效。
+    回归断言：传给 RepoFixer 的 llm 必须返回非空字符串，
+    且 fix() 返回后 auto_repair 如实报告轮次。"""
+
+    def test_llm_callable_returns_nonempty_and_rounds_reported(
+            self, tmp_path, monkeypatch):
+        import types
+
+        import app.arcbench_smoke as sm
+
+        class _R:
+            content = "修复方案内容"
+
+        class _MC:
+            def __init__(self, settings):
+                self.calls = []
+
+            def chat(self, model, messages):
+                self.calls.append(model)
+                return _R()
+
+        monkeypatch.setattr("app.utils.model_client.ModelClient", _MC)
+
+        smoke_calls = {"n": 0}
+
+        def fake_run_smoke(code_dir):
+            smoke_calls["n"] += 1
+            if smoke_calls["n"] == 1:
+                return False, "GET / -> 404（入口路由缺失？）"
+            return True, "all ok"
+
+        monkeypatch.setattr(sm, "run_smoke", fake_run_smoke)
+
+        captured = {}
+
+        class _FakeRepoFixer:
+            def __init__(self, llm, project_dir, test_cmd=None,
+                         max_rounds=3):
+                captured["llm"] = llm
+
+            def fix(self, issue):
+                captured["issue"] = issue
+                out = captured["llm"]("system", "user")  # 旧 bug 处拿到 None
+                assert out and out.strip(), \
+                    "llm 可调用必须返回非空内容（keep7 回归）"
+                return types.SimpleNamespace(ok=True, rounds=2)
+
+        monkeypatch.setattr("app.agents.repo_fixer.RepoFixer",
+                            _FakeRepoFixer)
+
+        (tmp_path / "code").mkdir()
+        settings = Settings(models=["openai/glm-5.3",
+                                    "openai/deepseek-v4-pro",
+                                    "openai/minimax-m3"])
+        ok, report = sm.auto_repair(tmp_path, settings, max_rounds=3)
+        assert ok, report
+        assert "修复方案内容" == captured["llm"]("s", "u")
+        assert "2 轮" in report, f"轮次必须如实报告: {report}"
+
+
+class TestMechFixBeforeLlm:
+    """用户指令「修复不能靠概率」：冒烟 FAIL 后零 LLM 机械修复必须
+    先于 LLM 修复出牌；机械修好则跳过 LLM 通道。"""
+
+    def _settings(self):
+        return Settings(models=["openai/glm-5.3",
+                                "openai/deepseek-v4-pro",
+                                "openai/minimax-m3"])
+
+    def test_mech_fix_success_skips_llm(self, tmp_path, monkeypatch):
+        import app.arcbench_smoke as sm
+
+        (tmp_path / "code").mkdir()
+        order = []
+
+        smoke_calls = {"n": 0}
+
+        def fake_run_smoke(code_dir):
+            smoke_calls["n"] += 1
+            if smoke_calls["n"] == 1:
+                return False, "from auth import register  # 漂移"
+            return True, "机械修复后通过"
+
+        monkeypatch.setattr(sm, "run_smoke", fake_run_smoke)
+        monkeypatch.setattr(
+            sm, "run_all_fixers",
+            lambda code_dir, ddl: (order.append("mech"),
+                                   {"import路径漂移": ["x"]})[1])
+        monkeypatch.setattr(
+            sm, "collect_ddl", lambda code_dir: (order.append("ddl"), {})[1])
+
+        def fail_auto_repair(*a, **k):
+            order.append("llm")
+            raise AssertionError("机械修复已通过冒烟，LLM 通道不应出牌")
+
+        monkeypatch.setattr(sm, "auto_repair", fail_auto_repair)
+        monkeypatch.setattr(sm, "_beat", lambda *a, **k: None)
+        monkeypatch.setattr(sm, "_llm_from",
+                            lambda settings: (lambda s, u: "ok"))
+        monkeypatch.setattr(
+            sm, "_journey_gate",
+            lambda *a, **k: (True, "journey ok"))
+
+        ok, report = sm.verify_delivery(tmp_path, "需求", self._settings())
+        assert ok, report
+        assert order == ["ddl", "mech"], f"机械修复必须先出牌: {order}"
+        assert "mech-fix" in report
+
+    def test_mech_fix_empty_falls_to_llm(self, tmp_path, monkeypatch):
+        import app.arcbench_smoke as sm
+
+        (tmp_path / "code").mkdir()
+        order = []
+        monkeypatch.setattr(sm, "run_smoke",
+                            lambda code_dir: (False, "smoke fail"))
+        monkeypatch.setattr(sm, "run_all_fixers",
+                            lambda code_dir, ddl: {})
+        monkeypatch.setattr(sm, "collect_ddl", lambda code_dir: {})
+        monkeypatch.setattr(
+            sm, "auto_repair",
+            lambda *a, **k: (order.append("llm"), (True, "LLM 修好"))[1])
+        monkeypatch.setattr(sm, "_beat", lambda *a, **k: None)
+        monkeypatch.setattr(sm, "_llm_from",
+                            lambda settings: (lambda s, u: "ok"))
+        monkeypatch.setattr(
+            sm, "_journey_gate",
+            lambda *a, **k: (True, "journey ok"))
+
+        ok, report = sm.verify_delivery(tmp_path, "需求", self._settings())
+        assert ok, report
+        assert order == ["llm"], "机械修复无发现时必须落到 LLM 通道"

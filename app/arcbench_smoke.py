@@ -33,6 +33,10 @@ import sys
 import tempfile
 from pathlib import Path
 
+# 零 LLM 确定性修复（keep7 取证：修复通道必须先机械后 LLM）
+from app.utils.auto_fixer import run_all_fixers, _externally_importable
+from app.utils.schema_audit import collect_ddl
+
 _VERIFY_TEMPLATE = '''\
 """ArcBench 集成冒烟（自动生成）：import 全模块 + create_app + /api/health。"""
 import sys
@@ -285,10 +289,13 @@ _JOURNEY_SYSTEM = (
 _JOURNEY_STEP_RE = re.compile(r"c\.(?:get|post|put|delete|patch)\(")
 
 # 脚本自身缺陷分类（r11 取证）：这些异常 + 脚本帧 = 脚本从未跑到断言，
-# 是脚本 bug 而非应用缺陷（AssertionError 排除——那可能是真断言失败）
+# 是脚本 bug 而非应用缺陷（AssertionError 排除——那可能是真断言失败）。
+# keep7w 取证补充：sqlite3.OperationalError/DatabaseError = 脚本直连
+# 数据库连错库（`no such table`），属脚本缺陷走重生成，不冤枉应用。
 _SCRIPT_DEFECT_RE = re.compile(
     r"\b(NameError|UnboundLocalError|AttributeError|KeyError|IndexError"
-    r"|TypeError|SyntaxError|IndentationError)\b\s*:")
+    r"|TypeError|SyntaxError|IndentationError)\b\s*:"
+    r"|\bsqlite3\.(?:OperationalError|DatabaseError|ProgrammingError)\b")
 
 
 def _anchor_coverage_section(code_dir: Path, requirement: str) -> str:
@@ -396,9 +403,17 @@ _JOURNEY_USER = """根据需求摘要与真实路由表，生成该 Web 应用�
 4. 成功路径的状态码断言用 `resp.status_code in (200, 201)`（合法实现
    可能返回 200 或 201，硬编码单一值会误杀正确应用）；失败分支断言
    `in (400, 401, 403, 409)` 区间；
-5. 业务数据现场创建（先注册的账号就用于登录；列表响应里的值取自
+5. **页面导航（首页/登录页/列表页等 GET 页面）一律用
+   `c.get(url, follow_redirects=True)` 并断言最终状态码**——评测方
+   真实浏览器会自动跟随重定向，登录页 302→200 属合法实现（keep7w
+   取证：硬编码 200 断言误杀 302 重定向）；
+6. 业务数据现场创建（先注册的账号就用于登录；列表响应里的值取自
    实际响应再断言，不要凭空假设精确值）；
-6. 每步 resp = c.post(...)/c.get(...) 后立刻 assert，断言消息含步骤名。
+7. **禁止 import sqlite3，禁止 import 应用内部模块**（如 _shared、
+   data_core 等），数据断言一律取自 HTTP 响应体——响应里没有的数据
+   按缺失处理，如实让断言失败，由应用修复通道补齐（keep7w 取证：
+   脚本直连数据库连错库报 `no such table`，从未走到业务断言）；
+8. 每步 resp = c.post(...)/c.get(...) 后立刻 assert，断言消息含步骤名。
 
 行为探针（除主旅程外必须包含，各 1-2 步即可）：
 A. 重复注册拒绝：用已注册成功的同一用户名再注册一次，断言
@@ -440,7 +455,8 @@ def auto_shim_imports(code_dir: Path) -> list[str]:
         return []
     real: dict[str, Path] = {}
     for child in code_dir.iterdir():
-        if child.name.startswith(("_", ".")) or child.name == "tests":
+        if child.name.startswith(".") or child.name in ("__pycache__",
+                                                        "tests"):
             continue
         if child.is_dir() and (child / "__init__.py").exists():
             real[child.name] = child
@@ -448,6 +464,8 @@ def auto_shim_imports(code_dir: Path) -> list[str]:
             real[child.stem] = child
     if not real:
         return []
+
+    stdlib = getattr(sys, "stdlib_module_names", ())
 
     # 收集顶层缺失导入名及其 wanted 符号
     missing: dict[str, set[str]] = {}
@@ -460,13 +478,20 @@ def auto_shim_imports(code_dir: Path) -> list[str]:
             continue
         for m in re.finditer(r"^\s*(?:import|from)\s+(\w+)", src, re.MULTILINE):
             name = m.group(1)
+            # keep7 取证：`import re` 被当漂移收集，"re" in "data_core"
+            # 子串匹配成立 → 生成 re.py 遮蔽标准库。标准库/三方包/下划线
+            # 名绝不垫。
+            if (name in stdlib or name.startswith("_")
+                    or _externally_importable(name)):
+                continue
             if name in real or name in missing:
                 continue
             missing[name] = set()
         for m in re.finditer(
                 r"^\s*from\s+(\w+)\s+import\s+([^\n#]+)", src, re.MULTILINE):
             pkg, syms = m.group(1), m.group(2)
-            if pkg in real:
+            if (pkg in real or pkg in stdlib or pkg.startswith("_")
+                    or _externally_importable(pkg)):
                 continue
             for raw in syms.split(","):
                 sym = raw.strip().split(" as ")[0].strip()
@@ -478,7 +503,9 @@ def auto_shim_imports(code_dir: Path) -> list[str]:
         if (code_dir / f"{name}.py").exists() or (code_dir / name).is_dir():
             continue  # 已存在（可能为上轮垫片）——不重复
         near = [p for p in real
-                if p.endswith("_" + name) or p.startswith(name) or name in p]
+                if p.endswith("_" + name)
+                or (len(name) >= 3
+                    and (p.startswith(name) or name in p))]
         if len(near) != 1:
             continue  # 无唯一高置信近名 → 不垫（宁漏不误）
         target = near[0]
@@ -643,6 +670,37 @@ def _extract_body(text: str) -> str:
     return t.strip()
 
 
+_JOURNEY_IMPORT_RE = re.compile(r"^\s*(?:import|from)\s+([\w.]+)", re.MULTILINE)
+
+
+def _journey_script_dangers(candidate: str, app_module: str,
+                            code_dir: Path) -> list[str]:
+    """旅程脚本生成期拦截（keep7w 取证家族）：在通用危险扫描之上
+    叠加旅程专属禁令——直连 sqlite3 与应用内部模块导入。
+
+    脚本连错库报 `no such table` 从未走到业务断言，却会污染应用修复
+    通道空转烧轮次——第一道门就拦下，送回重生成。"""
+    from app.execution.local_executor import scan_dangerous
+    dangers = list(scan_dangerous(candidate))
+    internal = {app_module.split(".")[0]}
+    for child in code_dir.iterdir():
+        if child.is_dir() and (child / "__init__.py").exists():
+            internal.add(child.name)
+        elif child.suffix == ".py":
+            internal.add(child.stem)
+    for m in _JOURNEY_IMPORT_RE.finditer(candidate):
+        top = m.group(1).split(".")[0]
+        if top == "sqlite3":
+            dangers.append(
+                "import sqlite3: 旅程脚本禁止直连数据库"
+                "（数据断言一律取自 HTTP 响应）")
+        elif top in internal:
+            dangers.append(
+                f"import {m.group(1)}: 禁止导入应用内部模块"
+                "（只许通过 test client 走接口）")
+    return dangers
+
+
 def _probe_routes(code_dir: Path) -> tuple[str, list[str]] | None:
     """定位组装模块并倾倒真实路由表；(app_module, routes) / None。"""
     code_dir = Path(code_dir).resolve()
@@ -756,8 +814,9 @@ def _journey_gate(
             continue
         dangers = []
         try:
-            from app.execution.local_executor import scan_dangerous
-            dangers = scan_dangerous(candidate)
+            # 只扫 LLM 生成段：样板自身的 from app_module import create_app
+            # 是框架合法装配，不算脚本导入违禁
+            dangers = _journey_script_dangers(body, app_module, code_dir)
         except Exception:
             dangers = []
         if dangers:
@@ -941,6 +1000,21 @@ def verify_delivery(
         # --- Phase 1: 冒烟 ---
         ok, report = run_smoke(code_dir)
         if not ok:
+            # 零 LLM 机械修复先出牌（确定性收敛，不烧 token；用户指令
+            # 「修复不能靠概率」）。机械修复后复烟，修好则跳过 LLM 通道。
+            _beat(project_dir, f"验收-R{verify_round}-机械修复")
+            try:
+                mech = run_all_fixers(code_dir, collect_ddl(code_dir))
+            except Exception as exc:
+                mech = {}
+                notes.append(f"[R{verify_round}][mech-fix] 异常降级: {exc!r}"[:120])
+            if mech:
+                notes.append(
+                    f"[R{verify_round}][mech-fix] "
+                    + "; ".join(f"{k}×{len(v)}" for k, v in mech.items()))
+                _beat(project_dir, f"验收-R{verify_round}-机械复烟")
+                ok, report = run_smoke(code_dir)
+        if not ok:
             notes.append(f"[R{verify_round}][smoke] FAIL → auto_repair")
             _beat(project_dir, f"验收-R{verify_round}-冒烟修复")
             try:
@@ -958,8 +1032,8 @@ def verify_delivery(
         # --- Phase 2: 旅程 ---
         notes.append(f"[R{verify_round}][smoke] PASS")
         _beat(project_dir, f"验收-R{verify_round}-旅程")
-        llm = _llm_from(settings)
         try:
+            llm = _llm_from(settings)
             jok, jreport = _journey_gate(
                 code_dir, project_dir, requirement, llm, max_app_rounds, notes
             )
@@ -1100,29 +1174,30 @@ def auto_repair(
     mc = ModelClient(settings)
 
     def llm(system: str, user: str) -> str:
+        # keep7 取证:此处曾有外层包装函数遮蔽同名内层且漏 return,
+        # RepoFixer 拿到 None→空文本→rounds=0,修复通道整体静默失效。
+        # 现扁平化:唯一 llm 即备胎链本体。
         models = tuple(settings.models[:3]) or ("openai/gpt-4o",)
-        # 原语义:修复从开发模型起步(省主帅额度);备胎链补齐全员
+        # 修复从开发模型起步(省主帅额度);主帅压轴
         chain = (models[1:] + models[:1]) if len(models) > 1 else models
-
-        def llm(system: str, user: str) -> str:
-            # 平台首单取证:验收修复阶段无备胎,pro 超时×3 崩穿 main
-            messages = [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ]
-            last_exc: Exception | None = None
-            for m in chain:
-                try:
-                    content = mc.chat(m, messages).content or ""
-                except RuntimeError as exc:
-                    last_exc = exc
-                    continue
-                if not content.strip():
-                    # gen-4 取证:空响应当失败,接力下一模型
-                    last_exc = RuntimeError(f"{m} 返回空内容")
-                    continue
-                return content
-            raise RuntimeError(f"验收 LLM 全链失败（{chain}）: {last_exc}")
+        # 平台首单取证:验收修复阶段无备胎,pro 超时×3 崩穿 main
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ]
+        last_exc: Exception | None = None
+        for m in chain:
+            try:
+                content = mc.chat(m, messages).content or ""
+            except RuntimeError as exc:
+                last_exc = exc
+                continue
+            if not content.strip():
+                # gen-4 取证:空响应当失败,接力下一模型
+                last_exc = RuntimeError(f"{m} 返回空内容")
+                continue
+            return content
+        raise RuntimeError(f"验收 LLM 全链失败（{chain}）: {last_exc}")
 
     ok, report = run_smoke(code_dir)
     if ok:

@@ -766,12 +766,22 @@ async function apiCall(method, path, body) {
     if (r.status >= 400) throw new Error(`HTTP ${r.status}: ${r.body}`);
     return r.body === "" || r.body === null ? null : JSON.parse(r.body);
   }
-  const opts = { method };
+  const opts = { method, headers: { "X-Session-Token": await ensureSession() } };
   if (body !== undefined) {
-    opts.headers = { "Content-Type": "application/json" };
+    opts.headers["Content-Type"] = "application/json";
     opts.body = JSON.stringify(body);
   }
-  const resp = await fetch(API_BASE + path, opts);
+  let resp = await fetch(API_BASE + path, opts);
+  // 服务重启会轮换会话令牌（server.py token_urlsafe 每次启动重生成）：
+  // 403 时清缓存重新签发并重试一次——已打开的旧标签页自愈
+  if (resp.status === 403) {
+    SESSION_TOKEN = "";
+    const fresh = await ensureSession();
+    if (fresh) {
+      opts.headers["X-Session-Token"] = fresh;
+      resp = await fetch(API_BASE + path, opts);
+    }
+  }
   if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
   return resp.json();
 }

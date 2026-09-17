@@ -192,3 +192,19 @@ class TestConnectionEndpoints:
         r = c.post("/api/connections", headers={"X-Session-Token": token},
                    json={"name": "   ", "api_key": "k", "models": ["m"]})
         assert r.status_code == 400
+
+    def test_stale_token_rejected_fresh_token_accepted(self, client):
+        """服务重启轮换令牌（server.py token_urlsafe per boot）：
+        旧令牌必须 403，新签发令牌写成功——前端 403 自愈重试的契约根。"""
+        c, _ = client
+        stale = "token-from-previous-server-boot"
+        r = c.post("/api/connections", headers={"X-Session-Token": stale},
+                   json={"name": "n", "api_key": "k", "models": ["m"]})
+        assert r.status_code == 403
+        assert "缺少有效会话令牌" in r.json()["detail"]
+        fresh = c.get("/api/session").json()["token"]
+        assert fresh != stale
+        ok = c.post("/api/connections", headers={"X-Session-Token": fresh},
+                    json={"name": "n", "base_url": "https://x/v1",
+                          "api_key": "sk-t", "models": ["openai/m"]})
+        assert ok.status_code == 200
