@@ -298,14 +298,13 @@ _SCRIPT_DEFECT_RE = re.compile(
     r"|\bsqlite3\.(?:OperationalError|DatabaseError|ProgrammingError)\b")
 
 
-def _anchor_coverage_section(code_dir: Path, requirement: str) -> str:
-    """锚点覆盖探针段（gen-6 取证家族通用化）：需求承诺的锚点文案
-    在页面响应中的覆盖情况——机械校验，零 LLM。
+def _anchor_missing(code_dir: Path, requirement: str) -> list[str]:
+    """锚点缺口清单（平台 v6 取证：0/32 全挂根因——需求带引号文案
+    被翻译/改写，评测断言逐字落空）。
 
-    通过子进程探针（_ANCHOR_COVERAGE_TEMPLATE）采集全部 GET 页面响应
-    样本，再与需求文本机械提取的锚点做覆盖比对。返回 markdown 段
-    （无锚点/全覆盖/异常返回空串——宁漏不误）。
-    """
+    子进程探针采集全部 GET 页面响应样本，与需求文本机械提取的锚点
+    做覆盖比对，返回缺失锚点列表（异常/无锚点/探针失败返回空——
+    宁漏不误，不因探针自身缺陷冤枉应用）。"""
     try:
         from app.utils.requirement_anchors import (
             collect_anchors_from_text,
@@ -315,8 +314,7 @@ def _anchor_coverage_section(code_dir: Path, requirement: str) -> str:
         buckets = collect_anchors_from_text(requirement)
         anchors = sorted({a for lst in buckets.values() for a in lst})
         if not anchors:
-            return ""
-
+            return []
         probe = Path(tempfile.gettempdir()) / "arcbench_anchor_pages.py"
         probe.write_text(_ANCHOR_COVERAGE_TEMPLATE, encoding="utf-8")
         proc = subprocess.run(
@@ -330,17 +328,54 @@ def _anchor_coverage_section(code_dir: Path, requirement: str) -> str:
                 except ValueError:
                     pass
         if not pages:
-            return ""
-        cov = compute_coverage(pages, anchors)
-        lines = ["", "## 锚点覆盖探针（机械校验）"]
-        for a in cov["missing"][:14]:
-            lines.append(f"- 需求锚点 {a!r} 未出现在任何页面响应中——"
-                         "请在对应页面原文补齐该文案/区块")
-        for a, hits in sorted(cov["where"].items())[:8]:
-            lines.append(f"- 需求锚点 {a!r} 已出现在: {', '.join(hits[:2])}")
-        return "\n".join(lines) + "\n\n"
+            return []
+        return list(compute_coverage(pages, anchors)["missing"])
+    except Exception:
+        return []
+
+
+def _anchor_coverage_section(code_dir: Path, requirement: str) -> str:
+    """锚点覆盖探针段（gen-6 取证家族通用化）：需求承诺的锚点文案
+    在页面响应中的覆盖情况——机械校验，零 LLM。
+
+    通过子进程探针（_ANCHOR_COVERAGE_TEMPLATE）采集全部 GET 页面响应
+    样本，再与需求文本机械提取的锚点做覆盖比对。返回 markdown 段
+    （无锚点/全覆盖/异常返回空串——宁漏不误）。
+    """
+    from app.utils.requirement_anchors import (
+        collect_anchors_from_text,
+        compute_coverage,
+    )
+
+    buckets = collect_anchors_from_text(requirement)
+    anchors = sorted({a for lst in buckets.values() for a in lst})
+    if not anchors:
+        return ""
+    probe = Path(tempfile.gettempdir()) / "arcbench_anchor_pages.py"
+    probe.write_text(_ANCHOR_COVERAGE_TEMPLATE, encoding="utf-8")
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(probe), str(code_dir)],
+            capture_output=True, text=True, timeout=240, cwd=str(code_dir))
     except Exception:
         return ""
+    pages: dict[str, str] = {}
+    for line in (proc.stdout or "").splitlines():
+        if line.startswith("@@PAGES@@"):
+            try:
+                pages = json.loads(line[len("@@PAGES@@"):])
+            except ValueError:
+                pass
+    if not pages:
+        return ""
+    cov = compute_coverage(pages, anchors)
+    lines = ["", "## 锚点覆盖探针（机械校验）"]
+    for a in cov["missing"][:14]:
+        lines.append(f"- 需求锚点 {a!r} 未出现在任何页面响应中——"
+                     "请在对应页面原文补齐该文案/区块")
+    for a, hits in sorted(cov["where"].items())[:8]:
+        lines.append(f"- 需求锚点 {a!r} 已出现在: {', '.join(hits[:2])}")
+    return "\n".join(lines) + "\n\n"
 
 def _schema_audit_section(code_dir: Path, findings: list[str] | None = None) -> str:
     """确定性 schema 审计结论注入修复指令（r13 取证：列名漂移 2 轮未定位）。
@@ -1029,6 +1064,51 @@ def verify_delivery(
                 all_reports.append(f"[R{verify_round}] smoke FAIL: {report[-200:]}")
                 continue  # smoke 还没过，不进旅程，直接下一轮
 
+        # --- Phase 1.5: 锚点覆盖硬门禁（平台 v6 取证：0/32 全挂根因）---
+        # 需求带引号文案（"Take a note"、"Sprint goals" 等）是评测方
+        # 逐字断言的契约——翻译/改写即全挂。冒烟通过≠文案对齐，必须
+        # 独立机械校验+修复，不挤占旅程轮次。
+        _beat(project_dir, f"验收-R{verify_round}-锚点")
+        anchor_ok = True
+        try:
+            missing = _anchor_missing(code_dir, requirement)
+        except Exception:
+            missing = []
+        if missing:
+            anchor_ok = False
+            notes.append(
+                f"[R{verify_round}][anchor] 缺失 {len(missing)} 个需求锚点"
+                f"（前 5: {missing[:5]}）→ 修复")
+            _beat(project_dir, f"验收-R{verify_round}-锚点修复")
+            try:
+                ok2, rep2 = auto_repair(
+                    project_dir, settings, max_rounds=max_app_rounds,
+                    extra_issue=(
+                        "锚点覆盖机械校验失败：以下需求原文中的带引号"
+                        "文案未逐字出现在任何页面响应中（评测方按这些"
+                        "字符串逐字断言，翻译/改写=全部用例失败）：\n"
+                        + "\n".join(f"- {a!r}" for a in missing[:30])
+                        + "\n修复要求：在对应页面/UI 与种子数据中**逐字**"
+                        "补齐这些文案（保持需求原文语言与大小写）；"
+                        "禁止翻译、禁止改写、禁止只改部分页面。"
+                    ),
+                )
+            except Exception as exc:
+                ok2, rep2 = False, f"锚点修复异常: {exc!r}"[:200]
+            try:
+                still = _anchor_missing(code_dir, requirement)
+            except Exception:
+                still = missing
+            anchor_ok = not still
+            notes.append(
+                f"[R{verify_round}][anchor] "
+                f"{'PASS' if anchor_ok else 'FAIL'}"
+                + (f"（仍缺 {len(still)}: {still[:5]}）" if still else ""))
+            if not anchor_ok:
+                all_reports.append(
+                    f"[R{verify_round}] anchor FAIL: {rep2[-200:]}")
+                continue  # 文案契约未对齐，进下一轮（旅程对不上锚点必挂）
+
         # --- Phase 2: 旅程 ---
         notes.append(f"[R{verify_round}][smoke] PASS")
         _beat(project_dir, f"验收-R{verify_round}-旅程")
@@ -1161,10 +1241,13 @@ def _package_layout_section(code_dir: Path) -> str:
 def auto_repair(
     project_dir: Path, settings, max_rounds: int = 3,
     test_cmd: list[str] | None = None,
+    extra_issue: str = "",
 ) -> tuple[bool, str]:
     """冒烟失败后的定向自动修复（RepoFixer 通道）。
 
     test_cmd 缺省 = 基础冒烟；旅程验收传入旅程脚本命令复用同一循环。
+    extra_issue 非空时为锚点修复等非冒烟场景服务——冒烟通过也不早退，
+    以 extra_issue 为主体构造修复指令。
     """
     from app.agents.repo_fixer import RepoFixer
     from app.utils.model_client import ModelClient
@@ -1199,25 +1282,34 @@ def auto_repair(
             return content
         raise RuntimeError(f"验收 LLM 全链失败（{chain}）: {last_exc}")
 
-    ok, report = run_smoke(code_dir)
-    if ok:
-        return True, report
+    if extra_issue:
+        # 非冒烟修复场景（锚点覆盖等）：冒烟通过也要修，指令即主体
+        issue = (
+            extra_issue
+            + "\n\n" + _package_layout_section(code_dir)
+            + "禁止修改 tests/ 目录；禁止重构无关代码；保持既有"
+            "路由与功能不回退。"
+        )
+    else:
+        ok, report = run_smoke(code_dir)
+        if ok:
+            return True, report
 
-    issue = (
-        "集成冒烟失败（评测方以「import 全部模块 + create_app() + "
-        "GET /api/health 返回 200」验收），失败报告如下：\n"
-        + report[-1500:]
-        + "\n"
-        + _package_layout_section(code_dir)
-        + "请最小化修复使冒烟通过：可新增缺失函数、注册缺失路由、"
-        "托管缺失静态页面（index.html 等，放模块目录 static/ 下），"
-        "保证所有模块可导入、create_app 可用、健康检查 200。\n"
-        "硬性约束（r8 取证）：**禁止删除或绕过 create_app 中已有的业务"
-        "路由注册逻辑**（register/login/search/booking 等真实业务端点"
-        "一个都不能少）——import 缺失用补建别名/垫片模块解决，"
-        "而不是删减组装逻辑；修残应用的验收会被下游旅程门禁拒绝。"
-        "禁止修改 tests/ 目录；禁止重构无关代码。"
-    )
+        issue = (
+            "集成冒烟失败（评测方以「import 全部模块 + create_app() + "
+            "GET /api/health 返回 200」验收），失败报告如下：\n"
+            + report[-1500:]
+            + "\n"
+            + _package_layout_section(code_dir)
+            + "请最小化修复使冒烟通过：可新增缺失函数、注册缺失路由、"
+            "托管缺失静态页面（index.html 等，放模块目录 static/ 下），"
+            "保证所有模块可导入、create_app 可用、健康检查 200。\n"
+            "硬性约束（r8 取证）：**禁止删除或绕过 create_app 中已有的业务"
+            "路由注册逻辑**（register/login/search/booking 等真实业务端点"
+            "一个都不能少）——import 缺失用补建别名/垫片模块解决，"
+            "而不是删减组装逻辑；修残应用的验收会被下游旅程门禁拒绝。"
+            "禁止修改 tests/ 目录；禁止重构无关代码。"
+        )
     if test_cmd is None:
         test_cmd = [
             sys.executable,
