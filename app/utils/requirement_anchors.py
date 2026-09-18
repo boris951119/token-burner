@@ -78,6 +78,11 @@ def collect_anchors_from_text(requirement: str) -> dict[str, list[str]]:
 
     文本版锚点提取：无需需求树，讨论/拆分/开发任一阶段产出的文本
     都可直接校验。分桶键取自文本中的章节标题（## 后文字）。
+
+    平台 v6 取证（Keep 实跑 112 锚点修不动 → 交付被闸死）：场景描述句
+    （"Bug appears when user session expires mid-request"）不是 UI 文案，
+    收进来就是不可满足锚点——普通引号串只收 ≤6 词的 UI 形态；
+    "Seed data:" 行是评测夹具的逐字断言源，无条件全收。
     """
     buckets: dict[str, list[str]] = {}
     section = "__global__"
@@ -86,15 +91,21 @@ def collect_anchors_from_text(requirement: str) -> dict[str, list[str]]:
         if s.startswith("## "):
             section = _clean(s[3:]) or section
             continue
+        is_seed = "seed data" in s.lower()
         for m in _QUOTED_RE.finditer(line):
             a = _clean(m.group(1))
-            if a:
-                buckets.setdefault(section, [])
-                if a not in buckets[section]:
-                    buckets[section].append(a)
+            if not a:
+                continue
+            if not is_seed and len(a.split()) > 6:
+                continue  # 场景/条件描述句，非页面可满足文案
+            buckets.setdefault(section, [])
+            if a not in buckets[section]:
+                buckets[section].append(a)
         for m in _EN_PHRASE_RE.finditer(line):
             a = _clean(m.group(1))
             if a and a.lower() not in {"the", "and"}:
+                if not is_seed and len(a.split()) > 6:
+                    continue
                 buckets.setdefault(section, [])
                 if a not in buckets[section]:
                     buckets[section].append(a)

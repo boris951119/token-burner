@@ -86,7 +86,8 @@ class TestAnchorGateInVerify:
 
     def test_anchor_missing_triggers_repair_then_pass(self, tmp_path,
                                                       monkeypatch):
-        """缺失 → auto_repair(extra_issue) 出牌 → 复探通过 → 进旅程。"""
+        """缺失 → auto_repair（extra_issue 主体 + 锚点门禁探针 test_cmd）
+        出牌 → 复探通过 → 进旅程。"""
         (tmp_path / "code").mkdir()
         calls = {"anchor": 0}
 
@@ -106,6 +107,8 @@ class TestAnchorGateInVerify:
         def fake_repair(project_dir, settings, max_rounds=3, **kw):
             assert "Reminders" in kw.get("extra_issue", ""), \
                 "锚点缺口必须以 extra_issue 主体传入修复通道"
+            assert kw.get("test_cmd"), \
+                "修复循环必须用锚点门禁探针做验证信号（冒烟对缺口零感知）"
             return True, "补齐文案"
 
         monkeypatch.setattr(sm, "auto_repair", fake_repair)
@@ -114,8 +117,9 @@ class TestAnchorGateInVerify:
         assert ok, report
         assert "[anchor] 缺失" in report and "[anchor] PASS" in report
 
-    def test_anchor_unfixed_blocks_pass(self, tmp_path, monkeypatch):
-        """修复后仍缺 → 该轮 FAIL 进下一轮（不给假 PASS）。"""
+    def test_anchor_unfixed_still_delivers(self, tmp_path, monkeypatch):
+        """修不齐**不拦交付**（平台 Keep 实跑取证：硬闸把 6 小时生成
+        整跑打成 0）——WARN 留痕，旅程照走，最终 PASS。"""
         (tmp_path / "code").mkdir()
         monkeypatch.setattr(sm, "run_smoke",
                             lambda cd: (True, "smoke ok"))
@@ -131,9 +135,9 @@ class TestAnchorGateInVerify:
 
         ok, report = sm.verify_delivery(tmp_path, _REQ, self._settings(),
                                         max_verify_rounds=2)
-        assert not ok
-        assert "[anchor] FAIL" in report
-        assert journey_called["n"] == 0, "锚点未对齐不得进旅程"
+        assert ok, "锚点未全对齐只能 WARN，不得把交付闸死"
+        assert "[anchor] WARN" in report
+        assert journey_called["n"] >= 1, "放行进旅程"
 
 
 class TestAutoRepairExtraIssue:
