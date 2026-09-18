@@ -416,16 +416,52 @@ class DevLoopEngine:
                     if warnings else ""
                 )
                 if blockers:
-                    # M15-2：报告附修改指导（签名模板/处置二选一），
-                    # 修复 LLM 一看即知怎么改（v0.5 风格冲突 5 轮不收敛根因）
-                    parts = []
-                    for i in blockers:
-                        part = f"[{i.kind}] {i.detail}"
-                        if i.guidance:
-                            part += f"——修改指导: {i.guidance}"
-                        parts.append(part)
-                    failure_report = "接口门禁失败：" + "; ".join(parts)
-                    gate_passed = False
+                    # 平台 v6 取证：extra 类失配（实现 X 但契约未声明）是
+                    # 纯机械失配——实现即权威，契约同步零 LLM（page_detail
+                    # 5 轮 LLM 修复不收敛冻结属此形态）。
+                    # 仅纯 extra 失配才同步：混有 missing 说明代码即将被
+                    # LLM 重写，先同步只会给冻结现场留脏契约。
+                    if all(i.kind == "extra" for i in blockers):
+                        from app.utils.interface_check import (
+                            sync_extra_exports,
+                        )
+
+                        if sync_extra_exports(code, contract):
+                            iface_issues = check_implementation(
+                                module, code, contract,
+                                style=self.settings.contract_style,
+                            )
+                            blockers = [
+                                i for i in iface_issues
+                                if i.severity == "blocking"
+                            ]
+                            warnings = [
+                                i for i in iface_issues
+                                if i.severity == "warning"
+                            ]
+                            warning_note = (
+                                "接口警告（14.2，不阻断）: "
+                                + "; ".join(
+                                    f"[{i.kind}] {i.detail}"
+                                    for i in warnings)
+                                if warnings else ""
+                            )
+                            if not blockers:
+                                self._persist_contract(
+                                    project_id, module, contract)
+                    if blockers:
+                        # M15-2：报告附修改指导（签名模板/处置二选一），
+                        # 修复 LLM 一看即知怎么改（v0.5 风格冲突 5 轮不收敛根因）
+                        parts = []
+                        for i in blockers:
+                            part = f"[{i.kind}] {i.detail}"
+                            if i.guidance:
+                                part += f"——修改指导: {i.guidance}"
+                            parts.append(part)
+                        failure_report = "接口门禁失败：" + "; ".join(parts)
+                        gate_passed = False
+                    else:
+                        gate_passed = True
                 else:
                     gate_passed = True
 
@@ -822,6 +858,34 @@ class DevLoopEngine:
             return ""
         return "逻辑审查失败（M14-7）：" + "; ".join(issues)
 
+    def _persist_contract(
+        self, project_id: str | None, module: str, contract: dict
+    ) -> None:
+        """契约单一事实源落盘（interfaces.json；resume/交付共用）。
+
+        无项目落盘上下文（project_id 为空或项目不存在）时仅保持内存
+        回写（pipeline interfaces 同引用已同步）。
+        """
+        handle = (
+            self.file_manager.get_project(project_id) if project_id else None
+        )
+        if handle is None:
+            return
+        iface_path = handle.root / "interfaces.json"
+        data: dict = {}
+        if iface_path.exists():
+            try:
+                data = json.loads(iface_path.read_text(encoding="utf-8"))
+            except ValueError:
+                data = {}
+        if not isinstance(data, dict):
+            data = {}
+        data[module] = contract
+        iface_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
     def _adapt_contract_style(
         self, module: str, project_id: str | None, code: str, contract: dict
     ) -> None:
@@ -855,27 +919,15 @@ class DevLoopEngine:
             }
             contract["exports"] = rewritten["exports"]
             contract["public_api"] = rewritten["public_api"]
-            handle = (
-                self.file_manager.get_project(project_id) if project_id else None
-            )
-            if handle is None:
-                return  # 无项目落盘上下文（仅内存回写）
-            # interfaces.json 同步（单一事实源；resume/交付共用）
-            iface_path = handle.root / "interfaces.json"
-            data: dict = {}
-            if iface_path.exists():
-                try:
-                    data = json.loads(iface_path.read_text(encoding="utf-8"))
-                except ValueError:
-                    data = {}
-            if not isinstance(data, dict):
-                data = {}
-            data[module] = contract
-            iface_path.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
-            )
+            self._persist_contract(project_id, module, contract)
             # 审计：sessions/style_adaptation.jsonl（同模块同回写幂等不重复记，
             # resume 重放只更新契约不追加行）
+            handle = (
+                self.file_manager.get_project(project_id)
+                if project_id else None
+            )
+            if handle is None:
+                return  # 无项目落盘上下文（审计不落，仅内存回写）
             audit_path = handle.root / "sessions" / "style_adaptation.jsonl"
             if not self._audit_exists(audit_path, record):
                 audit_path.parent.mkdir(parents=True, exist_ok=True)

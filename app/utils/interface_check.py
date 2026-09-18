@@ -231,3 +231,34 @@ def check_map(interfaces: dict[str, dict]) -> list[InterfaceIssue]:
                     )
                 )
     return issues
+
+
+def sync_extra_exports(code: str, contract: dict) -> list[str]:
+    """接口门禁 extra 类失配的机械同步（平台 v6 取证：page_detail
+    5 轮 LLM 修复未对齐冻结——「实现 X 但契约未声明」是纯机械失配，
+    实现即权威，把实现中的公开符号补进契约，零 LLM）。
+
+    只补 extra（实现有、契约无）；missing（契约有、实现无）属内容
+    缺失，留 LLM 修复通道。幂等：已声明的符号不重复追加。
+    返回新增声明（签名串）列表。
+    """
+    if contract is None:
+        return []
+    defs = extract_public_defs(code)
+    if not defs:
+        return []
+    declared: set[str] = set()
+    for entry in list(contract.get("exports", [])) + list(
+            contract.get("public_api", [])):
+        parsed = parse_api_signature(str(entry))
+        if parsed:
+            declared.add(parsed[0])
+    added: list[str] = []
+    for name, params in defs.items():
+        if name in declared:
+            continue
+        sig = f"{name}({', '.join(params)})" if params else name
+        contract.setdefault("exports", []).append(sig)
+        contract.setdefault("public_api", []).append(sig)
+        added.append(sig)
+    return added

@@ -261,6 +261,39 @@ class TestStaticGate:
         assert result.fix_attempts == 1
         assert executor.runs[0]["code"].startswith("def login")
 
+    def test_pure_extra_blocker_synced_without_llm(self, fm):
+        """平台 v6 取证：纯 extra 失配（实现 X 但契约未声明）→ 机械同步
+        契约直接过门禁，零 LLM 修复轮（page_detail 5 轮冻结属此形态）。"""
+        contract = {
+            "imports": [],
+            "exports": ["create_view()"],
+            "public_api": ["create_view"],
+            "dependencies": [],
+        }
+        code = (
+            "def create_view():\n"
+            "    return []\n"
+            "\n"
+            "\n"
+            "def page_detail(note_id):\n"
+            "    return {'id': note_id}\n"
+        )
+        llm = ScriptedLLM([code, "T"])
+        executor = FakeExecutor(["SUCCESS"])
+        engine = make_engine(llm, executor, fm)
+        pid = _create(fm)
+        result = engine.run_module(
+            "notes", project_id=pid, contract=contract
+        )
+        assert result.status == ModuleStatus.SUCCESS
+        assert result.fix_attempts == 0, "纯 extra 失配不应消耗 LLM 修复轮"
+        # 契约单一事实源已同步 page_detail
+        import json as _json
+        data = _json.loads(
+            (fm.get_project(pid).root / "interfaces.json")
+            .read_text(encoding="utf-8"))
+        assert any(s.startswith("page_detail") for s in data["notes"]["exports"])
+
     def test_gate_failure_report_contains_issue(self, fm):
         # 门禁失败报告含具体 issue（供 Dev LLM 定位修复）
         contract = {
