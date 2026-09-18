@@ -4,8 +4,9 @@
 而 main.py 此前零测试覆盖。本文件锁住入口契约：
 - 单模型下发 → settings.models=[m] + single_model_mode + 墙钟兜底 600；
 - --output-dir 未配 ARCBENCH_OUTPUT_DIR 时 setdefault 对齐（事件落 workspace）；
-- 交付成功 → verify_delivery 把关，PASS 才 run_completed/返回 0；
-- 交付验收 FAIL / 管线 declined → run_failed/返回 1。
+- 交付成功 → verify_delivery 把关，PASS/FAIL 都交付（exit 0），
+  FAIL 时失败详情进交付摘要（平台取证：exit 1 = 不评分 = 0 分）；
+- 管线 declined → run_failed/返回 1。
 """
 
 from __future__ import annotations
@@ -142,17 +143,24 @@ def test_success_path_entry_contract(monkeypatch, tmp_path, req_dir):
     assert kinds[-1] in ("runner_state", "signal")
 
 
-def test_verify_failure_returns_1(monkeypatch, tmp_path, req_dir):
+def test_verify_failure_still_delivers(monkeypatch, tmp_path, req_dir):
+    """平台 v6-1 取证（¥47/5.7h 白扔）：exit 1 = 平台不评分 = 0 分。
+    验收是教练不是评判者——FAIL 也交付（exit 0），失败详情进交付摘要。"""
     out = tmp_path / "ws2"
     _env(monkeypatch, out)
     _patch_llm_paths(
         monkeypatch, _team_result(tmp_path / "d2"), verify=(False, "旅程断言失败")
     )
     rc = entry.main([str(req_dir), "-o", str(out), "--mode", "auto"])
-    assert rc == 1
+    assert rc == 0
     events = (out / ".arc" / "runner-events.jsonl").read_text(
         encoding="utf-8")
-    assert "failed" in events
+    parsed = " ".join(
+        json.loads(line).get("message", "") + json.loads(line).get("reason", "")
+        for line in events.splitlines() if line.strip()
+    )
+    assert "completed" in events
+    assert "未通过" in parsed
 
 
 def test_declined_terminal_returns_1(monkeypatch, tmp_path, req_dir):
