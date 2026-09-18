@@ -375,6 +375,20 @@ def main(argv: list[str] | None = None) -> int:
                 bridge.run_failed("交付验收未通过（见 verify 报告）")
                 return 1
         bridge.run_completed(result.deliverable_summary or "交付完成")
+        # 官方 runner 布局适配（6 平台提交取证：布局违约是主死因——
+        # 内部 verify PASS 也因缺 frontend//backend/ 被判模板不完整）。
+        # 导出失败不改变交付终态，但必须留痕诊断。
+        if result.project_dir is not None:
+            try:
+                from app.platform_export import export_platform_layout
+
+                summary = export_platform_layout(workdir, result.project_dir)
+                print("[export] 官方布局已落地: "
+                      f"backend={summary['backend_files']}文件, "
+                      f"frontend={summary['frontend_files']}文件", flush=True)
+            except Exception as exc:
+                print(f"[export] 布局适配失败（交付不受影响）: {exc!r}",
+                      flush=True)
         return 0
     bridge.run_failed(f"管线终点: {result.kind}")
     return 1
