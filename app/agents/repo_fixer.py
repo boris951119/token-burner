@@ -199,10 +199,25 @@ class RepoFixer:
         return True, resolved.relative_to(self.repo).as_posix()
 
     def _apply(self, changed: dict[str, str]) -> None:
-        for rel, content in changed.items():
+        rejected: list[str] = []
+        for rel, content in list(changed.items()):
             target = self.repo / rel
+            # 2026-09-20 取证：修复 LLM 曾把 .py 整文件写成 HTML 残渣
+            # （'<!-- ... -->' 开头）——落盘前语法自证，拒收垃圾写并
+            # 踢出本轮 lineage（防止后续 repatch 继承坏内容放大传播）。
+            if target.suffix == ".py":
+                try:
+                    compile(content, str(target), "exec")
+                except SyntaxError as exc:
+                    print(f"[repo_fix] 拒收语法非法的修复内容 {rel}: {exc}")
+                    rejected.append(rel)
+                    changed.pop(rel)
+                    continue
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
+        if rejected:
+            # 留一条可 grep 的痕迹；对应文件保持磁盘上的旧合法内容
+            print(f"[repo_fix] 本轮拒收 {len(rejected)} 个文件: {rejected}")
 
     def _verify(self, verify_cmd: list[str],
                 test_files: list[str] | None) -> tuple[bool, str]:
