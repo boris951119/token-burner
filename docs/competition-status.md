@@ -1,6 +1,29 @@
 # 竞赛备战状态快照（供会话压缩后续接）
 
-更新时间：2026-09-20 02:30（北京）
+更新时间：2026-09-20 04:30（北京）
+
+## 评分进展（凌晨迭代链）
+
+- 首评 0/32 → 三层根因修复（见下）→ **真实分 1/32**（REQ-1.1 Enter
+  Website 通过；此前被评分解析 bug 报成 0——Playwright JSON 状态字面量
+  是 `passed` 不是 `expected`，bb52e5e 修复）
+- UI 已全英文 + Take a note button + 无 markdown 污染（外科 v2 达成）
+- 剩余根因：**home.py 是硬编码 mockup**（6 张写死卡片+假工具栏），
+  与完整可用的 API 层（增删改查/pin/archive/labels/undo/settings 全就绪）
+  完全脱节；view.py 里有半成品动态页可参考
+- **修复 v3 在跑**（exec_84a33d75，04:20 发车）：auto_repair 的验证信号
+  换成官方真题本尊（scripts/official_probe.py：导出→起服→跑 4 道代表
+  真题 REQ-2.1/2.2/2.8.1/2.3.1），pro 主帅锁定，修完自动全量评分
+
+## 出分决策树（06:30 硬停前无人值守执行）
+
+- **≥8/32** → 重建 v7 包（scripts/build_submission.py 一条命令）→
+  比赛页「Save an agent snapshot」表单上传（合成 DataTransfer 注入 zip
+  字节 + 填名称/API Key → Save）→ Keep+BookStack 双任务发车
+- **1-7/32** → 有分就交（平台有分 > 空手）；提交动作同上
+- **0/32** → 不交，8 点带完整诊断汇报
+- 提交表单字段：Submission name=token-burner-v7；Base URL 默认；API Key=
+  比赛中继 key；Model 保持默认（我们的 config.json 随包覆盖）
 
 ## 本地官方 32 题首评：0/32——三层根因全部取证并已修
 
