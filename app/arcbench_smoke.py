@@ -1441,6 +1441,9 @@ def auto_repair(
         ]
         last_exc: Exception | None = None
         for m in chain:
+            # 逐腿打点：墙钟 600s×3 腿最长 30 分钟无阶段切换，
+            # 不打点会被排障者误判挂死（2026-09-19 本地首跑实测）
+            _beat(project_dir, f"验收-修复LLM-{m}")
             try:
                 content = mc.chat(m, messages).content or ""
             except RuntimeError as exc:

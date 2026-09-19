@@ -107,8 +107,14 @@ def main() -> int:
             [npx, "playwright", "test"],
             cwd=str(GRADE_DIR), env=env2,
             capture_output=True, text=True, timeout=3600)
+        # 全量落盘：后台任务 stdout 块缓冲会被截断，崩溃现场必须落本地
+        run_log = GRADE_DIR / "grade-run.log"
+        run_log.write_text(
+            (proc_test.stdout or "") + "\n===== STDERR =====\n"
+            + (proc_test.stderr or ""), encoding="utf-8")
         tail = (proc_test.stdout or "").splitlines()[-15:]
-        print("[grade] playwright 输出尾部:")
+        print(f"[grade] playwright rc={proc_test.returncode} "
+              f"完整输出: {run_log}")
         for line in tail:
             print("  " + line[:160])
     finally:
@@ -120,7 +126,8 @@ def main() -> int:
 
     report_path = Path(report)
     if not report_path.is_file():
-        print("[grade] 无评分报告（Playwright 崩溃?）")
+        print("[grade] 无评分报告——"
+              f"GRADE_REPORT={report}，现场见 grade-run.log")
         return 2
     data = json.loads(report_path.read_text(encoding="utf-8"))
     specs = data.get("suites", [])
