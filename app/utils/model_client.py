@@ -314,6 +314,15 @@ class ModelClient:
         def _call_and_build(**kw):
             response = completion(**kw)
             raw_holder.append(response)
+            try:
+                # 看门狗进展源（2026-09-19 本地首跑取证）：验收期 LLM 修复
+                # 不产生 Pipeline 事件，5 小时活跃工作被误判楔死强杀——
+                # 每次成功的 LLM 响应都算进展，最大盲区压到一个墙钟窗口。
+                from app.pipeline import touch_progress
+
+                touch_progress()
+            except Exception:
+                pass
             return self._build_response(
                 model, response, json_mode=json_mode, messages=kw["messages"]
             )

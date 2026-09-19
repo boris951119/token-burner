@@ -1157,6 +1157,15 @@ def _beat(project_dir: Path, stage: str, detail: str = "") -> None:
         }, ensure_ascii=False), encoding="utf-8")
     except Exception:
         pass
+    try:
+        # 2026-09-19 本地首跑取证：看门狗只认 Pipeline._emit 的阶段变更，
+        # 验收期 5 小时活跃修复被误判「200 分钟无进展」强杀——验收阶段
+        # 切换同样是进展。
+        from app.pipeline import touch_progress
+
+        touch_progress()
+    except Exception:
+        pass
 
 
 def verify_delivery(
