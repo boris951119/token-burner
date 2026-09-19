@@ -136,6 +136,62 @@ if not ok:
     failures.append(detail)
     print("\\n".join(failures))
     raise SystemExit(1)
+
+# 平台 v6-2 取证：注册 INSERT 报 no such table——DDL 声明了表但建表
+# 初始化未接进启动链路，health/首页双绿照样漏。冒烟追加两步：
+# ① 遍历全部 GET 页面（触发惰性初始化，等价评测方首访动作）
+# ② DDL 声明表 vs 实际 sqlite_master 比对——缺表即 FAIL 并给精确清单
+import re as _re
+import sqlite3 as _sq
+
+for _rule in sorted(app.url_map.iter_rules(), key=lambda r: str(r)):
+    _p = str(_rule)
+    if "GET" not in _rule.methods or "<" in _p:
+        continue
+    if _p.startswith("/api") or "static" in _p:
+        continue
+    try:
+        client.get(_p)
+    except Exception:
+        pass
+
+_declared = set()
+for _py in code.rglob("*.py"):
+    if "__pycache__" in _py.parts:
+        continue
+    try:
+        _src = _py.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        continue
+    for _m in _re.finditer(
+            r"CREATE\\s+TABLE\\s+(?:IF\\s+NOT\\s+EXISTS\\s+)?(\\w+)",
+            _src, _re.IGNORECASE):
+        _declared.add(_m.group(1).lower())
+_missing = []
+if _declared:
+    _existing = set()
+    for _db in code.rglob("*"):
+        if _db.suffix.lower() not in (".db", ".sqlite", ".sqlite3"):
+            continue
+        if "__pycache__" in _db.parts:
+            continue
+        try:
+            _conn = _sq.connect(str(_db))
+            _rows = _conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+            _existing.update(str(r[0]).lower() for r in _rows)
+            _conn.close()
+        except Exception:
+            continue
+    _missing = sorted(t for t in _declared if t not in _existing)
+if _missing:
+    failures.append(
+        "DDL 声明的表在建表初始化后仍不存在: " + ", ".join(_missing[:10])
+        + "（建表 init 未接线——请在 create_app 中调用全部模块的建表/初始化）")
+    print("@@SCHEMA@@" + ",".join(_missing))
+    print("\\n".join(failures))
+    raise SystemExit(1)
+
 print(f"@@MEM@@{_peak_mem_mb():.1f}")
 print("SMOKE_OK")
 '''
