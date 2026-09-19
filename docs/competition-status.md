@@ -27,13 +27,16 @@
 
 ## 本地任务（后台运行中）
 
-- **local_loop 首跑**：本地生成 Keep（带 UI 双杠杆）→ 官方 32 题评分
-- 进度（22:50 实测）：16:56 发车，全部模块 20:07 完成 → 验收 R0 结束 →
-  R1 锚点修复（20:18-21:29，home/notes/seed_data/settings/view 活跃改写）
-  → **R1 旅程修复中**（22:17 仍有写入，跑健在）
-- 输出目录：`.tmp/local-loop-keep-ui1-0919-1656`
+- **local_loop 首跑**：生成 391 分钟全部完成（completed.json 20:07），但
+  **验收尾段 23:27 被看门狗误杀**（rc=75：只认 Pipeline 阶段变更的
+  LAST_PROGRESS，验收期 5 小时活跃修复被判「200 分钟无进展」）
+- **已修复**（af45039）：_beat + 每次 LLM 响应完成均刷新 LAST_PROGRESS
+- **已续跑**（exec_73fb38a1，23:34 发车）：resume_verify.py 验收收尾
+  → local_loop --grade-only 官方评分（FAIL 也评分）
+  ⚠️ completed.json 项目走不进 main.py --resume（keep7 取证），
+  必须用 resume_verify.py
+- 项目：`.tmp/local-loop-keep-ui1-0919-1656/projects/arcbench-app_20260919_165658`
 - 评分报告：`scripts/official_grade/grade-summary.json`
-- 后台任务 ID：exec_f5951d1b-1dd4-4989-a54b-283086e63a1c（完成会通知）
 
 ## 9/19 晚间加固（已提交）
 
