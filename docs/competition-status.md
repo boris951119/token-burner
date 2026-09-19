@@ -1,6 +1,46 @@
 # 竞赛备战状态快照（供会话压缩后续接）
 
-更新时间：2026-09-20 04:30（北京）
+更新时间：2026-09-20 06:15（北京）
+
+## 🚀 v7 双任务已发车（比赛首次有效提交）
+
+- **Submission**: token-burner-v7 = `69803db8196e`（197 文件产品包，
+  含今夜全部修复；API Key=中继 key，model 默认 flash）
+- **Keep run**: `6d980799bdff`（06:05 发车）
+- **BookStack run**: 容器 arcbench-4e3ba21e9f41-g1 已启动（06:12）
+- 预计 5-6h → **中午 11:00-12:30 出分**；同 submission 双任务=资质有效
+- 平台时区注意：服务器时间是 UTC（22:10 = 北京 06:10）
+
+## 本地迭代成果（一夜链路）
+
+0/32 → 1/32 → 3/32 → **5/32**（REQ-1.1 / 2.1 / 2.3.2 / 5.1 / 5.2）
+项目 checkpoint：`.tmp/local-loop-keep-ui1-0919-1656/projects/arcbench-app_20260919_165658`
+（git 检查点到 repair v4 aftermath）
+
+## 夜间修复清单（全部提交入库）
+
+1. af45039 看门狗误杀修复（验收期刷新 LAST_PROGRESS）
+2. fd146b8 评分器输出全量落盘 + 5dece91 BookStack 34 真题本地化
+3. 487fc24 三连：库路径统一 fixer / 锚点垃圾过滤 / UI 全局硬契约
+4. bba203e RepoFixer 语法自证拒收垃圾写（flash 毁文件取证）
+5. bb52e5e official_probe（官方真题当修复验证信号）+ 评分解析修复
+   （`passed` 不是 `expected`——真实分曾被报成 0）
+6. build_submission.py：v7 一条命令出包（基线清单+缺失回补）
+
+## 根因链（平台 0 分病灶全破）
+
+库文件分裂（seed 写 take_a_note.db / API 读 keep.db）→ 机械 fixer ✓；
+内存假后端（_NOTES=[] 不接库）→ 持久化改造 ✓；UI 中文+markdown 星号
+→ 英文化 ✓；首页 mockup 不接数据 → 官方真题驱动修复迭代 ✓
+
+## 08:00 接管后待办
+
+1. 等 Keep/BookStack 出分（runs 页面查），对照本地 5/32 判读
+2. feature_rate 核对（平台 traceability 维度是否 >0）
+3. 出分后继续本地迭代（下一批挂点：More options 菜单/标签管理/搜索
+   高亮/设置页——错误信息都直给定位器）
+4. BookStack 本地彩排（评分侧已就绪：--task bookstack）
+5. 竞赛日 playbook 固化
 
 ## 评分进展（凌晨迭代链）
 
