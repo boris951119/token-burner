@@ -584,6 +584,20 @@ class DevLoopEngine:
 
     # ------------------------------------------------------------------
 
+    def _model_for_module(self, module: str, responsibility: str) -> str:
+        """按产物类型路由写码模型（平台 v6-3 取证：UI 是最重产物，
+        flash 写前端产出占位壳 0/32）。
+
+        UI/组装形态模块（页面/前端/视图/静态托管）→ 主帅模型亲自写；
+        其余（纯后端逻辑/数据层）→ 开发模型。链式兜底不变。"""
+        if self.main_model == self.dev_model:
+            return self.dev_model
+        text = f"{module} {responsibility}".lower()
+        if any(k in text for k in ("view", "web", "ui", "页面", "前端",
+                                   "界面", "视图", "组装", "托管", "静态")):
+            return self.main_model
+        return self.dev_model
+
     def _write_code(
         self, module: str, responsibility: str, contract: dict | None = None,
     ) -> str:
@@ -605,7 +619,7 @@ class DevLoopEngine:
                 + "\n".join(api_lines)
             )
         response = self._chat_resilient(
-            self.dev_model,
+            self._model_for_module(module, responsibility),
             WRITE_CODE_SYSTEM + self._platform_prompt + self._danger_prompt + self._style_prompt,
             self._prompt_with_shared(user),
         )

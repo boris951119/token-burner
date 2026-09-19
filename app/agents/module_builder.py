@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from app.config import Settings
 from app.tools.file_manager import FileManager
 from app.utils.untrusted import sanitize_untrusted
+from app.utils.requirement_anchors import collect_anchors_from_text
 from app.tools.prompt_templates import (
     INTERFACE_SYSTEM,
     INTERFACE_USER,
@@ -68,6 +69,46 @@ class ModulePlan:
     responsibility: str
     dependencies: list[str]
     priority: int
+
+
+_UI_TARGET_KEYS = ("view", "web", "ui", "页面", "前端", "界面", "视图",
+                   "组装", "托管", "静态")
+
+
+def inject_ui_manifest(plans: list[ModulePlan], requirement: str) -> str | None:
+    """UI 页面清单注入（平台 v6-3 取证：占位壳页 0/32——UI 完整性此前
+    无结构化契约）。
+
+    把需求锚点（页面名 + 逐字文案 + 种子数据）作为清单追加到前端/
+    组装模块的职责尾部，成为 write_code 提示词的一部分——UI 完整性
+    从「希望模型自觉」变成「按清单验收」。返回目标模块名或 None。
+    """
+    if not requirement.strip() or not plans:
+        return None
+    try:
+        buckets = collect_anchors_from_text(requirement)
+    except Exception:
+        return None
+    manifest_lines = []
+    for section, anchors in buckets.items():
+        if anchors:
+            manifest_lines.append(
+                f"- {section}: " + "、".join(anchors[:12]))
+    if not manifest_lines:
+        return None
+    # 目标模块：职责/名称含 UI 关键词最多者（并列取 priority 小者）
+    def _score(p: ModulePlan) -> tuple[int, int]:
+        text = (p.name + " " + p.responsibility).lower()
+        return (sum(k in text for k in _UI_TARGET_KEYS), -p.priority)
+
+    target = max(plans, key=_score)
+    if _score(target)[0] <= 0:
+        return None  # 无 UI 形态模块（CLI 类任务）不注入
+    target.responsibility += (
+        "\n\n【UI 页面与文案清单（硬契约，逐字实现——评测按这些字符串"
+        "在渲染可见元素中断言，禁止占位页/隐藏元素/翻译改写）】\n"
+        + "\n".join(manifest_lines))
+    return target.name
 
 
 class ModuleBuilder:
@@ -171,6 +212,7 @@ class ModuleBuilder:
                 if not plans:
                     break
             if plans:
+                inject_ui_manifest(plans, requirement)
                 if project_id:
                     self._persist_module_plans(project_id, plans)
                 return plans
