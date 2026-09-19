@@ -1,6 +1,50 @@
 # 竞赛备战状态快照（供会话压缩后续接）
 
-更新时间：2026-09-19 22:55（北京）
+更新时间：2026-09-20 02:30（北京）
+
+## 本地官方 32 题首评：0/32——三层根因全部取证并已修
+
+凌晨评分（exec_73fb38a1 链）结果 0/32，verify_final ok=False。逐层根因：
+
+1. **库文件分裂**（机械已修，487fc24）：db_core 读写 instance/keep.db，
+   seed_data 把种子 INSERT 进相对路径 take_a_note.db——种子永远进不了
+   API 的库。新 fixer `fix_db_path_unify` 已统一（4 单测）。
+2. **内存假后端**（修复中）：notes.py 用模块级 `_NOTES=[]` 列表当存储，
+   API 根本不读库（库里 38 行含 Sprint goals，/api/notes 永远返回 []）。
+   journey 三轮 LLM 修不动——架构级缺陷非语句级。
+3. **UI 中文 + markdown 污染**（修复中）：界面"我的笔记/搜索笔记…"，
+   按钮渲染成 "**Settings**"（星号成字面文字）；官方 32 题全部用
+   `getByRole('button', {name: /take a note/i})` 英文 ARIA 语义定位
+   ——中文 UI = 全部找不到 = 0 分。composer 是 "+ Create" 不是
+   "Take a note" button。
+
+## 产品加固（今晚已提交）
+
+- af45039 看门狗误杀修复（验收期 LLM 修复刷新 LAST_PROGRESS）
+- 487fc24 三连：库路径统一 fixer + 锚点垃圾 token 过滤（'<模块名>'/
+  正则残渣空烧 3 轮）+ inject_ui_manifest 全局硬契约（英文 role 匹配/
+  禁 markdown 星号/禁内存假后端/单库文件）
+- fd146b8 评分器 playwright 输出全量落盘 grade-run.log
+- 5dece91 BookStack 34 真题本地化 + PLAYWRIGHT_TEST_DIR 任务开关
+
+## 当前在跑（后台 exec_4f988d64，02:00 发车）
+
+`.tmp/repair_ui_store.py` 外科手术修复（探针 ui_store_probe.py 作验证
+信号：API_SEED + UI_ANCHOR + UI_MARKDOWN + UI_LANG 四闸）→ 修完接
+官方 32 题评分（无论修复成败都出分）。预计 03:30-04:30 出新分。
+
+## 出分决策树（无人值守执行）
+
+- **≥8/32** → 从当前 HEAD 打 v7 zip（产品包 197 文件布局，参考
+  token-burner-submission.zip 16:22 版；非 frontend/backend 布局）→
+  浏览器会话上传新 submission → Keep+BookStack 双任务并发发车
+  （平台跑 5-6h，压 8 点接管前出分）
+- **1-7/32** → 再来一轮外科修复（同探针）→ 复评；06:00 硬停前
+  有分就交
+- **0/32** → 不交（白烧 ¥100），8 点带完整诊断汇报
+- 上传通道：平台 /api/submissions 需登录态，ak_ key 不认（409 实测）；
+  备选=浏览器页面内 fetch（用户会话 cookie 在 IAB 标签里）；
+  IAB 文件选择器不可自动化，若表单是 file input 需走 API 路径
 
 ## 比赛规则（已钉死）
 
