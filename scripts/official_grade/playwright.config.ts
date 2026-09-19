@@ -1,7 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
-  testDir: './specs/keep',
+  testDir: process.env.PLAYWRIGHT_TEST_DIR || './specs/keep',
   timeout: Number(process.env.PLAYWRIGHT_TEST_TIMEOUT || 60_000),
   expect: { timeout: 10_000 },
   fullyParallel: false,

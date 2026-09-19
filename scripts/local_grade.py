@@ -101,6 +101,7 @@ def main() -> int:
         report = args.report or str(GRADE_DIR / "grade-report.json")
         env2 = dict(os.environ, TARGET_URL=f"http://127.0.0.1:{port}",
                     GRADE_REPORT=report,
+                    PLAYWRIGHT_TEST_DIR=f"./specs/{args.task}",
                     PLAYWRIGHT_OUTPUT_DIR=str(GRADE_DIR / "test-results"))
         npx = shutil.which("npx") or shutil.which("npx.cmd") or "npx"
         proc_test = subprocess.run(
