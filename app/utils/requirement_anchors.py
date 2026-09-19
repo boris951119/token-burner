@@ -73,6 +73,16 @@ def collect_anchors_grouped(tree: dict, fixture_hint: str = "") -> dict[str, lis
     return buckets
 
 
+_GARBAGE_ANCHOR_RE = re.compile(r"[<>$\\`^|*{}\[\]]|\\[a-zA-Z]")
+
+
+def _is_garbage_anchor(a: str) -> bool:
+    """代码/正则/占位符残渣不是 UI 文案（2026-09-20 本地首跑取证：
+    锚点集混入 '<模块名>'、'\\\\$&'、'\\\\s+'，修复轮为不可满足残渣
+    空烧 3 轮）。含代码符号或正则转义、或完全无字母数字者剔除。"""
+    return bool(_GARBAGE_ANCHOR_RE.search(a)) or not re.search(r"\w", a)
+
+
 def collect_anchors_from_text(requirement: str) -> dict[str, list[str]]:
     """管线需求文本（含夹具契约段）→ {来源段: [锚点]}。
 
@@ -94,7 +104,7 @@ def collect_anchors_from_text(requirement: str) -> dict[str, list[str]]:
         is_seed = "seed data" in s.lower()
         for m in _QUOTED_RE.finditer(line):
             a = _clean(m.group(1))
-            if not a:
+            if not a or _is_garbage_anchor(a):
                 continue
             if not is_seed and len(a.split()) > 6:
                 continue  # 场景/条件描述句，非页面可满足文案
@@ -103,7 +113,7 @@ def collect_anchors_from_text(requirement: str) -> dict[str, list[str]]:
                 buckets[section].append(a)
         for m in _EN_PHRASE_RE.finditer(line):
             a = _clean(m.group(1))
-            if a and a.lower() not in {"the", "and"}:
+            if a and a.lower() not in {"the", "and"} and not _is_garbage_anchor(a):
                 if not is_seed and len(a.split()) > 6:
                     continue
                 buckets.setdefault(section, [])

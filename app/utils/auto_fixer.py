@@ -399,6 +399,152 @@ def fix_stdlib_shadow(code_dir: Path) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# 修复器 8：库文件路径漂移（多模块各自为库）
+# ---------------------------------------------------------------------------
+
+_DB_FILE_LIT_RE = re.compile(
+    r"""['"]([^'"\n]+\.(?:db|sqlite3?|db3))['"]""", re.IGNORECASE)
+
+
+def _db_assigns(src: str) -> list[tuple[str, int, str]]:
+    """模块级赋值中含 .db 字面量的 (目标名, 起始行, 首行文本) 清单。"""
+    import ast as _ast
+
+    try:
+        tree = _ast.parse(src)
+    except SyntaxError:
+        return []
+    out: list[tuple[str, int, str]] = []
+    for node in tree.body:
+        if not isinstance(node, _ast.Assign):
+            continue
+        seg = _ast.get_source_segment(src, node) or ""
+        if not _DB_FILE_LIT_RE.search(seg):
+            continue
+        for t in node.targets:
+            if isinstance(t, _ast.Name):
+                out.append((t.id, node.lineno,
+                            seg.splitlines()[0].strip()))
+    return out
+
+
+def _mod_import_name(py: Path, code_dir: Path) -> str:
+    """相对 code_dir 的可导入名：包文件→pkg.pkg，包 __init__→pkg，根文件→stem。"""
+    rel = py.relative_to(code_dir)
+    if len(rel.parts) == 1:
+        return py.stem
+    parts = list(rel.parts)
+    if parts[-1] == "__init__.py":
+        return parts[0]
+    return f"{parts[0]}.{parts[-1][:-3]}"
+
+
+def _module_imports(src: str) -> set[str]:
+    import ast as _ast
+
+    names: set[str] = set()
+    try:
+        tree = _ast.parse(src)
+    except SyntaxError:
+        return names
+    for node in _ast.walk(tree):
+        if isinstance(node, _ast.Import):
+            names.update(a.name for a in node.names)
+        elif isinstance(node, _ast.ImportFrom) and node.module:
+            names.add(node.module)
+    return names
+
+
+def fix_db_path_unify(code_dir: Path) -> list[str]:
+    """统一多模块 sqlite 库文件路径（2026-09-20 本地首跑取证：
+    db_core 读写 instance/keep.db，seed_data 把种子 INSERT 进相对路径
+    take_a_note.db——两个库文件，种子永远进不了 API 的库；journey 三轮
+    LLM 修复无法定位此类「物理分裂」。机械统一：
+    核心模块 = 常量为 __file__/Path 锚定表达式者；其余模块的裸路径
+    字面量改写为 importlib 直取核心子模块常量（绕开 __init__ 星号
+    导出丢下划线名的坑），核心反依赖目标模块（环）时跳过不碰。"""
+    code_dir = Path(code_dir)
+    fixes: list[str] = []
+    cand: dict[Path, tuple[str, int, str, str]] = {}
+    for py in _py_files(code_dir):
+        try:
+            src = py.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        assigns = _db_assigns(src)
+        if assigns:
+            cand[py] = (*assigns[0], src)
+    if len(cand) < 2:
+        return fixes
+
+    def _anchor_abs(seg: str) -> bool:
+        return ("__file__" in seg) or bool(
+            re.search(r"=\s*_?[A-Za-z_\w]*_?BASE_DIR\b|\bPath\(", seg))
+
+    core_py = None
+    for py, (name, _ln, seg, _src) in cand.items():
+        if _anchor_abs(seg):
+            core_py = py
+            break
+    if core_py is None:
+        return fixes
+    core_name, _ln, core_seg, core_src = cand[core_py]
+    core_files = set(m.group(1).lower()
+                     for m in _DB_FILE_LIT_RE.finditer(core_seg))
+    if not core_files:
+        return fixes
+    core_imports = _module_imports(core_src)
+    core_mod = _mod_import_name(core_py, code_dir)
+
+    for py, (name, lineno, seg, src) in sorted(cand.items()):
+        if py == core_py:
+            continue
+        if _anchor_abs(seg):
+            continue
+        lits = [m.group(1) for m in _DB_FILE_LIT_RE.finditer(seg)]
+        if not lits:
+            continue
+        stems = {l.replace("\\", "/").split("/")[-1].lower() for l in lits}
+        if stems & core_files:
+            continue  # 同名同库，不碰
+        # 环检测：核心模块顶层 import 了目标模块 → 跳过
+        target_mod = _mod_import_name(py, code_dir)
+        if any(m == target_mod or m.startswith(target_mod + ".")
+               for m in core_imports):
+            continue
+        lines = src.splitlines(keepends=True)
+        # 定位该赋值所在行（AST lineno 即赋值首行）
+        indent = re.match(r"\s*", lines[lineno - 1]).group(0)
+        original = lits[0]
+        repl = (
+            f"{indent}def _unify_db_path(_default={original!r}):\n"
+            f"{indent}    # db-path unify (auto_fixer): 复用 {core_mod} 的库文件，"
+            f"防止多库分裂\n"
+            f"{indent}    try:\n"
+            f"{indent}        import importlib as _il\n"
+            f"{indent}        _m = _il.import_module({core_mod!r})\n"
+            f"{indent}        _v = getattr(_m, {core_name!r}, None)\n"
+            f"{indent}        if _v:\n"
+            f"{indent}            return str(_v)\n"
+            f"{indent}    except Exception:\n"
+            f"{indent}        pass\n"
+            f"{indent}    return _default\n"
+            f"{indent}{name} = _unify_db_path()\n"
+        )
+        lines[lineno - 1] = repl
+        try:
+            new_src = "".join(lines)
+            compile(new_src, str(py), "exec")  # 语法自证
+            py.write_text(new_src, encoding="utf-8")
+            fixes.append(
+                f"{target_mod}.{name}: {original} → 复用 {core_mod}.{core_name}"
+                f"（库文件分裂统一）")
+        except Exception:
+            continue
+    return fixes
+
+
+# ---------------------------------------------------------------------------
 # 修复器 6：模块路径漂移（点路径 + 符号路由）
 # ---------------------------------------------------------------------------
 
@@ -560,6 +706,12 @@ def run_all_fixers(code_dir: Path,
         r = fix_stdlib_shadow(code_dir)
         if r:
             results["标准库遮蔽"] = r
+    except Exception:
+        pass
+    try:
+        r = fix_db_path_unify(code_dir)
+        if r:
+            results["库文件路径漂移"] = r
     except Exception:
         pass
     try:

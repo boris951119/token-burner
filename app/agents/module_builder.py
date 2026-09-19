@@ -107,7 +107,20 @@ def inject_ui_manifest(plans: list[ModulePlan], requirement: str) -> str | None:
     target.responsibility += (
         "\n\n【UI 页面与文案清单（硬契约，逐字实现——评测按这些字符串"
         "在渲染可见元素中断言，禁止占位页/隐藏元素/翻译改写）】\n"
-        + "\n".join(manifest_lines))
+        + "\n".join(manifest_lines)
+        + "\n\n【UI 全局硬规则（2026-09-20 本地官方 32 题 0/32 取证）】\n"
+        "- 界面文案语言必须与需求原文一致：英文需求 → 全英文 UI；\n"
+        "  出现中文界面 = 评分器按英文 role 名定位全部落空 = 0 分；\n"
+        "- 带引号文案必须做成对应控件类型的可见元素（composer/按钮"
+        "用 <button>，搜索框用 placeholder，通知用 snackbar），\n"
+        "  评分器按 getByRole('button', {name}) 这类 ARIA 语义定位；\n"
+        "- 禁止 markdown 符号（**、`、#）出现在任何界面文本中——\n"
+        "  实跑取证按钮被渲染成 '**Settings**'（星号成了字面文字）；\n"
+        "- 数据必须持久化：API 模块禁止用模块级内存列表当存储——\n"
+        "  实跑取证 notes.py 用 _NOTES=[] 当后端，库里的种子数据\n"
+        "  API 永远看不见（评测重启进程即全灭）；读写必须经统一\n"
+        "  db 层，create_app 启动加载 + 增删改写穿；全项目只允许\n"
+        "  一个数据库文件，禁止各模块自建 .db。")
     return target.name
 
 
