@@ -139,7 +139,10 @@ def main() -> int:
         for s in suite.get("suites", []):
             _walk(s)
         for spec in suite.get("specs", []):
-            ok = all(t.get("status") == "expected"
+            # Playwright JSON 报告的状态字面量是 passed/failed/timedOut
+            # （"expected" 是 expectedStatus 字段——04:45 取证：写错字面量
+            # 把真实通过分报成 0）
+            ok = all(t.get("status") == "passed"
                      for t in spec.get("tests", [{}])[0].get("results", []))
             if ok:
                 passed += 1
