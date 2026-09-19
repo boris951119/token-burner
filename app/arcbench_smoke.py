@@ -103,6 +103,7 @@ for mod in mods:
         print(f"create_app <- {mod.__name__}")
         break
 if app is None:
+    print("loaded mods:", [m.__name__ for m in mods], file=sys.stderr)
     failures.append("没有任何模块提供 create_app")
     print("\\n".join(failures))
     raise SystemExit(1)
@@ -201,8 +202,20 @@ print("SMOKE_OK")
 _ANCHOR_COVERAGE_TEMPLATE = '''\
 """ArcBench 锚点覆盖探针（自动生成）：页面响应采样 -> @@PAGES@@{json}。"""
 import json
+import re
 import sys
 from pathlib import Path
+
+
+def _visible_text(html: str) -> str:
+    """提取渲染可见文本（平台 v6-3 取证：LLM 把锚点字符串塞进
+    hidden textarea 骗过子串匹配——子串必须对「可见文本」做）。"""
+    txt = re.sub(r"(?is)<script\\b.*?</script>", " ", html)
+    txt = re.sub(r"(?is)<style\\b.*?</style>", " ", txt)
+    txt = re.sub(r"(?is)<textarea\\b[^>]*>.*?</textarea>", " ", txt)
+    txt = re.sub(r"(?is)<[^>]+(?:hidden|display\\s*:\\s*none)[^>]*>.*?</[^>]+>", " ", txt)
+    txt = re.sub(r"(?s)<[^>]+>", " ", txt)
+    return txt
 
 code = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(code))
@@ -217,14 +230,16 @@ for child in sorted(code.iterdir()):
             if not py.name.startswith("_") and py.stem not in sys.modules:
                 try:
                     mods.append(__import__(py.stem))
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    print("import fail:", py.stem, repr(_exc), file=sys.stderr)
 app = None
 for mod in mods:
     if hasattr(mod, "create_app"):
         app = mod.create_app()
         break
 if app is None:
+    print("loaded mods:", [m.__name__ for m in mods], file=sys.stderr)
+    print("sys.modules keys:", [k for k in sys.modules if not k.startswith("_")], file=sys.stderr)
     raise SystemExit("no create_app")
 client = app.test_client()
 pages = {}
@@ -236,7 +251,7 @@ for rule in sorted(app.url_map.iter_rules(), key=lambda r: str(r)):
         continue
     try:
         r = client.get(p)
-        pages[p] = r.data.decode("utf-8", "replace")[:4000]
+        pages[p] = _visible_text(r.data.decode("utf-8", "replace"))[:4000]
     except Exception as exc:
         pages[p] = "__ERROR__ " + repr(exc)
 print("@@PAGES@@" + json.dumps(pages))
@@ -269,8 +284,8 @@ for child in sorted(code.iterdir()):
             if not py.name.startswith("_") and py.stem not in sys.modules:
                 try:
                     mods.append(__import__(py.stem))
-                except Exception:
-                    pass
+                except Exception as _exc:
+                    print("import fail:", py.stem, repr(_exc), file=sys.stderr)
 
 app = None
 app_module = ""
@@ -280,6 +295,15 @@ for mod in mods:
         app_module = mod.__name__
         break
 if app is None:
+    print("loaded mods:", [m.__name__ for m in mods], file=sys.stderr)
+    print("code dir:", str(code), "exists:", code.is_dir(), file=sys.stderr)
+    try:
+        print("code dir listing:", [c.name for c in code.iterdir()], file=sys.stderr)
+    except Exception as _e:
+        print("code dir listing fail:", repr(_e), file=sys.stderr)
+    print("create_app holders in sys.modules:", [
+        k for k, v in sys.modules.items() if hasattr(v, "create_app")],
+        file=sys.stderr)
     raise SystemExit("没有任何模块提供 create_app")
 
 routes = []
@@ -360,6 +384,7 @@ _ANCHOR_GATE_TEMPLATE = '''\
 RepoFixer 修复循环的验证信号（平台 v6 取证：修复用冒烟验证，冒烟
 本来就过，锚点缺口三轮分文未收敛）。缺失清单打在 @@MISSING@@ 行。"""
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -386,8 +411,23 @@ for mod in mods:
         app = mod.create_app()
         break
 if app is None:
+    print("loaded mods:", [m.__name__ for m in mods], file=sys.stderr)
+    for _name, _m in list(sys.modules.items()):
+        if hasattr(_m, "create_app"):
+            print("module with create_app (not in mods loop):", _name, file=sys.stderr)
     print("@@MISSING@@" + json.dumps(ANCHORS))
     raise SystemExit(1)
+def _visible_text(html: str) -> str:
+    """渲染可见文本提取（平台 v6-3 取证同款——hidden textarea 塞串
+    在门禁探针里同样要防）。"""
+    txt = re.sub(r"(?is)<script\\b.*?</script>", " ", html)
+    txt = re.sub(r"(?is)<style\\b.*?</style>", " ", txt)
+    txt = re.sub(r"(?is)<textarea\\b[^>]*>.*?</textarea>", " ", txt)
+    txt = re.sub(r"(?is)<[^>]+(?:hidden|display\\s*:\\s*none)[^>]*>.*?</[^>]+>", " ", txt)
+    txt = re.sub(r"(?s)<[^>]+>", " ", txt)
+    return txt
+
+
 client = app.test_client()
 pages = {}
 for rule in sorted(app.url_map.iter_rules(), key=lambda r: str(r)):
@@ -398,7 +438,7 @@ for rule in sorted(app.url_map.iter_rules(), key=lambda r: str(r)):
         continue
     try:
         rr = client.get(p)
-        pages[p] = rr.data.decode("utf-8", "replace")[:4000]
+        pages[p] = _visible_text(rr.data.decode("utf-8", "replace"))[:4000]
     except Exception as exc:
         pages[p] = "__ERROR__ " + repr(exc)
 body = " ".join(pages.values()).lower()
@@ -1216,7 +1256,12 @@ def verify_delivery(
                         + "\n".join(f"- {a!r}" for a in missing[:30])
                         + "\n修复要求：在对应页面/UI 与种子数据中**逐字**"
                         "补齐这些文案（保持需求原文语言与大小写）；"
-                        "禁止翻译、禁止改写、禁止只改部分页面。"
+                        "禁止翻译、禁止改写、禁止只改部分页面。\n"
+                        "反作弊约束（平台 v6-3 取证）：文案必须出现在"
+                        "**渲染可见**的界面元素里——禁止塞进 hidden/"
+                        "display:none/屏幕外定位的元素，禁止塞进"
+                        "textarea/script，禁止占位页 stuffing；"
+                        "锚点校验基于渲染可见文本，隐藏塞串=白修。"
                     ),
                 )
             except Exception as exc:
@@ -1413,7 +1458,10 @@ def auto_repair(
         issue = (
             extra_issue
             + "\n\n" + _package_layout_section(code_dir)
-            + "禁止修改 tests/ 目录；禁止重构无关代码；保持既有"
+            + "修复约束：页面必须是**需求描述的真实功能 UI**（含导航、"
+            "表单、列表等真实交互元素），禁止用占位页或隐藏文本塞串充数"
+            "（平台 v6-3 取证：占位壳页 + hidden textarea 塞串导致评测"
+            " 0/32）；禁止修改 tests/ 目录；禁止重构无关代码；保持既有"
             "路由与功能不回退。"
         )
     else:
@@ -1428,7 +1476,10 @@ def auto_repair(
             + "\n"
             + _package_layout_section(code_dir)
             + "请最小化修复使冒烟通过：可新增缺失函数、注册缺失路由、"
-            "托管缺失静态页面（index.html 等，放模块目录 static/ 下），"
+            "补齐缺失页面——但页面必须是**需求描述的真实功能 UI**"
+            "（含导航、表单、列表等真实交互元素），禁止用只含标题或"
+            "「System is running」字样的占位页充数（平台 v6-3 取证：占位壳"
+            "页 + 隐藏文本塞串导致评测 0/32）。"
             "保证所有模块可导入、create_app 可用、健康检查 200。\n"
             "硬性约束（r8 取证）：**禁止删除或绕过 create_app 中已有的业务"
             "路由注册逻辑**（register/login/search/booking 等真实业务端点"

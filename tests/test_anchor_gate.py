@@ -30,7 +30,7 @@ def health():
 
 @bp.route("/")
 def home():
-    return '<input placeholder="Take a note"><div>Sprint goals</div>'
+    return '<div class="create-note">Take a note</div><div>Sprint goals</div>'
 
 
 def create_app():
@@ -181,3 +181,51 @@ class TestAutoRepairExtraIssue:
         assert ok
         assert "Reminders" in captured["issue"], \
             "extra_issue 必须成为修复指令主体"
+
+
+class TestVisibleTextAntiGaming:
+    """平台 v6-3 取证：LLM 把锚点串塞进 hidden textarea 骗过子串
+    匹配——锚点探针必须基于渲染可见文本判定。"""
+
+    def test_hidden_textarea_stuffing_defeated(self, tmp_path):
+        code = tmp_path / "code"
+        # 占位壳页：锚点串全在 hidden textarea 里，页面上没有
+        _write(code / "app_mod" / "__init__.py",
+               "from app_mod.app_mod import *  # noqa: F401,F403\n")
+        _write(code / "app_mod" / "app_mod.py",
+               'from flask import Flask, jsonify\n'
+               'def create_app():\n'
+               '    app = Flask(__name__)\n'
+               '    @app.route("/api/health")\n'
+               '    def health():\n'
+               '        return jsonify(status="ok")\n'
+               '    @app.route("/")\n'
+               '    def home():\n'
+               '        return (\'<textarea hidden>Take a note\\n'
+               'Sprint goals\\nReminders</textarea>\'\n'
+               '                 \'<h1>System is running.</h1>\')\n'
+               '    return app\n')
+        missing = sm._anchor_missing(code, _REQ)
+        assert any("Take a note" in m for m in missing), \
+            "隐藏 textarea 塞串必须被判为缺失"
+        assert any("Sprint goals" in m for m in missing), missing
+
+    def test_visible_copy_still_counts(self, tmp_path):
+        code = tmp_path / "code"
+        _write(code / "app_mod" / "__init__.py",
+               "from app_mod.app_mod import *  # noqa: F401,F403\n")
+        _write(code / "app_mod" / "app_mod.py",
+               'from flask import Flask, jsonify\n'
+               'def create_app():\n'
+               '    app = Flask(__name__)\n'
+               '    @app.route("/api/health")\n'
+               '    def health():\n'
+               '        return jsonify(status="ok")\n'
+               '    @app.route("/")\n'
+               '    def home():\n'
+               '        return \'<input placeholder="Take a note">\' \\n'
+               '               \'<div>Sprint goals</div>\'\n'
+               '    return app\n')
+        missing = sm._anchor_missing(code, _REQ)
+        assert not any("Take a note" in m for m in missing), missing
+        assert not any("Sprint goals" in m for m in missing), missing
