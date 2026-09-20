@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
-"""拼接机械化（v8 P0-a）：AST 扫描模块蓝图/初始化函数，确定性生成
-app_main 的 create_app——组装是确定性工作，不交给概率。
+"""拼接机械化（v8 P0-a）：AST 扫描模块蓝图/路由器/初始化函数，确定性
+生成 app_main 的 create_app——组装是确定性工作，不交给概率。
 
 取证（2026-09-20 BookStack 本地首跑）：LLM 组装的产物 = 空壳 create_app
 （仅 /static）+ 幻觉导入的 main.py + 全库 0 处 /api/health，3 个模块
 修复耗尽冻结——拼接失败是 2/34 的第一根因，非交互层。
 
 生成物（幂等覆盖 app_main/app_main.py）：
-- create_app：注册全部 Blueprint（保留其自带 url_prefix）+ 调用全部
-  init_* 种子/初始化函数 + 保底 /api/health（不存在时补）
+- Flask 版：注册全部 Blueprint + 调用全部 init_* + 保底 /api/health
+- FastAPI 版（9/20 泛化）：include_router 全部 APIRouter + 同上保底；
+  框架甄别见 assemble()
 """
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ from pathlib import Path
 class ModuleSurface:
     name: str                       # 包名（可导入名）
     blueprints: list[tuple[str, str]] = field(default_factory=list)  # (file_stem, var)
+    routers: list[tuple[str, str]] = field(default_factory=list)  # FastAPI (file_stem, var)
     inits: list[tuple[str, str, bool]] = field(default_factory=list)  # (file_stem, func, takes_app)
     parse_errors: list[str] = field(default_factory=list)
     path: Path | None = None
@@ -41,9 +43,13 @@ def _scan_package(pkg_dir: Path, name: str) -> ModuleSurface:
                 for t in node.targets:
                     if isinstance(t, ast.Name) and isinstance(node.value, ast.Call):
                         call = node.value
-                        fn = getattr(call.func, "id", "")
+                        # fastapi.APIRouter() 的 func 是 Attribute，取 attr 名
+                        fn = (getattr(call.func, "id", "")
+                              or getattr(call.func, "attr", ""))
                         if fn == "Blueprint":
                             surface.blueprints.append((py.stem, t.id))
+                        elif fn == "APIRouter":
+                            surface.routers.append((py.stem, t.id))
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 if node.name.startswith("init_"):
                     args = [a.arg for a in node.args.args]
@@ -62,7 +68,7 @@ def _scan_package(pkg_dir: Path, name: str) -> ModuleSurface:
 
 
 def scan_surfaces(code_dir: Path) -> list[ModuleSurface]:
-    """扫全部包：Blueprint 变量与 init_* 函数清单（跳过 _shared/_*）。"""
+    """扫全部包：Blueprint/APIRouter 变量与 init_* 函数清单（跳过 _shared/_*）。"""
     code_dir = Path(code_dir)
     surfaces: list[ModuleSurface] = []
     for child in sorted(code_dir.iterdir()):
@@ -73,7 +79,7 @@ def scan_surfaces(code_dir: Path) -> list[ModuleSurface]:
         if not (child / "__init__.py").exists():
             continue
         surface = _scan_package(child, child.name)
-        if surface.blueprints or surface.inits:
+        if surface.blueprints or surface.routers or surface.inits:
             surfaces.append(surface)
     return surfaces
 
@@ -131,11 +137,79 @@ if __name__ == "__main__":
 '''
 
 
+def generate_app_main_fastapi(surfaces: list[ModuleSurface]) -> str:
+    """FastAPI 版 app_main（9/20 泛化：生成项目可能是 FastAPI 风格，
+    APIRouter 与 Blueprint 同构对待——确定性 include_router + 保底 health）。"""
+    imports: list[str] = []
+    router_reg: list[str] = []
+    init_calls: list[str] = []
+    for s in surfaces:
+        for stem, var in s.routers:
+            imp = _sub_import(s, stem)
+            imports.append(f"from {imp} import {var} as _r_{s.name}_{stem}")
+            router_reg.append(
+                f"    app.include_router(_r_{s.name}_{stem})")
+        for stem, fn, takes_app in s.inits:
+            imp = _sub_import(s, stem)
+            alias = f"_init_{s.name}_{stem}_{fn}"
+            imports.append(f"from {imp} import {fn} as {alias}")
+            # init 失败不拖死组装：打印后继续（缺种子/建表由冒烟 DDL 比对兜底）
+            init_calls.append(
+                f"    try:\n"
+                f"        {alias}({'app' if takes_app else ''})\n"
+                f"    except Exception as _e:\n"
+                f"        print(f'[assemble] init {fn} 失败: {{_e!r}}')")
+        if not s.routers and not s.inits:
+            imports.append(f"import {s.name}  # noqa: F401  (保底导入)")
+    imports = sorted(set(imports))
+    return f'''"""机械装配的组装模块（mechanical_assembly 生成，勿手改）。"""
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+
+{chr(10).join(imports)}
+
+
+def create_app() -> FastAPI:
+    app = FastAPI()
+
+    @app.get("/api/health")
+    def health():
+        return JSONResponse({{"status": "ok"}})
+
+{chr(10).join(init_calls)}
+
+{chr(10).join(router_reg) if router_reg else "    pass"}
+    return app
+
+
+def main() -> None:
+    import uvicorn
+    uvicorn.run(create_app(), host="0.0.0.0")
+
+
+if __name__ == "__main__":
+    main()
+'''
+
+
 def assemble(code_dir: Path) -> dict:
-    """扫描 + 生成 app_main。返回摘要（幂等：重复调用覆盖同文件）。"""
+    """扫描 + 生成 app_main。返回摘要（幂等：重复调用覆盖同文件）。
+
+    框架甄别：扫到 Blueprint → Flask 模板（现状）；只有 APIRouter →
+    FastAPI 模板；两者并存（混合项目）按 Flask——Blueprint 的
+    register_blueprint 无法在 FastAPI 里落地，反之 include_router
+    同理，取能接上更多模块的那个。
+    """
     code_dir = Path(code_dir)
     surfaces = scan_surfaces(code_dir)
-    content = generate_app_main(surfaces)
+    n_bp = sum(len(s.blueprints) for s in surfaces)
+    n_r = sum(len(s.routers) for s in surfaces)
+    if n_bp == 0 and n_r > 0:
+        content = generate_app_main_fastapi(surfaces)
+        framework = "fastapi"
+    else:
+        content = generate_app_main(surfaces)
+        framework = "flask"
     compile(content, "app_main_generated", "exec")  # 语法自证
     target = code_dir / "app_main"
     target.mkdir(parents=True, exist_ok=True)
@@ -146,8 +220,10 @@ def assemble(code_dir: Path) -> dict:
             encoding="utf-8")
     (target / "app_main.py").write_text(content, encoding="utf-8")
     return {
+        "framework": framework,
         "modules": [s.name for s in surfaces],
-        "blueprints": sum(len(s.blueprints) for s in surfaces),
+        "blueprints": n_bp,
+        "routers": n_r,
         "inits": sum(len(s.inits) for s in surfaces),
         "parse_errors": [f"{s.name}/{e}" for s in surfaces for e in s.parse_errors],
         "file": str(target / "app_main.py"),

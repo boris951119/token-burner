@@ -95,6 +95,13 @@ for child in sorted(code.iterdir()):
                     mods.append(__import__(py.stem))
                 except Exception as exc:
                     failures.append(f"import {py.stem}: {exc!r}")
+# 根目录 .py（main.py 等）也要导入——FastAPI 风格入口常在这里
+for py in sorted(code.glob("*.py")):
+    if not py.name.startswith("_") and py.stem not in sys.modules:
+        try:
+            mods.append(__import__(py.stem))
+        except Exception as exc:
+            failures.append(f"import {py.stem}: {exc!r}")
 
 app = None
 for mod in mods:
@@ -103,8 +110,17 @@ for mod in mods:
         print(f"create_app <- {mod.__name__}")
         break
 if app is None:
+    # 模块级 app/application 属性入口（FastAPI main 风格）——与导出
+    # runner 的两遍探测同语义，冒烟漏检=假阴性
+    for mod in mods:
+        cand = getattr(mod, "app", None) or getattr(mod, "application", None)
+        if cand is not None and callable(cand) and not isinstance(cand, type):
+            app = cand
+            print(f"app <- {mod.__name__}")
+            break
+if app is None:
     print("loaded mods:", [m.__name__ for m in mods], file=sys.stderr)
-    failures.append("没有任何模块提供 create_app")
+    failures.append("没有任何模块提供 create_app 或模块级 app 入口")
     print("\\n".join(failures))
     raise SystemExit(1)
 

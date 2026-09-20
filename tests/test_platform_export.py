@@ -68,3 +68,47 @@ def test_export_idempotent(tmp_path, project):
 def test_missing_code_dir_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         export_platform_layout(tmp_path / "out", tmp_path / "noproj")
+
+
+@pytest.fixture
+def fastapi_project(tmp_path):
+    proj = tmp_path / "fproj"
+    code = proj / "code"
+    code.mkdir(parents=True)
+    (code / "main.py").write_text(
+        "from fastapi import FastAPI\n"
+        "app = FastAPI()\n"
+        "@app.get('/api/health')\n"
+        "def health():\n    return {'status': 'ok'}\n",
+        encoding="utf-8")
+    return proj
+
+
+def test_project_main_preserved_as_project_main(tmp_path, fastapi_project):
+    out = tmp_path / "out"
+    export_platform_layout(out, fastapi_project)
+    backend = out / "backend"
+    # FastAPI 风格唯一入口在 main.py——runner 覆盖前必须保真
+    assert (backend / "project_main.py").read_text(
+        encoding="utf-8").startswith("from fastapi import FastAPI")
+    entry = (backend / "main.py").read_text(encoding="utf-8")
+    assert "wsgi_app" in entry and "uvicorn" in entry, \
+        "runner 必须双框架起服"
+
+
+def test_requirements_follow_frameworks(tmp_path, fastapi_project):
+    out = tmp_path / "out"
+    export_platform_layout(out, fastapi_project)
+    reqs = (out / "backend" / "requirements.txt").read_text(encoding="utf-8")
+    assert "fastapi" in reqs and "uvicorn" in reqs
+    assert "flask" not in reqs, "纯 FastAPI 项目不必装 flask"
+
+    # 混合项目（flask+fastapi import 并存）双依赖都要有
+    fcode = fastapi_project / "code"
+    (fcode / "mixed_pkg").mkdir()
+    (fcode / "mixed_pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (fcode / "mixed_pkg" / "x.py").write_text(
+        "from flask import Flask\n", encoding="utf-8")
+    export_platform_layout(out, fastapi_project)
+    reqs2 = (out / "backend" / "requirements.txt").read_text(encoding="utf-8")
+    assert "fastapi" in reqs2 and "flask" in reqs2

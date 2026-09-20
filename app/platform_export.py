@@ -24,7 +24,15 @@ from pathlib import Path
 from app.utils.auto_fixer import _py_files, _read
 
 _BACKEND_MAIN = '''\
-"""官方 runner 启动入口：PORT 环境变量（默认 3301），/api/health 就绪。"""
+"""官方 runner 启动入口：PORT 环境变量（默认 3301），/api/health 就绪。
+
+入口探测两遍（9/20 泛化取证：只认 create_app 会漏掉 FastAPI 风格的
+模块级 `app = FastAPI()` 入口——生成的项目两种风格都可能出现）：
+① 任意模块 create_app() 工厂
+② 任意模块级 app/application 可调用属性
+起服：WSGI（有 wsgi_app，Flask）→ app.run；ASGI（FastAPI/Starlette）
+→ uvicorn。
+"""
 import importlib
 import os
 import pkgutil
@@ -39,25 +47,48 @@ for _child in sorted(_CODE.iterdir()):
             and not (_child / "__init__.py").exists()):
         sys.path.insert(0, str(_child))
 
+
+def _iter_mods():
+    for _m in pkgutil.walk_packages([str(_CODE)]):
+        if _m.name.startswith(("_", "main")):
+            continue
+        try:
+            yield importlib.import_module(_m.name)
+        except Exception:
+            continue
+
+
 app = None
-for _m in pkgutil.walk_packages([str(_CODE)]):
-    if _m.name.startswith(("_", "main")):
-        continue
-    try:
-        mod = importlib.import_module(_m.name)
-    except Exception:
-        continue
-    if hasattr(mod, "create_app"):
-        app = mod.create_app()
-        break
+for _mod in _iter_mods():                       # ① create_app 工厂
+    if hasattr(_mod, "create_app"):
+        try:
+            _cand = _mod.create_app()
+        except Exception:
+            continue                            # 坏工厂跳过，找下一个
+        if _cand is not None:
+            app = _cand
+            break
+if app is None:                                 # ② 模块级 app 属性
+    for _mod in _iter_mods():
+        _cand = getattr(_mod, "app", None) or getattr(
+            _mod, "application", None)
+        if (_cand is not None and callable(_cand)
+                and not isinstance(_cand, type)):
+            app = _cand
+            break
 
 if app is None:
-    raise SystemExit("no create_app found in backend/")
+    raise SystemExit("no create_app/app entry found in backend/")
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0",
-            port=int(os.environ.get("PORT", "3301")),
-            threaded=True)
+    if hasattr(app, "wsgi_app"):                # Flask/WSGI
+        app.run(host="0.0.0.0",
+                port=int(os.environ.get("PORT", "3301")),
+                threaded=True)
+    else:                                       # FastAPI/Starlette ASGI
+        import uvicorn
+        uvicorn.run(app, host="0.0.0.0",
+                    port=int(os.environ.get("PORT", "3301")))
 '''
 
 _FRONTEND_PACKAGE_JSON = {
@@ -131,6 +162,20 @@ _BACKEND_PACKAGE_JSON = {
 }
 
 
+def _requirements_for(code_dir: Path) -> str:
+    """按代码实际 import 的框架生成依赖（写死 flask 会饿死 FastAPI 项目）。"""
+    import re
+
+    text = "\n".join(
+        _read(p) for p in _py_files(code_dir))
+    deps: list[str] = []
+    if re.search(r"^\s*(from fastapi|import fastapi)\b", text, re.M):
+        deps += ["fastapi>=0.110.0", "uvicorn>=0.29.0"]
+    if re.search(r"^\s*(from flask|import flask)\b", text, re.M):
+        deps.append("flask>=3.0.0")
+    return "\n".join(deps or ["flask>=3.0.0"]) + "\n"
+
+
 def export_platform_layout(output_dir: Path, project_dir: Path) -> dict:
     """把生成项目适配导出为官方 runner 布局，返回导出摘要。
 
@@ -168,9 +213,14 @@ def export_platform_layout(output_dir: Path, project_dir: Path) -> dict:
         dst = backend / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
+    # 项目自身 main.py 会被通用 runner 覆盖——先保 project_main.py
+    # （9/20 取证：FastAPI 风格项目唯一入口常在 main.py，直接丢弃
+    # = 活代码被 export 弄死；两遍探测的第二遍会扫到它）
+    if (code_dir / "main.py").is_file():
+        shutil.copy2(code_dir / "main.py", backend / "project_main.py")
     (backend / "main.py").write_text(_BACKEND_MAIN, encoding="utf-8")
     (backend / "requirements.txt").write_text(
-        "flask>=3.0.0\n", encoding="utf-8")
+        _requirements_for(code_dir), encoding="utf-8")
     (backend / "package.json").write_text(
         json.dumps(_BACKEND_PACKAGE_JSON, indent=2), encoding="utf-8")
 
