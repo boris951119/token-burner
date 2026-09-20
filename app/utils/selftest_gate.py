@@ -96,7 +96,7 @@ def ensure_selftests(project_dir: Path, requirement: str,
                                for ch in f"{rid}_{name}")[:60]
                 (specs_dir / f"{safe or f'test_{k}'}.spec.ts").write_text(
                     code, encoding="utf-8")
-            lint_specs(specs_dir)
+            lint_specs(specs_dir, project_dir)
             return specs_dir
         except Exception as exc:  # 逐模型接力
             last = exc
@@ -104,31 +104,51 @@ def ensure_selftests(project_dir: Path, requirement: str,
     return None
 
 
-def lint_specs(specs_dir: Path, max_drop: int = 4) -> int:
-    """lint 门：--list 发现解析失败的 spec 就剔除（坏文件会连坐整个
-    套件——2026-09-20 取证：REQ-3.2 一文件语法坏 → 全局 No tests
-    found）。返回存活 spec 数。"""
+def _ensure_node_modules_link(specs_dir: Path) -> None:
+    """specs 目录可能不在 GRADE_DIR 之下（如项目 tests/selftest/），
+    '@playwright/test' 的模块解析会失败——建 junction 指向 GRADE_DIR
+    的 node_modules（Windows 目录联接免管理员权限）。"""
+    link = specs_dir / "node_modules"
+    target = GRADE_DIR / "node_modules"
+    if not target.is_dir() or link.exists():
+        return
+    if os.name == "nt":
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                       capture_output=True, text=True)
+    else:
+        try:
+            os.symlink(target, link, target_is_directory=True)
+        except OSError:
+            pass
+
+
+def lint_specs(specs_dir: Path, project_dir: Path | None = None) -> int:
+    """lint 门：逐文件 --list，解析失败的 spec 移入 _rejected/（保留
+    诊断现场）。教训（2026-09-20 首版误伤）：整目录 --list 的正常输出
+    会列出全部文件路径，按文件名正则剔除=把好文件全倒掉。"""
     npx = shutil.which("npx") or shutil.which("npx.cmd") or "npx"
     env = dict(os.environ, PLAYWRIGHT_TEST_DIR=str(specs_dir))
-    for _ in range(max_drop):
+    _ensure_node_modules_link(specs_dir)
+    rejected = specs_dir.parent / "selftest_rejected"
+    survivors = 0
+    for f in sorted(specs_dir.glob("*.spec.ts")):
         pt = subprocess.run(
-            [npx, "playwright", "test", "--list"], cwd=str(GRADE_DIR),
-            env=env, capture_output=True, text=True, timeout=300)
-        combined = (pt.stdout or "") + (pt.stderr or "")
-        if "No tests found" not in combined and pt.returncode == 0:
-            break
-        bad = set(re.findall(
-            r"([A-Za-z0-9_.\-]+\.spec\.ts)", combined))
-        dropped = False
-        for name in bad:
-            victim = specs_dir / name
-            if victim.is_file():
-                victim.unlink()
-                print(f"[selftest] lint 剔除解析失败的 spec: {name}")
-                dropped = True
-        if not dropped:
-            break
-    return len(list(specs_dir.glob("*.spec.ts")))
+            [npx, "playwright", "test", f.name, "--list"],
+            cwd=str(GRADE_DIR), env=env,
+            capture_output=True, text=True, timeout=180)
+        ok = pt.returncode == 0 and "No tests found" not in (pt.stdout or "")
+        if ok:
+            survivors += 1
+            continue
+        if project_dir is not None:
+            rejected.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(f), str(rejected / f.name))
+        else:
+            f.unlink()
+        first_err = ((pt.stderr or "") or (pt.stdout or "")).strip().splitlines()
+        print(f"[selftest] lint 剔除 {f.name}: "
+              + (first_err[0][:120] if first_err else "unknown"))
+    return survivors
 
 
 def _free_port(prefer: int) -> int:
@@ -187,6 +207,7 @@ def run_selftests(project_dir: Path, specs_dir: Path,
                    GRADE_REPORT=str(report),
                    PLAYWRIGHT_TEST_DIR=str(specs_dir),
                    PLAYWRIGHT_OUTPUT_DIR=str(project_dir / "selftest-results"))
+        _ensure_node_modules_link(specs_dir)
         npx = shutil.which("npx") or shutil.which("npx.cmd") or "npx"
         pt = subprocess.run(
             [npx, "playwright", "test"], cwd=str(GRADE_DIR), env=env,
