@@ -103,11 +103,25 @@ def main() -> int:
     ap.add_argument("--project-dir", help="生成项目根（含 code/）")
     ap.add_argument("--exported-dir", help="已导出的模板根（含 backend/）")
     ap.add_argument("--task", default="keep",
-                    choices=["keep", "bookstack"],
-                    help="官方真题套件（当前已装 keep）")
+                    help="官方真题套件名=specs/ 下目录（任意任务，不再枚举）")
     ap.add_argument("--port", type=int, default=3301)
     ap.add_argument("--report", default=None)
     args = ap.parse_args()
+
+    task_specs = GRADE_DIR / "specs" / args.task
+    if not task_specs.is_dir():
+        print(f"[grade] 任务套件未安装: {task_specs}"
+              f"（把官方 specs 目录放到该处即可接入新任务）")
+        return 2
+
+    # 9/20 取证：用系统 python 跑评分→后端缺 flask 秒崩→健康探针 90s
+    # 超时报"起服失败"，根因被掩盖。依赖在场性必须前置成即时错误。
+    try:
+        import flask  # noqa: F401
+    except ImportError:
+        print(f"[grade] 当前解释器 {sys.executable} 缺 flask——"
+              "请用项目 venv 的 python 运行本脚本")
+        return 2
 
     lock = _acquire_grade_lock()
     if lock is None:
@@ -172,6 +186,13 @@ def main() -> int:
         for line in tail:
             print("  " + line[:160])
     finally:
+        # Windows：terminate 不杀孙进程——孤儿 Flask 服务器会锁死
+        # 模板目录与端口（2026-09-20 深夜取证：连环健康探针超时/
+        # 目录锁的总根源），taskkill /T 连树击杀
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
         proc.terminate()
         try:
             proc.wait(timeout=10)
