@@ -1443,6 +1443,7 @@ def auto_repair(
     project_dir: Path, settings, max_rounds: int = 3,
     test_cmd: list[str] | None = None,
     extra_issue: str = "",
+    verify_timeout: int | None = None,
 ) -> tuple[bool, str]:
     """冒烟失败后的定向自动修复（RepoFixer 通道）。
 
@@ -1530,6 +1531,7 @@ def auto_repair(
         llm, project_dir,
         test_cmd=test_cmd,
         max_rounds=max_rounds,
+        **({"test_timeout": verify_timeout} if verify_timeout else {}),
     )
     result = fixer.fix(issue)
     ok, report = run_smoke(code_dir)

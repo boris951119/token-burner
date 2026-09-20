@@ -52,12 +52,25 @@ def ensure_selftests(project_dir: Path, requirement: str,
     if specs_dir.is_dir() and any(specs_dir.glob("*.spec.ts")):
         return specs_dir
     from app.utils.model_client import ModelClient
+    from app.utils.requirement_anchors import collect_anchors_from_text
 
+    # 精确文案注入（2026-09-20 取证：需求截断到 14k 导致生成器"凭想象"
+    # 写定位器——期望 'Search notes' 而需求原文是 'Search'，全盘落空）。
+    # pro 上下文足够容纳完整需求（84KB≈30k tokens）。
+    try:
+        buckets = collect_anchors_from_text(requirement)
+        anchors = sorted({a for lst in buckets.values() for a in lst})
+    except Exception:
+        anchors = []
+    anchor_lines = "\n".join(f"- {a!r}" for a in anchors[:60])
     mc = ModelClient(settings)
     prompt = (
-        "需求文档如下（可能截断）。请按系统规则生成覆盖核心场景的 "
+        "需求文档全文如下。请按系统规则生成覆盖核心场景的 "
         "Playwright 验收测试。\n\n"
-        + "## 需求文档\n" + requirement[:14000]
+        "## 需求原文中的逐字文案（定位器必须使用这些精确字符串，"
+        "禁止改写、禁止凭印象造词如 'Search notes'）\n"
+        + anchor_lines
+        + "\n\n## 需求文档全文\n" + requirement[:90000]
     )
     models = tuple(settings.models[:2]) or ("openai/gpt-4o",)
     last: Exception | None = None
@@ -271,20 +284,36 @@ def selftest_gate(project_dir: Path, requirement: str, settings,
     if not failed:
         _beat(project_dir, "自测闸-通过")
         return True, "\n".join(notes)
-    # 定向修复：失败清单 + 自测运行器作验证信号
+    # 定向修复：失败清单 + 页面真实快照（error-context 含 Playwright
+    # 抓的 DOM 形态——修复 LLM 看得见"实际长什么样"才能对齐定位器）
+    snapshots: list[str] = []
+    results_dir = project_dir / "selftest-results"
+    for ctx in sorted(results_dir.glob("*/error-context.md"))[:3]:
+        try:
+            text = ctx.read_text(encoding="utf-8", errors="replace")
+            i = text.find("# Page snapshot")
+            if i > -1:
+                snapshots.append(text[i:i + 900])
+        except Exception:
+            continue
     issue = (
         "自生成验收测试失败（交付闸，失败即用户需求未满足）：\n"
         + "\n".join(f"- {f}" for f in failures[:20])
         + "\n\n测试输出尾部：\n" + tail[-1500:]
-        + "\n修复要求：让失败场景按需求语义真实通过——补交互行为/"
-        "修正导航与表单/对齐可见文案；禁止修改 tests/selftest/ 与 "
-        "tests/ 目录；禁止删路由；最小化修改。"
+        + "\n\n页面真实快照（前 3 个失败用例，Playwright 实测 DOM）：\n"
+        + "\n---\n".join(snapshots)
+        + "\n\n修复要求：让失败场景按需求语义真实通过——补交互行为/"
+        "修正导航与表单/对齐可见文案；需求原文的逐字文案（如 Search、"
+        "Take a note、Note trashed）必须精确出现在对应控件上；"
+        "禁止修改 tests/selftest/ 与 tests/ 目录；禁止删路由；"
+        "最小化修改。"
     )
     for rnd in range(1, max_rounds + 1):
         _beat(project_dir, f"自测闸-修复R{rnd}")
         try:
             ok, _rep = auto_repair(
                 project_dir, settings, max_rounds=1,
+                verify_timeout=1800,
                 # 修复验证信号=自测运行器本尊（RepoFixer 逐轮真实复测）
                 test_cmd=[sys.executable, str(Path(__file__).resolve()),
                           "--run", "--project-dir", str(project_dir)],
