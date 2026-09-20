@@ -138,6 +138,59 @@ def _req_fragments(failures: list[str], limit: int = 6) -> list[str]:
     return frags
 
 
+def _module_facts(code_dir: Path) -> str:
+    """模块路由定义现状（机械扫描，零 LLM）——修复器的结构地基。
+
+    9/21 取证：pro 重写 main.py 幻觉导入 app_main.routers 等不存在的
+    路径——它不知道项目真实结构。把"哪个模块有什么"摊给它。
+    """
+    from app.utils.mechanical_assembly import scan_surfaces
+
+    code_dir = Path(code_dir)
+    surfaces = scan_surfaces(code_dir)
+    names = {s.name for s in surfaces}
+    lines = []
+    for s in surfaces:
+        bits = []
+        if s.blueprints:
+            bits.append(f"Blueprint×{len(s.blueprints)}")
+        if s.routers:
+            bits.append(f"APIRouter×{len(s.routers)}")
+        if s.inits:
+            bits.append(f"init_*×{len(s.inits)}")
+        lines.append(f"- {s.name}: {', '.join(bits)}")
+        for e in s.parse_errors:
+            lines.append(f"  - 语法错误: {e}")
+    for child in sorted(code_dir.iterdir()):
+        if (child.is_dir() and not child.name.startswith(("_", "."))
+                and child.name not in names
+                and (child / "__init__.py").exists()):
+            if child.name == "app_main":
+                lines.append(
+                    "- app_main: 机械装配的当前入口（create_app：注册"
+                    "其他模块的 Blueprint + /api/health）。补页面的正路："
+                    "给冻结模块写 Blueprint 路由，再在 "
+                    "app_main/app_main.py 里 import+register_blueprint")
+            else:
+                lines.append(f"- {child.name}: 无路由定义（冻结模块，"
+                             "需要你补写路由+页面，别指望 import 它们拿路由）")
+    return "\n".join(lines) or "- （无包）"
+
+
+def _current_routes_section(code_dir: Path) -> str:
+    """实测当前入口注册了哪些路由（探测失败不阻塞修复）。"""
+    try:
+        from app.arcbench_smoke import _probe_routes
+        probed = _probe_routes(Path(code_dir))
+    except Exception:
+        probed = None
+    if not probed:
+        return "（路由探测失败，跳过）"
+    app_module, routes = probed
+    shown = ", ".join(sorted(routes)[:50]) or "（空）"
+    return f"入口 {app_module}，共 {len(routes)} 条：{shown}"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--project-dir", required=True)
@@ -191,19 +244,26 @@ def main() -> int:
             return 0
         contexts = _failure_contexts(project_dir, failures)
         frags = _req_fragments(failures)
+        facts = _module_facts(project_dir / "code")
+        routes_section = _current_routes_section(project_dir / "code")
         issue = (
             "官方验收测试失败（评测方用 Playwright 按 ARIA 语义逐字断言，"
             "失败即用户需求未满足）。失败清单：\n"
             + "\n".join(f"- {f}" for f in failures[:25])
             + "\n\n页面真实快照（Playwright 实测 DOM，前 3 个失败）：\n"
             + "\n---\n".join(contexts)
+            + "\n\n代码结构事实（AST 机械扫描，真实可靠，禁止臆造导入路径）：\n"
+            + facts
+            + "\n\n当前实际注册路由（实测）：\n" + routes_section
             + "\n\n修复要求：\n"
             "1. 失败场景按需求语义真实通过——补交互行为/对齐逐字文案"
             "（按钮/占位符/通知原文）/修导航；\n"
             "2. 页面快照显示 'Not Found' = 该页面不存在：按需求实现"
             "真实页面（真实数据渲染+真实交互），禁止占位壳——"
             "缺失页面是本任务最大失分源，优先补齐；\n"
-            "3. 禁止修改 tests/ 目录与官方 specs；禁止删已有路由；"
+            "3. 修复必须落在结构事实清单里真实存在的模块上；引用不存在"
+            "的包（如 app.routers/app_main.routers）= 幻觉导入，验证必挂；\n"
+            "4. 禁止修改 tests/ 目录与官方 specs；禁止删已有路由；"
             "最小化修改。"
         )
         # 修复可能半途而废：战绩与快照都在修复动作前定格

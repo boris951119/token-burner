@@ -305,11 +305,22 @@ for child in sorted(code.iterdir()):
 
 app = None
 app_module = ""
+# 两遍探测（与导出 runner 同语义）：作者模块级 app 优先，create_app 兜底
 for mod in mods:
-    if hasattr(mod, "create_app"):
-        app = mod.create_app()
+    cand = getattr(mod, "app", None) or getattr(mod, "application", None)
+    if cand is not None and callable(cand) and not isinstance(cand, type):
+        app = cand
         app_module = mod.__name__
         break
+if app is None:
+    for mod in mods:
+        if hasattr(mod, "create_app"):
+            try:
+                app = mod.create_app()
+            except Exception:
+                continue
+            app_module = mod.__name__
+            break
 if app is None:
     print("loaded mods:", [m.__name__ for m in mods], file=sys.stderr)
     print("code dir:", str(code), "exists:", code.is_dir(), file=sys.stderr)
@@ -320,23 +331,32 @@ if app is None:
     print("create_app holders in sys.modules:", [
         k for k, v in sys.modules.items() if hasattr(v, "create_app")],
         file=sys.stderr)
-    raise SystemExit("没有任何模块提供 create_app")
+    raise SystemExit("没有任何模块提供 create_app 或模块级 app 入口")
 
 routes = []
-for rule in sorted(app.url_map.iter_rules(), key=lambda r: r.rule):
-    methods = sorted(set(rule.methods) - {"HEAD", "OPTIONS"})
-    params = set()
-    view = app.view_functions.get(rule.endpoint)
-    if view is not None:
-        try:
-            src = inspect.getsource(view)
-            params = set(re.findall(r"\\.args\\.get\\(\\s*['\\"](\\w+)", src))
-        except Exception:
-            params = set()
-    entry = f"{rule.rule} [{','.join(methods)}]"
-    if params:
-        entry += f" params:{','.join(sorted(params))}"
-    routes.append(entry)
+if hasattr(app, "url_map"):                 # Flask/WSGI
+    for rule in sorted(app.url_map.iter_rules(), key=lambda r: r.rule):
+        methods = sorted(set(rule.methods) - {"HEAD", "OPTIONS"})
+        params = set()
+        view = app.view_functions.get(rule.endpoint)
+        if view is not None:
+            try:
+                src = inspect.getsource(view)
+                params = set(re.findall(r"\\.args\\.get\\(\\s*['\\"](\\w+)", src))
+            except Exception:
+                params = set()
+        entry = f"{rule.rule} [{','.join(methods)}]"
+        if params:
+            entry += f" params:{','.join(sorted(params))}"
+        routes.append(entry)
+else:                                        # FastAPI/Starlette ASGI
+    for r in getattr(app, "routes", []):
+        path = getattr(r, "path", None)
+        if not path or path in ("/openapi.json", "/docs",
+                                "/redoc", "/docs/oauth2-redirect"):
+            continue
+        methods = sorted(getattr(r, "methods", None) or ["?"])
+        routes.append(f"{path} [{','.join(methods)}]")
 print("@@ROUTES@@" + json.dumps(
     {"app_module": app_module, "routes": routes}, ensure_ascii=False))
 '''
