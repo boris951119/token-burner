@@ -215,12 +215,16 @@ def scaffold_frozen_modules(code_dir: Path,
     该有路由层但不知道落在哪。存根把"往哪写"变成确定性事实：
     每个冻结包一个 <pkg>_routes.py，app_main 注册全部蓝图，修复器
     只需往存根里填 handler。幂等：已有存根不覆盖（保护修复器写入）。
+    导入闸（9/21 取证：search/__init__ 链 _shared.infra 缺失，往坏包
+    放存根会毒化整个 app）：包本身导不进就不放，留给修复器先修包。
     """
     code_dir = Path(code_dir)
     created: list[str] = []
     have = {s.name for s in surfaces}
     for child in sorted(code_dir.iterdir()):
         if not child.is_dir() or child.name.startswith(("_", ".")):
+            continue
+        if child.name in ("__pycache__", "app_main"):
             continue
         if not (child / "__init__.py").exists():
             continue
@@ -229,10 +233,27 @@ def scaffold_frozen_modules(code_dir: Path,
         stub = child / f"{child.name}_routes.py"
         if stub.exists():
             continue
+        if not _package_importable(code_dir, child.name):
+            continue
         stub.write_text(_STUB_TEMPLATE.format(pkg=child.name),
                         encoding="utf-8")
         created.append(stub.relative_to(code_dir).as_posix())
     return created
+
+
+def _package_importable(code_dir: Path, pkg: str) -> bool:
+    """子进程试导入（隔离，不污染当前解释器）。"""
+    import subprocess
+    import sys
+
+    try:
+        r = subprocess.run(
+            [sys.executable, "-c",
+             f"import sys; sys.path.insert(0, r'{code_dir}'); import {pkg}"],
+            capture_output=True, timeout=60)
+    except (subprocess.TimeoutExpired, OSError):
+        return False
+    return r.returncode == 0
 
 
 def assemble(code_dir: Path, scaffold: bool = False) -> dict:

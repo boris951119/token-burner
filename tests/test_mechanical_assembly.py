@@ -168,3 +168,27 @@ def test_assemble_scaffold_registers_stub_and_route_lives(tmp_path):
         for name in list(sys.modules):
             if name.startswith(("app_main", "pages")):
                 sys.modules.pop(name, None)
+
+
+def test_scaffold_skips_broken_and_app_main(tmp_path):
+    """导入闸：__init__ 链断裂的包不放存根（防毒化 app）；app_main 自身不放。"""
+    from app.utils.mechanical_assembly import scaffold_frozen_modules, scan_surfaces
+
+    code = tmp_path / "code"
+    code.mkdir()
+    # 健康冻结包
+    _mk_pkg(code, "healthy", "# 冻结\n")
+    # 坏包：__init__ 导入不存在的模块
+    bad = code / "bad"
+    bad.mkdir()
+    (bad / "__init__.py").write_text(
+        "from bad.core import *\n", encoding="utf-8")
+    # （bad/core.py 不存在 → import bad 必炸）
+    # app_main 包（历史上被误放存根）
+    am = code / "app_main"
+    am.mkdir()
+    (am / "__init__.py").write_text("", encoding="utf-8")
+
+    created = scaffold_frozen_modules(code, scan_surfaces(code))
+    assert created == ["healthy/healthy_routes.py"], \
+        "坏包与 app_main 不得放存根"
