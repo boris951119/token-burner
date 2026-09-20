@@ -127,7 +127,8 @@ def _ensure_node_modules_link(specs_dir: Path) -> None:
         return
     if os.name == "nt":
         subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
-                       capture_output=True, text=True)
+                       capture_output=True, text=True, encoding="utf-8",
+                       errors="replace")
     else:
         try:
             os.symlink(target, link, target_is_directory=True)
@@ -263,7 +264,8 @@ def run_selftests(project_dir: Path, specs_dir: Path,
         # 模板目录——taskkill /T 连树击杀，兜底 terminate/kill
         if os.name == "nt":
             subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                           capture_output=True, text=True)
+                           capture_output=True, text=True, encoding="utf-8",
+                           errors="replace")
         proc.terminate()
         try:
             proc.wait(timeout=10)
