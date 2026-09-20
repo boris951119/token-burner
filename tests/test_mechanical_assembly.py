@@ -89,6 +89,10 @@ def test_generated_fastapi_app_imports_and_serves(tmp_path):
     code.mkdir()
     _mk_pkg(code, "mod", FASTAPI_MOD)
     assemble(code)
+    # 防跨测试 sys.modules 污染：先清同名残留再导入本例产物
+    for name in list(sys.modules):
+        if name.startswith(("app_main", "mod")):
+            sys.modules.pop(name, None)
     sys.path.insert(0, str(code))
     try:
         from fastapi.testclient import TestClient

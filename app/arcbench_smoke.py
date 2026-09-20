@@ -105,18 +105,18 @@ for py in sorted(code.glob("*.py")):
 
 app = None
 for mod in mods:
-    if hasattr(mod, "create_app"):
-        app = mod.create_app()
-        print(f"create_app <- {mod.__name__}")
+    cand = getattr(mod, "app", None) or getattr(mod, "application", None)
+    if cand is not None and callable(cand) and not isinstance(cand, type):
+        app = cand
+        print(f"app <- {mod.__name__}")
         break
 if app is None:
-    # 模块级 app/application 属性入口（FastAPI main 风格）——与导出
-    # runner 的两遍探测同语义，冒烟漏检=假阴性
+    # create_app 工厂兜底（与导出 runner 两遍探测同语义——作者入口
+    # 优先，机械装配壳垫后；冒烟漏检=假阴性）
     for mod in mods:
-        cand = getattr(mod, "app", None) or getattr(mod, "application", None)
-        if cand is not None and callable(cand) and not isinstance(cand, type):
-            app = cand
-            print(f"app <- {mod.__name__}")
+        if hasattr(mod, "create_app"):
+            app = mod.create_app()
+            print(f"create_app <- {mod.__name__}")
             break
 if app is None:
     print("loaded mods:", [m.__name__ for m in mods], file=sys.stderr)

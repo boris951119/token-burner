@@ -112,3 +112,52 @@ def test_requirements_follow_frameworks(tmp_path, fastapi_project):
     export_platform_layout(out, fastapi_project)
     reqs2 = (out / "backend" / "requirements.txt").read_text(encoding="utf-8")
     assert "fastapi" in reqs2 and "flask" in reqs2
+
+
+def test_authored_app_entry_beats_create_app_factory(tmp_path):
+    """作者入口（模块级 app）必须压过机械装配 create_app 壳——
+    否则修复器修好的 main.py 被旁路，修复白做。"""
+    import importlib.util
+
+    from app.platform_export import _BACKEND_MAIN
+
+    be = tmp_path / "backend"
+    be.mkdir()
+    # 机械装配壳：只有 health
+    (be / "app_main").mkdir()
+    (be / "app_main" / "__init__.py").write_text("", encoding="utf-8")
+    (be / "app_main" / "app_main.py").write_text(
+        "from flask import Flask, jsonify\n"
+        "def create_app():\n"
+        "    app = Flask(__name__)\n"
+        "    @app.route('/api/health')\n"
+        "    def h():\n"
+        "        return jsonify(status='ok')\n"
+        "    return app\n", encoding="utf-8")
+    # 作者入口：模块级 app，带业务路由
+    (be / "project_main.py").write_text(
+        "from flask import Flask, jsonify\n"
+        "app = Flask(__name__)\n"
+        "AUTHORED = True\n"
+        "@app.route('/api/health')\n"
+        "def h():\n"
+        "    return jsonify(status='ok')\n"
+        "@app.route('/books')\n"
+        "def books():\n"
+        "    return jsonify([])\n", encoding="utf-8")
+    (be / "main.py").write_text(_BACKEND_MAIN, encoding="utf-8")
+
+    spec = importlib.util.spec_from_file_location("runner_main", be / "main.py")
+    mod = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(mod)      # 模块级执行即完成入口探测
+        assert mod.app.name == "project_main", \
+            "可导入的作者入口必须赢过 create_app 工厂"
+        rules = {r.rule for r in mod.app.url_map.iter_rules()}
+        assert "/books" in rules
+    finally:
+        # walker 把 app_main/project_main 等灌进了共享 sys.modules，
+        # 不清会污染后续测试的同名导入（跨文件隔离取证）
+        for name in list(sys.modules):
+            if name.startswith(("app_main", "project_main", "runner_main")):
+                sys.modules.pop(name, None)

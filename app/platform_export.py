@@ -28,8 +28,9 @@ _BACKEND_MAIN = '''\
 
 入口探测两遍（9/20 泛化取证：只认 create_app 会漏掉 FastAPI 风格的
 模块级 `app = FastAPI()` 入口——生成的项目两种风格都可能出现）：
-① 任意模块 create_app() 工厂
-② 任意模块级 app/application 可调用属性
+① 模块级 app/application 可调用属性（作者入口优先——pro 修好的
+  main.py 若能 import，必须压过机械装配的保底壳，否则修复被旁路）
+② 任意模块 create_app() 工厂（机械装配兜底）
 起服：WSGI（有 wsgi_app，Flask）→ app.run；ASGI（FastAPI/Starlette）
 → uvicorn。
 """
@@ -59,23 +60,23 @@ def _iter_mods():
 
 
 app = None
-for _mod in _iter_mods():                       # ① create_app 工厂
-    if hasattr(_mod, "create_app"):
-        try:
-            _cand = _mod.create_app()
-        except Exception:
-            continue                            # 坏工厂跳过，找下一个
-        if _cand is not None:
-            app = _cand
-            break
-if app is None:                                 # ② 模块级 app 属性
+for _mod in _iter_mods():                       # ① 模块级 app 属性（作者入口）
+    _cand = getattr(_mod, "app", None) or getattr(
+        _mod, "application", None)
+    if (_cand is not None and callable(_cand)
+            and not isinstance(_cand, type)):
+        app = _cand
+        break
+if app is None:                                 # ② create_app 工厂兜底
     for _mod in _iter_mods():
-        _cand = getattr(_mod, "app", None) or getattr(
-            _mod, "application", None)
-        if (_cand is not None and callable(_cand)
-                and not isinstance(_cand, type)):
-            app = _cand
-            break
+        if hasattr(_mod, "create_app"):
+            try:
+                _cand = _mod.create_app()
+            except Exception:
+                continue                        # 坏工厂跳过，找下一个
+            if _cand is not None:
+                app = _cand
+                break
 
 if app is None:
     raise SystemExit("no create_app/app entry found in backend/")
