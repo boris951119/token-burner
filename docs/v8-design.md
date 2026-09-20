@@ -15,7 +15,7 @@ spec 期把每条 REQ 的 GIVEN/WHEN/THEN 编译为结构化场景条目：
 跨模块场景（如登录→书架列表）标注集成点。此结构同时驱动
 测试生成与 traceability 登记（激活 feature_implementation_rate）。
 
-### 原则二：协同作战 → 集成契约层
+### 原则二：协同作战 → 集成契约层 + 拼接机械化
 
 spec 期产出**集成契约**（机器可校验的 YAML/JSON）：
 
@@ -30,14 +30,24 @@ contract:
   seed:                          # 机械通道：直接从 requirements.yaml 生成
     - table: shelves
       rows: [{name: "Shelf 4.1"}, ...]
-  integration_points:
-    - {modules: [auth, shelves], contract: "登录会话后可读写 shelves"}
+  exports:                       # 拼接机械化的输入
+    - {module: auth, blueprints: [auth_bp], inits: [init_app]}
+    - {module: shelves, blueprints: [shelves_bp], inits: [init_shelves]}
 ```
 
 - 每个模块提示词内嵌契约相关段（不是全文，是相关切片）
 - 验收期机械校验：库文件唯一性（已有 fixer）、DDL 符合契约、
   API 面路由存在性、种子行精确命中
+- **小块验收加契约符合性机械校验**：模块闸门当场拦截接缝裂缝
+  （如 seed 模块写错库文件在闸门即拦，不进拼接）——
+  v7 实证：三个模块各自合格，拼起来种子进不了 API 的库
+- **拼接机械化**：AST 扫描各模块导出的 blueprint/init 函数，
+  确定性生成 app_main 的 create_app 接线——组装是确定性工作，
+  不交给概率（v7 实证：LLM 组装的根模块路由被 view 模块抢注，
+  动态首页被静态 mockup 遮蔽，此类方差归零）
 - **种子数据走机械播种器**：requirements.yaml → SQL，绕过 LLM 方差
+  （双模式自动探测：题面带种子声明=机械播种；不带=测试自建数据，
+  BookStack 实测无种子声明）
 
 ### 原则三：自生成测试 + 交付闸 → 测试工程模块
 

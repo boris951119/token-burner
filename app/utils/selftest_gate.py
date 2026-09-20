@@ -135,7 +135,8 @@ def lint_specs(specs_dir: Path, project_dir: Path | None = None) -> int:
         pt = subprocess.run(
             [npx, "playwright", "test", f.name, "--list"],
             cwd=str(GRADE_DIR), env=env,
-            capture_output=True, text=True, timeout=180)
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=180)
         ok = pt.returncode == 0 and "No tests found" not in (pt.stdout or "")
         if ok:
             survivors += 1
@@ -211,7 +212,8 @@ def run_selftests(project_dir: Path, specs_dir: Path,
         npx = shutil.which("npx") or shutil.which("npx.cmd") or "npx"
         pt = subprocess.run(
             [npx, "playwright", "test"], cwd=str(GRADE_DIR), env=env,
-            capture_output=True, text=True, timeout=1800)
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=1800)
         (project_dir / "selftest-run.log").write_text(
             (pt.stdout or "") + "\n===== STDERR =====\n" + (pt.stderr or ""),
             encoding="utf-8")
@@ -259,6 +261,7 @@ def selftest_gate(project_dir: Path, requirement: str, settings,
     if specs_dir is None:
         return False, "自测 specs 生成失败（降级：跳过自测闸）"
     passed, failed, failures, tail = run_selftests(project_dir, specs_dir)
+    notes: list[str] = []
     notes.append(f"[selftest] 首轮 {passed}/{passed + failed}")
     if passed + failed == 0:
         # 真空真值漏洞（2026-09-20 取证）：坏 spec 连坐收集失败 → 0/0
