@@ -302,6 +302,13 @@ for child in sorted(code.iterdir()):
                     mods.append(__import__(py.stem))
                 except Exception as _exc:
                     print("import fail:", py.stem, repr(_exc), file=sys.stderr)
+# 根目录 .py（main.py=作者入口）也要导入——两遍探测才能看见它
+for py in sorted(code.glob("*.py")):
+    if not py.name.startswith("_") and py.stem not in sys.modules:
+        try:
+            mods.append(__import__(py.stem))
+        except Exception as _exc:
+            print("import fail:", py.stem, repr(_exc), file=sys.stderr)
 
 app = None
 app_module = ""
