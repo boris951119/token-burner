@@ -192,15 +192,62 @@ if __name__ == "__main__":
 '''
 
 
-def assemble(code_dir: Path) -> dict:
+_STUB_TEMPLATE = '''\
+# -*- coding: utf-8 -*-
+"""{pkg} 路由存根（mechanical_assembly 契约层生成）。
+
+本模块生成期冻结无路由——修复器直接在本文件写页面路由：
+    @bp.route("/…", methods=[…])
+    def xxx(): …
+（勿改蓝图变量名 bp；app_main 已注册本蓝图，写完即生效）
+"""
+from flask import Blueprint
+
+bp = Blueprint("{pkg}", __name__)
+'''
+
+
+def scaffold_frozen_modules(code_dir: Path,
+                            surfaces: list[ModuleSurface]) -> list[str]:
+    """契约层 v0：给无路由定义的冻结包生成 Blueprint 存根文件。
+
+    9/21 取证：pro 反复幻觉 `from app_main.routers import …`——它知道
+    该有路由层但不知道落在哪。存根把"往哪写"变成确定性事实：
+    每个冻结包一个 <pkg>_routes.py，app_main 注册全部蓝图，修复器
+    只需往存根里填 handler。幂等：已有存根不覆盖（保护修复器写入）。
+    """
+    code_dir = Path(code_dir)
+    created: list[str] = []
+    have = {s.name for s in surfaces}
+    for child in sorted(code_dir.iterdir()):
+        if not child.is_dir() or child.name.startswith(("_", ".")):
+            continue
+        if not (child / "__init__.py").exists():
+            continue
+        if child.name in have:
+            continue
+        stub = child / f"{child.name}_routes.py"
+        if stub.exists():
+            continue
+        stub.write_text(_STUB_TEMPLATE.format(pkg=child.name),
+                        encoding="utf-8")
+        created.append(stub.relative_to(code_dir).as_posix())
+    return created
+
+
+def assemble(code_dir: Path, scaffold: bool = False) -> dict:
     """扫描 + 生成 app_main。返回摘要（幂等：重复调用覆盖同文件）。
 
     框架甄别：扫到 Blueprint → Flask 模板（现状）；只有 APIRouter →
     FastAPI 模板；两者并存（混合项目）按 Flask——Blueprint 的
     register_blueprint 无法在 FastAPI 里落地，反之 include_router
     同理，取能接上更多模块的那个。
+    scaffold=True 时先给冻结包补 Blueprint 存根再扫（契约层 v0）。
     """
     code_dir = Path(code_dir)
+    stubs: list[str] = []
+    if scaffold:
+        stubs = scaffold_frozen_modules(code_dir, scan_surfaces(code_dir))
     surfaces = scan_surfaces(code_dir)
     n_bp = sum(len(s.blueprints) for s in surfaces)
     n_r = sum(len(s.routers) for s in surfaces)
@@ -225,6 +272,7 @@ def assemble(code_dir: Path) -> dict:
         "blueprints": n_bp,
         "routers": n_r,
         "inits": sum(len(s.inits) for s in surfaces),
+        "scaffolded": stubs,
         "parse_errors": [f"{s.name}/{e}" for s in surfaces for e in s.parse_errors],
         "file": str(target / "app_main.py"),
     }

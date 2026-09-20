@@ -199,6 +199,9 @@ def main() -> int:
     ap.add_argument("--model", default=None, help="覆盖主刀模型（默认 pro）")
     ap.add_argument("--no-rollback", action="store_true",
                     help="关闭回滚保险（调试用）")
+    ap.add_argument("--scaffold", action="store_true",
+                    help="每轮修复前跑契约层脚手架：冻结模块补 Blueprint"
+                         "存根并重装配 app_main（pro 的写入目标确定化）")
     args = ap.parse_args()
 
     from app.arcbench_smoke import auto_repair
@@ -242,6 +245,12 @@ def main() -> int:
         if not failures:
             print("[loop] 全过，收工")
             return 0
+        if args.scaffold:
+            # 契约层脚手架先落盘——后续结构事实/修复指令都基于脚手架后的形态
+            from app.utils.mechanical_assembly import assemble
+            info = assemble(project_dir / "code", scaffold=True)
+            print(f"[loop] 脚手架: 新增 {len(info['scaffolded'])} 个存根, "
+                  f"app_main 蓝图={info['blueprints']}", flush=True)
         contexts = _failure_contexts(project_dir, failures)
         frags = _req_fragments(failures)
         facts = _module_facts(project_dir / "code")

@@ -107,3 +107,64 @@ def test_generated_fastapi_app_imports_and_serves(tmp_path):
         sys.modules.pop("app_main", None)
         sys.modules.pop("mod.mod", None)
         sys.modules.pop("mod", None)
+
+
+def test_scaffold_creates_stubs_for_frozen_only_and_idempotent(tmp_path):
+    """契约层 v0：冻结包得存根；已有路由的包不动；幂等且不覆盖修复器写入。"""
+    from app.utils.mechanical_assembly import assemble, scaffold_frozen_modules, scan_surfaces
+
+    code = tmp_path / "code"
+    code.mkdir()
+    _mk_pkg(code, "frozen_a", "# 无路由定义\n")
+    _mk_pkg(code, "authed", FLASK_MOD)          # 已有 Blueprint+init
+    # 第一遍：只有 frozen_a 拿存根
+    created = scaffold_frozen_modules(code, scan_surfaces(code))
+    assert created == ["frozen_a/frozen_a_routes.py"]
+    stub = code / "frozen_a" / "frozen_a_routes.py"
+    assert "Blueprint" in stub.read_text(encoding="utf-8")
+    # 修复器往存根里写了 handler
+    stub.write_text(
+        stub.read_text(encoding="utf-8")
+        + '\n@bp.route("/a")\ndef a():\n    return "A"\n',
+        encoding="utf-8")
+    # 第二遍：幂等，不覆盖（修复器内容保留）
+    created2 = scaffold_frozen_modules(code, scan_surfaces(code))
+    assert created2 == []
+    assert '@bp.route("/a")' in stub.read_text(encoding="utf-8")
+
+
+def test_assemble_scaffold_registers_stub_and_route_lives(tmp_path):
+    """scaffold=True：存根蓝图进 app_main，修复器写入的路由真生效。"""
+    from fastapi.testclient import TestClient  # noqa: F401  （flask 路径用 flask client）
+
+    code = tmp_path / "code"
+    code.mkdir()
+    _mk_pkg(code, "pages", "# 冻结\n")
+    assemble(code, scaffold=True)
+    # 修复器往存根写页面路由
+    stub = code / "pages" / "pages_routes.py"
+    stub.write_text(
+        stub.read_text(encoding="utf-8")
+        + '\n@bp.route("/pages")\ndef pages():\n    return "PAGES"\n',
+        encoding="utf-8")
+    # 下一轮脚手架重装配（app_main 再生，存根保留）
+    info = assemble(code, scaffold=True)
+    assert info["blueprints"] >= 1
+    gen = (code / "app_main" / "app_main.py").read_text(encoding="utf-8")
+    assert "pages_routes" in gen, "存根蓝图必须注册进 app_main"
+    # 行为验证
+    for name in list(sys.modules):
+        if name.startswith(("app_main", "pages")):
+            sys.modules.pop(name, None)
+    sys.path.insert(0, str(code))
+    try:
+        import app_main.app_main as m
+        client = m.create_app().test_client()
+        assert client.get("/pages").status_code == 200
+        assert client.get("/pages").data == b"PAGES"
+        assert client.get("/api/health").status_code == 200
+    finally:
+        sys.path.remove(str(code))
+        for name in list(sys.modules):
+            if name.startswith(("app_main", "pages")):
+                sys.modules.pop(name, None)
