@@ -521,6 +521,17 @@ class DevLoopEngine:
                             code, tests, gate_passed,
                         )
                 elif result.status is ExecutionStatus.SUCCESS:
+                    # 台账回写（B 件数据源）：本次写码模型 + 执行结果
+                    try:
+                        from app.utils.model_ledger import record as _ml_record
+
+                        _ml_record("codegen",
+                                   getattr(self, "_last_code_model",
+                                           self.dev_model),
+                                   True,
+                                   getattr(self.llm, "total_tokens_used", 0))
+                    except Exception:
+                        pass
                     return self._finish(
                         module, project_id, ModuleStatus.SUCCESS, fix_attempts,
                         warning_note, code, tests, gate_passed,
@@ -532,6 +543,16 @@ class DevLoopEngine:
                         f"高危操作被安全拦截: {result.message}", code, tests, gate_passed,
                     )
                 else:  # FAILED / TIMEOUT
+                    try:
+                        from app.utils.model_ledger import record as _ml_record
+
+                        _ml_record("codegen",
+                                   getattr(self, "_last_code_model",
+                                           self.dev_model),
+                                   False,
+                                   getattr(self.llm, "total_tokens_used", 0))
+                    except Exception:
+                        pass
                     failure_report = (
                         f"exit_code={result.exit_code} stderr={result.stderr} "
                         f"stdout={result.stdout} timeout={self.settings.sandbox_timeout_seconds}s"
@@ -570,7 +591,8 @@ class DevLoopEngine:
                     ),
                 )
             else:
-                code = self._fix_code(module, code, tests, failure_report)
+                code = self._fix_code(module, code, tests, failure_report,
+                                      fix_attempts=fix_attempts)
             self._persist_fix(project_id, module, fix_attempts, failure_report)
 
     def run_batch(
@@ -618,8 +640,10 @@ class DevLoopEngine:
                 "此前实测即有模块因此冻结）\n"
                 + "\n".join(api_lines)
             )
+        # 台账数据源：记录本次写码模型（结果在执行成败处回写）
+        self._last_code_model = self._model_for_module(module, responsibility)
         response = self._chat_resilient(
-            self._model_for_module(module, responsibility),
+            self._last_code_model,
             WRITE_CODE_SYSTEM + self._platform_prompt + self._danger_prompt + self._style_prompt,
             self._prompt_with_shared(user),
         )
@@ -679,9 +703,26 @@ class DevLoopEngine:
         )
         return _extract_code(response.content)
 
-    def _fix_code(self, module: str, code: str, tests: str, failure: str) -> str:
+    def _fix_code(self, module: str, code: str, tests: str, failure: str,
+                  fix_attempts: int = 0) -> str:
+        # A 件升级钩子（2026-09-20 v8 模型联动）：同模块修复 2 连败后，
+        # 换台账推荐次优模型（无台账数据回退主帅）——flash 卡住循环
+        # 不再只靠同模型硬扛。每模块至多升级一次（≥2 即锁定）。
+        repair_model = self.dev_model
+        if fix_attempts >= 2:
+            try:
+                from app.utils.model_ledger import recommend
+
+                ranked = recommend("codegen",
+                                   exclude=(self.dev_model,))
+                repair_model = (ranked[0] if ranked
+                                else self.main_model)
+                print(f"[ledger] 修复升级 → {repair_model} "
+                      f"（fix_attempts={fix_attempts}）", flush=True)
+            except Exception:
+                repair_model = self.main_model
         response = self._chat_resilient(
-            self.dev_model,
+            repair_model,
             FIX_CODE_SYSTEM + self._platform_prompt + self._danger_prompt + self._style_prompt,
             self._prompt_with_shared(
                 FIX_CODE_USER.format(
