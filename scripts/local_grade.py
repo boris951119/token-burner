@@ -42,6 +42,50 @@ def _free_port(prefer: int) -> int:
         return port
 
 
+def _pid_alive(pid: int) -> bool:
+    # Windows：OpenProcess 探活（无 psutil 依赖）；退出码即存活位
+    import ctypes
+
+    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+    kernel32 = ctypes.windll.kernel32
+    h = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not h:
+        return False
+    try:
+        code = ctypes.c_ulong()
+        if kernel32.GetExitCodeProcess(h, ctypes.byref(code)):
+            return code.value == 259  # STILL_ACTIVE
+        return True
+    finally:
+        kernel32.CloseHandle(h)
+
+
+def _acquire_grade_lock():
+    """评分互斥锁：模板目录/test-results/summary 全是共享路径，
+    9/20 取证：两个修复环并发互相 rmtree 对方模板，起服失败被记 0 分。
+    残留锁按 pid 探活自动回收。返回锁文件路径（None=已有实例在跑）。"""
+    lock = GRADE_DIR / ".grade.lock"
+    if lock.exists():
+        try:
+            old = int(lock.read_text().strip() or 0)
+        except (ValueError, OSError):
+            old = 0
+        if old and old != os.getpid() and _pid_alive(old):
+            return None  # 他进程活锁；同 pid 可重入（修复环同进程复评）
+        if old == os.getpid():
+            return lock
+        lock.unlink(missing_ok=True)
+    try:
+        fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return None
+    try:
+        os.write(fd, str(os.getpid()).encode())
+    finally:
+        os.close(fd)
+    return lock
+
+
 def _wait_health(url: str, deadline_s: float = 90) -> bool:
     t0 = time.time()
     while time.time() - t0 < deadline_s:
@@ -64,6 +108,15 @@ def main() -> int:
     ap.add_argument("--port", type=int, default=3301)
     ap.add_argument("--report", default=None)
     args = ap.parse_args()
+
+    lock = _acquire_grade_lock()
+    if lock is None:
+        print("[grade] 已有评分实例在跑（.grade.lock 活锁）——"
+              "共享模板/报告路径会被并发踩踏，拒绝启动")
+        return 2
+    import atexit
+
+    atexit.register(lambda: lock.unlink(missing_ok=True))
 
     if args.exported_dir:
         template = Path(args.exported_dir).resolve()

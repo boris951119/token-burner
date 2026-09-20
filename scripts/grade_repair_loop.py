@@ -83,12 +83,20 @@ def _archive_diff_and_restore(project_dir: Path, snap: Path,
     return patch
 
 
+class GradeEnvError(RuntimeError):
+    """评分环境故障（起服失败/无报告）——summary 是陈旧数据不可用。"""
+
+
 def _run_grade(project_dir: Path, task: str) -> tuple[int, int, list[str]]:
     from scripts.local_grade import main as grade_main  # 复用同进程评分
 
     sys.argv = ["local_grade.py", "--project-dir", str(project_dir),
                 "--task", task]
     rc = grade_main()
+    if rc == 2:
+        # 9/20 取证：起服失败时读陈旧 summary，把上上轮战绩当本轮
+        # 失败清单喂修复器纯烧 token——环境故障必须炸出来重试
+        raise GradeEnvError("评分环境故障（rc=2：起服失败/并发锁/无报告）")
     summary = GRADE_DIR / "grade-summary.json"
     data = json.loads(summary.read_text(encoding="utf-8"))
     return data.get("passed", 0), data.get("total", 0), data.get("failures", [])
@@ -150,8 +158,17 @@ def main() -> int:
     project_dir = Path(args.project_dir)
 
     def _grade_with_guard(prev_passed, prev_failures, snap, label):
-        """评分；若低于修复前则回滚（diff 先行存档），沿用修复前战绩。"""
-        passed, total, failures = _run_grade(project_dir, args.task)
+        """评分（环境故障重试一次）；若低于修复前则回滚（diff 先行存档），
+        沿用修复前战绩。"""
+        for attempt in (1, 2):
+            try:
+                passed, total, failures = _run_grade(project_dir, args.task)
+                break
+            except GradeEnvError as exc:
+                if attempt == 2:
+                    raise
+                print(f"[loop] {exc}，清场 90s 后重试一次", flush=True)
+                time.sleep(90)
         # 快照缺失（当轮快照失败且修复未跑）时不触发回滚，防 None 还原
         if (not args.no_rollback and prev_passed is not None
                 and snap is not None and passed < prev_passed):
