@@ -4,6 +4,11 @@
 每轮：官方全量评分 → 失败清单+错误上下文 → auto_repair（验证信号=
 official_probe 跑失败子集）→ 复评。到全过/轮次耗尽/无进展为止。
 
+回滚保险（keep7 取证：修复轮把好状态改坏且无路可退）：每轮修复前
+快照整个项目目录；下一轮评分若低于修复前，先存 diff 取证再整体还原
+——分数逐轮单调不降。（bookstack 取证：git checkout 整体回滚未先
+diff，可能丢了有益的未提交改动，故 diff 必须先于还原落盘。）
+
 用法:
     python scripts/grade_repair_loop.py --project-dir <projects/xxx> \
         --task keep --rounds 4
@@ -14,13 +19,68 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 GRADE_DIR = ROOT / "scripts" / "official_grade"
+
+# 快照/还原都跳过的缓存与自测产物（体积大且与源码态无关）
+_SNAP_IGNORE = ("__pycache__", ".selftest_template", "selftest-results",
+                "test-results", "node_modules", ".pytest_cache")
+
+
+def _snapshot(project_dir: Path) -> Path:
+    """修复前快照整个项目目录（排除缓存/自测产物），返回快照路径。"""
+    dst = Path(tempfile.mkdtemp(prefix="grl_snap_")) / "snap"
+    shutil.copytree(project_dir, dst,
+                    ignore=shutil.ignore_patterns(*_SNAP_IGNORE))
+    return dst
+
+
+def _rmtree_hard(path: Path, attempts: int = 5) -> None:
+    # Windows 句柄锁（WinError 32）重试退避；持续失败必须炸出来，
+    # 静默半还原态比不还原更糟。
+    for i in range(attempts):
+        try:
+            shutil.rmtree(path)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(1.5 * (i + 1))
+
+
+def _archive_diff_and_restore(project_dir: Path, snap: Path,
+                              label: str) -> Path:
+    """先存「快照→现状」diff 到仓库级日志，再整体还原项目目录。
+
+    diff 落在 ROOT/logs/repair_rollback/（项目目录外），还原不会
+    覆盖它。git diff --no-index 比较两个目录，退出码 1=有差异。
+    """
+    out_dir = ROOT / "logs" / "repair_rollback"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    patch = out_dir / f"{project_dir.name}_{label}_{time.strftime('%H%M%S')}.patch"
+    # git diff --no-index 比较两个目录，退出码 1=有差异（此处不算失败）
+    r = subprocess.run(
+        ["git", "diff", "--no-index", "--src-prefix=修复前/", "--dst-prefix=修复后/",
+         str(snap), str(project_dir)],
+        capture_output=True, timeout=120,
+    )
+    patch.write_bytes(r.stdout or b"")
+    for child in list(project_dir.iterdir()):
+        if child.name in _SNAP_IGNORE:
+            continue
+        _rmtree_hard(child) if child.is_dir() else child.unlink()
+    shutil.copytree(snap, project_dir, dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns(*_SNAP_IGNORE))
+    return patch
 
 
 def _run_grade(project_dir: Path, task: str) -> tuple[int, int, list[str]]:
@@ -76,6 +136,8 @@ def main() -> int:
     ap.add_argument("--task", default="keep")
     ap.add_argument("--rounds", type=int, default=4)
     ap.add_argument("--model", default=None, help="覆盖主刀模型（默认 pro）")
+    ap.add_argument("--no-rollback", action="store_true",
+                    help="关闭回滚保险（调试用）")
     args = ap.parse_args()
 
     from app.arcbench_smoke import auto_repair
@@ -86,10 +148,26 @@ def main() -> int:
                        else ("openai/deepseek-v4-pro",))
 
     project_dir = Path(args.project_dir)
-    final_ok = False
+
+    def _grade_with_guard(prev_passed, prev_failures, snap, label):
+        """评分；若低于修复前则回滚（diff 先行存档），沿用修复前战绩。"""
+        passed, total, failures = _run_grade(project_dir, args.task)
+        # 快照缺失（当轮快照失败且修复未跑）时不触发回滚，防 None 还原
+        if (not args.no_rollback and prev_passed is not None
+                and snap is not None and passed < prev_passed):
+            patch = _archive_diff_and_restore(project_dir, snap, label)
+            print(f"[loop] 评分回退 {prev_passed}→{passed}，已回滚本轮修复"
+                  f"（diff: {patch.name}）", flush=True)
+            passed, failures = prev_passed, prev_failures
+        return passed, total, failures
+
+    prev_passed: int | None = None
+    prev_failures: list[str] = []
+    snap: Path | None = None
     for rnd in range(1, args.rounds + 1):
         print(f"[loop] === 第 {rnd}/{args.rounds} 轮 ===", flush=True)
-        passed, total, failures = _run_grade(project_dir, args.task)
+        passed, total, failures = _grade_with_guard(
+            prev_passed, prev_failures, snap, f"round{rnd}")
         print(f"[loop] 官方: {passed}/{total}", flush=True)
         if not failures:
             print("[loop] 全过，收工")
@@ -106,17 +184,22 @@ def main() -> int:
             "对齐逐字文案（按钮/占位符/通知原文）/修导航；"
             "禁止修改 tests/ 目录与官方 specs；禁止删路由；最小化修改。"
         )
+        # 修复可能半途而废：战绩与快照都在修复动作前定格
+        prev_passed, prev_failures = passed, failures
         try:
             test_cmd = [sys.executable, str(ROOT / "scripts" / "official_probe.py"),
                         "--project-dir", str(project_dir), "--task", args.task,
                         "--specs", *frags] if frags else None
+            if not args.no_rollback:
+                snap = _snapshot(project_dir)
             auto_repair(project_dir, settings, max_rounds=1,
                         verify_timeout=1800, test_cmd=test_cmd,
                         extra_issue=issue)
         except Exception as exc:
             print(f"[loop] 修复异常: {exc!r}"[:300], flush=True)
-    # 末轮复评
-    passed, total, failures = _run_grade(project_dir, args.task)
+    # 末轮复评（同样过回滚闸）
+    passed, total, failures = _grade_with_guard(
+        prev_passed, prev_failures, snap, "final")
     print(f"[loop] 最终: {passed}/{total}")
     return 0 if not failures else 1
 
