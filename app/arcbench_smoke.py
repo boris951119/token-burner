@@ -1186,6 +1186,7 @@ def verify_delivery(
     code_dir = project_dir / "code"
     notes: list[str] = []
     all_reports: list[str] = []
+    all_passed = False
     _beat(project_dir, "验收-启动")
 
     for verify_round in range(1, max_verify_rounds + 1):
@@ -1302,13 +1303,33 @@ def verify_delivery(
             jreport = f"旅程闸门异常: {exc!r}"[:400]
         notes.append(f"[R{verify_round}][journey] {'PASS' if jok else 'FAIL'}")
 
+        all_passed = False
         if ok and jok:
-            _beat(project_dir, "验收-通过")
-            return True, "\n".join(notes)
-        # 未全过 → 下一轮（auto_repair/journey 内部已有修复逻辑）
-        all_reports.append(f"[R{verify_round}] journey FAIL: {jreport[-200:]}")
+            all_passed = True
+        else:
+            # 未全过 → 下一轮（auto_repair/journey 内部已有修复逻辑）
+            all_reports.append(
+                f"[R{verify_round}] journey FAIL: {jreport[-200:]}")
+        if all_passed:
+            break
 
-    _beat(project_dir, "验收-全部轮次耗尽")
+    # --- Phase 3: 自测交付闸（v8 原则三：需求→自生成 Playwright 自测→
+    # 修复→交付前最后检测）。弱自检全过≠行为可用（平台双跑取证：
+    # 冒烟/旅程绿而交互全超时）。即使生成失败也降级放行（尽力交付）。---
+    try:
+        from app.utils.selftest_gate import selftest_gate
+
+        sok, sreport = selftest_gate(project_dir, requirement, settings)
+        notes.append(f"[selftest] {'PASS' if sok else 'FAIL'}")
+        if sok:
+            _beat(project_dir, "验收-通过")
+            return True, "\n".join(notes + [sreport])
+    except Exception as exc:
+        notes.append(f"[selftest] 异常降级: {exc!r}"[:200])
+    if all_passed:
+        _beat(project_dir, "验收-通过")
+        return True, "\n".join(notes)
+    _beat(project_dir, "验收-尽力交付")
     return False, "\n".join(notes + all_reports[-3:])
 
 
