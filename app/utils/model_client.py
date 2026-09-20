@@ -176,7 +176,14 @@ class ModelClient:
         self.embedding_cache = embedding_cache
         # M8-5：全局限流器（工厂持有单实例跨任务共享；None = 不限流）
         self.rate_limiter = rate_limiter
-        # 11.0 第 0 层总闸：任务级预算护栏（由 Pipeline 挂接/卸载）
+        # 11.0 第 0 层总闸：任务级预算护栏（由 Pipeline 挂接/卸载）。
+        # 零散实例兜底（2026-09-20 平台双跑取证：auto_repair 自建 client
+        # 整体绕过预算，7.0M/6.2M vs 2M 帽，¥210 学费）——未显式接线时
+        # 复用管线登记的活动护栏，堵住无上限失血。
+        if budget_guard is None:
+            from app.utils.budget import get_active_budget_guard
+
+            budget_guard = get_active_budget_guard()
         self.budget_guard: BudgetGuard | None = budget_guard
         # 11.0 可观测性：每步 token 累计
         self.total_tokens_used: int = 0

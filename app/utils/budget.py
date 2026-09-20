@@ -7,6 +7,11 @@
   「已完成部分 + 未完成清单 + 已耗 token」，交用户决定续跑或止损。
 
 用量数据源：LLM 客户端在每次调用后 record()（input + output）。
+
+活动护栏槽（2026-09-20 平台双跑取证）：验证/修复通道的零散 ModelClient
+（auto_repair 等自建实例）不经过工厂接线，曾整体绕过预算护栏——
+Keep/BookStack 双跑各超支 3 倍+（7.0M/6.2M vs budget=2M，¥210 学费）。
+管线创建护栏后在此登记，零散客户端兜底接入，堵住无上限失血。
 """
 
 from __future__ import annotations
@@ -20,6 +25,20 @@ class BudgetExceededError(RuntimeError):
 
 class TaskCancelledError(RuntimeError):
     """任务被用户取消（M12-1 协作式取消：检查点抛出，任务体终止）。"""
+
+
+_active_guard: "BudgetGuard | None" = None
+
+
+def set_active_budget_guard(guard: "BudgetGuard | None") -> None:
+    """登记当前任务的活动护栏（管线创建护栏时调用一次）。"""
+    global _active_guard
+    _active_guard = guard
+
+
+def get_active_budget_guard() -> "BudgetGuard | None":
+    """零散 ModelClient 兜底数据源：未显式接线时复用活动护栏。"""
+    return _active_guard
 
 
 class BudgetGuard:

@@ -123,12 +123,15 @@ class TestRepoFixer:
         assert any("测试失败输出" in u for u in repatch_prompts)
 
     def test_never_converges_reports_error(self, repo):
+        # repatch=None → 每轮同一版错误补丁 → 失败输出本质相同 →
+        # 2026-09-20 止损语义：第 2 轮判定无进展立即退出（烧满轮次
+        # 却零收敛是平台双跑 ¥130 级失血点）
         llm = FakeLLM(PLAN, [STILL_BUGGY, STILL_BUGGY, STILL_BUGGY])
         fixer = _fixer(llm, repo, max_rounds=3)
         result = fixer.fix("calc.add 返回了差", test_files=["test_calc.py"])
         assert result.ok is False
-        assert result.rounds == 3
-        assert "验证" in result.error
+        assert result.rounds == 2
+        assert "无进展止损" in result.error
 
     def test_path_traversal_rejected(self, repo):
         llm = FakeLLM(PLAN_TRAVERSAL, [])

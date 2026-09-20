@@ -384,6 +384,14 @@ class Pipeline:
         # getattr 防护与 200/692 行同构：测试桩 LLM 无 call_log 时按 0 计
         guard.record(_sum_tokens(getattr(self.llm, "call_log", [])[baseline:]))
         setattr(self.llm, "budget_guard", guard)
+        # 活动护栏登记（2026-09-20 平台双跑取证）：验证/修复通道的零散
+        # ModelClient 不经工厂接线，曾整体绕过预算（7.0M/6.2M vs 2M 帽）；
+        # 登记后零散客户端兜底接入同一把护栏。护栏需存活到管线之后的
+        # verify/交付段（main.py 同进程续用），不做任务末卸载——下一任务
+        # 创建护栏时按覆盖语义自然接替。
+        from app.utils.budget import set_active_budget_guard
+
+        set_active_budget_guard(guard)
         # M12-1：协作式取消检查点注入（ensure_allowed 每次调用前生效）
         if self._cancel_check is not None:
             guard.attach_cancel_check(self._cancel_check)

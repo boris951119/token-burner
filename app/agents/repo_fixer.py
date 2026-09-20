@@ -16,6 +16,7 @@ verify(运行验证命令) → fix(失败带输出重出补丁,≤ max_rounds)�
 
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -98,6 +99,7 @@ class RepoFixer:
         result = RepoFixResult(ok=False, changed_files=list(changed),
                                skipped_paths=skipped)
         detail = ""
+        last_sig: str | None = None
         for attempt in range(1, self.max_rounds + 1):
             result.rounds = attempt
             self._apply(changed)
@@ -108,6 +110,16 @@ class RepoFixer:
                 result.diff = self._diff()
                 return result
             detail = output[-2500:]
+            # 无进展止损（2026-09-20 平台双跑取证：修复轮烧满 max_rounds
+            # 却零收敛是 ¥130 级失血点）——数字归一化后失败输出本质相同
+            # 即判定无进展，立即退出，不再烧后续轮次。
+            sig = re.sub(r"\d+", "N", detail)
+            if sig == last_sig:
+                result.error = (f"连续两轮失败输出相同，无进展止损"
+                                f"（{attempt} 轮）：{detail[:200]}")
+                result.diff = self._diff()
+                return result
+            last_sig = sig
             # 修复轮：带失败输出重出全部已改文件的完整新版
             repatched = self._repatch(issue, changed, detail)
             if repatched:
