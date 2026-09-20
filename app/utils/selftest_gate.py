@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -76,19 +77,58 @@ def ensure_selftests(project_dir: Path, requirement: str,
                       str(t.get("name") or "scenario"),
                       str(t.get("code") or "")) for t in tests]
             specs = [(a, b, c) for a, b, c in specs if "@playwright/test" in c]
-            if not specs:
+            cleaned: list[tuple[str, str, str]] = []
+            for a, b, c in specs:
+                text = c.strip()
+                # 生成内容卫生（2026-09-20 取证：LLM 曾输出带行号前缀的
+                # "1 | import ..."——一个坏 spec 让 Playwright 整体收集
+                # 失败，0/0 被误判通过）
+                if not text.startswith("import"):
+                    continue
+                if re.search(r"^\s*\d+\s*\|", text, re.MULTILINE):
+                    continue
+                cleaned.append((a, b, text))
+            if not cleaned:
                 raise ValueError("生成结果无有效 spec")
             specs_dir.mkdir(parents=True, exist_ok=True)
-            for k, (rid, name, code) in enumerate(specs):
+            for k, (rid, name, code) in enumerate(cleaned):
                 safe = "".join(ch if ch.isalnum() or ch in "._-" else "_"
                                for ch in f"{rid}_{name}")[:60]
                 (specs_dir / f"{safe or f'test_{k}'}.spec.ts").write_text(
                     code, encoding="utf-8")
+            lint_specs(specs_dir)
             return specs_dir
         except Exception as exc:  # 逐模型接力
             last = exc
     print(f"[selftest] 生成失败: {last!r}")
     return None
+
+
+def lint_specs(specs_dir: Path, max_drop: int = 4) -> int:
+    """lint 门：--list 发现解析失败的 spec 就剔除（坏文件会连坐整个
+    套件——2026-09-20 取证：REQ-3.2 一文件语法坏 → 全局 No tests
+    found）。返回存活 spec 数。"""
+    npx = shutil.which("npx") or shutil.which("npx.cmd") or "npx"
+    env = dict(os.environ, PLAYWRIGHT_TEST_DIR=str(specs_dir))
+    for _ in range(max_drop):
+        pt = subprocess.run(
+            [npx, "playwright", "test", "--list"], cwd=str(GRADE_DIR),
+            env=env, capture_output=True, text=True, timeout=300)
+        combined = (pt.stdout or "") + (pt.stderr or "")
+        if "No tests found" not in combined and pt.returncode == 0:
+            break
+        bad = set(re.findall(
+            r"([A-Za-z0-9_.\-]+\.spec\.ts)", combined))
+        dropped = False
+        for name in bad:
+            victim = specs_dir / name
+            if victim.is_file():
+                victim.unlink()
+                print(f"[selftest] lint 剔除解析失败的 spec: {name}")
+                dropped = True
+        if not dropped:
+            break
+    return len(list(specs_dir.glob("*.spec.ts")))
 
 
 def _free_port(prefer: int) -> int:
@@ -198,7 +238,12 @@ def selftest_gate(project_dir: Path, requirement: str, settings,
     if specs_dir is None:
         return False, "自测 specs 生成失败（降级：跳过自测闸）"
     passed, failed, failures, tail = run_selftests(project_dir, specs_dir)
-    notes = [f"[selftest] 首轮 {passed}/{passed + failed}"]
+    notes.append(f"[selftest] 首轮 {passed}/{passed + failed}")
+    if passed + failed == 0:
+        # 真空真值漏洞（2026-09-20 取证）：坏 spec 连坐收集失败 → 0/0
+        # 曾被判 PASS——零信号=零证据=FAIL
+        _beat(project_dir, "自测闸-零信号")
+        return False, "\n".join(notes + ["自测零信号：specs 未收集到任何用例"])
     if not failed:
         _beat(project_dir, "自测闸-通过")
         return True, "\n".join(notes)
@@ -226,6 +271,9 @@ def selftest_gate(project_dir: Path, requirement: str, settings,
         passed, failed, failures, tail = run_selftests(
             project_dir, specs_dir)
         notes.append(f"[selftest][R{rnd}] {passed}/{passed + failed}")
+        if passed + failed == 0:
+            notes.append("[selftest][R{r}] 零信号止损".format(r=rnd))
+            break
         if not failed:
             _beat(project_dir, "自测闸-通过")
             return True, "\n".join(notes)
