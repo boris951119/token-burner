@@ -199,7 +199,14 @@ def run_selftests(project_dir: Path, specs_dir: Path,
     from app.platform_export import export_platform_layout
 
     project_dir = Path(project_dir)
-    template = project_dir / ".selftest_template"
+    # 时间戳模板目录（2026-09-20 取证：Windows 下上一轮服务子进程句柄
+    # 未释放会让固定目录 rmtree 崩溃；新目录天然避开锁，旧目录尽力清理）
+    template = project_dir / f".selftest_template_{int(time.time())}"
+    for old in sorted(project_dir.glob(".selftest_template*"))[:-3]:
+        try:
+            shutil.rmtree(old, ignore_errors=True)
+        except Exception:
+            pass
     if template.exists():
         shutil.rmtree(template)
     template.mkdir(parents=True)
@@ -252,6 +259,11 @@ def run_selftests(project_dir: Path, specs_dir: Path,
             walk(s)
         return passed, failed, failures, (pt.stdout or "")[-1500:]
     finally:
+        # Windows：terminate 不杀孙进程（Flask reload/子线程句柄），锁死
+        # 模板目录——taskkill /T 连树击杀，兜底 terminate/kill
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True, text=True)
         proc.terminate()
         try:
             proc.wait(timeout=10)
