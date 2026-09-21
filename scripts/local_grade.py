@@ -185,7 +185,7 @@ def main() -> int:
         proc_test = subprocess.run(
             [npx, "playwright", "test"],
             cwd=str(GRADE_DIR), env=env2,
-            capture_output=True, text=True, timeout=3600)
+            capture_output=True, text=True, timeout=7200)  # 66 题单 worker 实测 ~60min，3600s 卡线强杀（9/22 so 取证）
         # 全量落盘：后台任务 stdout 块缓冲会被截断，崩溃现场必须落本地
         run_log = GRADE_DIR / "grade-run.log"
         run_log.write_text(
