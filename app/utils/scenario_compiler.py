@@ -9,7 +9,7 @@
 纯机械解析，零 LLM。requirements.yaml 结构（官方两题实测）：
 ROOT(FOLDER) → REQ-N(FOLDER) → REQ-N.M(ATOMIC, scenarios=[{name, steps:
 [{keyword: GIVEN|WHEN|THEN, content}]}], dependencies=[...])
-注意：并非所有题的 yaml 都带种子声明（Keep 带、BookStack 不带）——
+注意：并非所有题的 yaml 都带种子声明（按题而异，不可假设存在）——
 种子契约是可选段，缺省时测试需自建数据。
 """
 from __future__ import annotations
@@ -76,7 +76,7 @@ def compile_scenarios(yaml_path: Path) -> list[Scenario]:
 
 
 def has_seed_declarations(yaml_path: Path) -> bool:
-    """该题需求是否带种子数据声明（Keep=是，BookStack=否）。
+    """该题需求是否带种子数据声明（逐题实测，不可假设）。
     决定 v8 种子通道模式：机械播种 vs 测试自建数据。"""
     text = Path(yaml_path).read_text(encoding="utf-8", errors="replace")
     return "seed data" in text.lower()

@@ -2,7 +2,7 @@
 """拼接机械化（v8 P0-a）：AST 扫描模块蓝图/路由器/初始化函数，确定性
 生成 app_main 的 create_app——组装是确定性工作，不交给概率。
 
-取证（2026-09-20 BookStack 本地首跑）：LLM 组装的产物 = 空壳 create_app
+取证（2026-09-20 首跑）：LLM 组装的产物 = 空壳 create_app
 （仅 /static）+ 幻觉导入的 main.py + 全库 0 处 /api/health，3 个模块
 修复耗尽冻结——拼接失败是 2/34 的第一根因，非交互层。
 

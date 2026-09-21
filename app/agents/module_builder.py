@@ -76,7 +76,7 @@ _UI_TARGET_KEYS = ("view", "web", "ui", "页面", "前端", "界面", "视图",
 
 
 def inject_ui_manifest(plans: list[ModulePlan], requirement: str) -> str | None:
-    """UI 页面清单注入（平台 v6-3 取证：占位壳页 0/32——UI 完整性此前
+    """UI 页面清单注入（平台 v6-3 取证：占位壳页全盘落空——UI 完整性此前
     无结构化契约）。
 
     把需求锚点（页面名 + 逐字文案 + 种子数据）作为清单追加到前端/

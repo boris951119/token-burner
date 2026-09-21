@@ -608,7 +608,7 @@ class DevLoopEngine:
 
     def _model_for_module(self, module: str, responsibility: str) -> str:
         """按产物类型路由写码模型（平台 v6-3 取证：UI 是最重产物，
-        flash 写前端产出占位壳 0/32）。
+        flash 写前端产出占位壳）。
 
         UI/组装形态模块（页面/前端/视图/静态托管）→ 主帅模型亲自写；
         其余（纯后端逻辑/数据层）→ 开发模型。链式兜底不变。"""
