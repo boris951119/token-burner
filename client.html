@@ -424,6 +424,48 @@
     max-height: 220px; overflow: auto; display: none; }
   .flow-node.open .flow-detail { display: block; }
   .flow-node.open { background: var(--panel-2); border-radius: var(--r-sm); }
+
+  /* =================================================================
+   * v1.2 首启向导改版：品牌头像卡 + 分段进度
+   * ================================================================= */
+  .wiz-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .wiz-logo { width: 38px; height: 38px; border-radius: 10px; flex: 0 0 auto;
+    background: var(--accent-soft); display: flex; align-items: center;
+    justify-content: center; font-size: 19px; }
+  .wiz-title { font-size: var(--fs-title); font-weight: 700; line-height: 1.3; }
+  .wiz-sub { font-size: var(--fs-sm); color: var(--text-2); }
+  .wiz-dots { display: flex; gap: 6px; align-items: center; margin-left: auto; }
+  .wiz-dot { height: 4px; width: 26px; border-radius: var(--r-full);
+    background: var(--border-strong); transition: background var(--transition),
+    width var(--transition); }
+  .wiz-dot.on { background: var(--accent); width: 36px; }
+  .wiz-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .wiz-card { display: flex; gap: 12px; align-items: center; width: 100%;
+    text-align: left; padding: 12px 14px; border: 1px solid var(--border);
+    border-radius: var(--r-lg); background: var(--panel-2); cursor: pointer;
+    font-family: inherit; color: inherit; min-width: 0;
+    transition: border-color var(--transition), transform var(--transition),
+    box-shadow var(--transition); }
+  .wiz-card:hover { border-color: var(--accent); transform: translateY(-1px);
+    box-shadow: var(--shadow-sm); }
+  .wiz-card:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .wiz-avatar { flex: 0 0 auto; width: 38px; height: 38px; border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px; font-weight: 700; }
+  .wiz-card-name { font-size: var(--fs-lg); font-weight: 600;
+    color: var(--text); line-height: 1.35; }
+  .wiz-card-host { font-family: var(--font-mono); font-size: var(--fs-xs);
+    color: var(--muted); white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; display: block; }
+  .wiz-card-txt { min-width: 0; flex: 1; }
+  .wiz-picked { display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; border: 1px solid var(--border);
+    border-radius: var(--r-md); background: var(--panel-2); margin: 10px 0 12px; }
+  .wiz-picked .wiz-avatar { width: 28px; height: 28px; font-size: 13px;
+    border-radius: 8px; }
+  .wiz-done-badge { width: 46px; height: 46px; border-radius: var(--r-full);
+    background: var(--ok-soft); display: flex; align-items: center;
+    justify-content: center; font-size: 22px; margin-bottom: 10px; }
 </style>
 </head>
 <body>
@@ -686,9 +728,12 @@
     <div class="field"><label>名称 *</label>
       <input type="text" id="api-name" placeholder="如：DeepSeek / 智谱 / Moonshot"></div>
     <div class="field"><label>API Key *</label>
-      <input type="text" id="api-key" placeholder="sk-..."></div>
+      <input type="text" id="api-key" placeholder="sk-... 或 中转站发放的 Key">
+      <div id="api-key-hint" class="hint" style="margin-top:4px; white-space:pre-line;"></div></div>
     <div class="field"><label>Base URL（OpenAI 兼容端点）</label>
       <input type="text" id="api-base" placeholder="如：https://api.deepseek.com/v1（留空用官方默认）"></div>
+    <div class="hint hidden" id="api-relay-help" style="margin:-4px 0 8px; padding:8px 10px; border:1px dashed var(--line, #d4d4d8); border-radius:6px; line-height:1.7;">
+      🔗 <b>中转站（聚合网关）接入</b>：Base URL 照抄站方文档（通常以 <span class="mono">/v1</span> 结尾）；Key 用站方发放的那把；模型名照抄站方列表——本产品会自动处理 <span class="mono">openai/</span> 路由前缀。<br>最常见失败：<b>Key 和 Base URL 不属于同一平台</b>（混用），保存后探针会明确指出。</div>
     <div class="field"><label>模型（逗号分隔）
       <button type="button" class="btn-ghost btn-sm" id="btn-discover-models">🔍 自动发现</button></label>
       <input type="text" id="api-models" placeholder="如：deepseek-chat, deepseek-reasoner（可先自动发现）"></div>
@@ -696,42 +741,54 @@
       <button class="btn-ghost" id="btn-api-cancel">取消</button>
       <button class="btn" id="btn-api-confirm">确认添加</button>
     </div>
+    <p class="hint" style="margin:6px 0 0;">🔐 Key 仅保存在本机 secrets.local.json，不上传任何服务器。</p>
   </div>
 </div>
 
-<!-- v1.1 C3 首启向导(三步:模板 → Key+探针 → 完成) -->
+<!-- v1.1 C3 首启向导(三步:模板 → Key+探针 → 完成);v1.2 视觉改版 -->
 <div class="overlay hidden" id="wiz-modal">
-  <div class="modal" style="max-width:560px;">
-    <h3>🚀 欢迎使用 token-burner <span class="hint" id="wiz-step-label" style="font-weight:normal">步骤 1/3</span></h3>
+  <div class="modal" style="max-width:600px;">
+    <div class="wiz-head">
+      <div class="wiz-logo">🚀</div>
+      <div style="min-width:0;">
+        <div class="wiz-title">欢迎使用 token-burner</div>
+        <div class="wiz-sub" id="wiz-step-label">三步接入你的第一个模型 · 选择服务商</div>
+      </div>
+      <div class="wiz-dots" id="wiz-dots">
+        <span class="wiz-dot on"></span><span class="wiz-dot"></span><span class="wiz-dot"></span>
+      </div>
+    </div>
     <div id="wiz-body">
       <div id="wiz-step1">
-        <p class="hint">选择你的模型服务商(点击卡片),或稍后在右下角「API 接口配置」添加。</p>
-        <div class="tpls" id="wiz-tpl-rows" style="display:grid; grid-template-columns:1fr 1fr; gap:8px;"></div>
-        <p class="hint" style="margin-top:10px;">没有 Key?选「本地 Ollama」可零 Key 试用;也可点「跳过」,稍后在右下角配置。</p>
+        <p class="hint" style="margin:0 0 10px;">点击卡片选择你的模型服务商；之后也能在右下角「API 接口配置」随时增删。</p>
+        <div class="wiz-grid" id="wiz-tpl-rows"></div>
+        <p class="hint" style="margin-top:12px;">💡 没有 Key？选「本地 Ollama」可零 Key 试用；也可以先「跳过」，稍后在右下角配置。</p>
       </div>
       <div id="wiz-step2" class="hidden">
-        <p class="hint">已为你预填 <b id="wiz-tpl-name"></b>。请在下方粘贴 API Key 并验证连通性:</p>
+        <div class="wiz-picked hidden" id="wiz-picked"></div>
         <div class="field"><label>API Key *</label>
-          <input type="text" id="wiz-key" placeholder="sk-..."></div>
-        <div class="field"><label>模型(可自动发现)</label>
-          <input type="text" id="wiz-models" placeholder="点击右侧按钮自动拉取">
-          <button type="button" class="btn-ghost btn-sm" id="wiz-discover" style="margin-top:4px;">🔍 自动发现模型</button></div>
-        <div id="wiz-probe-result" class="hint" style="margin:8px 0;"></div>
+          <input type="text" id="wiz-key" placeholder="粘贴服务商发放的 Key，如 sk-... / ak_... / id.secret">
+          <div id="wiz-key-hint" class="hint" style="margin-top:4px; white-space:pre-line;"></div></div>
+        <div class="field"><label>模型（可自动发现）
+          <button type="button" class="btn-ghost btn-sm" id="wiz-discover">🔍 自动发现</button></label>
+          <input type="text" id="wiz-models" placeholder="先点「自动发现」拉取，或手动填写"></div>
+        <div id="wiz-probe-result" class="hint" style="margin:8px 0; white-space:pre-line;"></div>
         <div class="modal-actions">
           <button class="btn-ghost" id="wiz-back">← 上一步</button>
-          <button class="btn" id="wiz-probe">验证连通(探针)</button>
+          <button class="btn" id="wiz-probe">验证连通并保存</button>
         </div>
       </div>
       <div id="wiz-step3" class="hidden">
-        <p id="wiz-done-text" style="font-size:15px;">✅ 连接就绪!</p>
-        <p class="hint">接下来:在工作台输入一句需求 → 确认组队 → 点火。模型可随时在右下角修改。</p>
+        <div class="wiz-done-badge">✅</div>
+        <p id="wiz-done-text" style="font-size:15px; font-weight:600; margin:0 0 6px;">连接就绪！</p>
+        <p class="hint">接下来：在工作台输入一句需求 → 确认组队 → 点火。模型可随时在右下角修改。</p>
         <div class="modal-actions">
           <button class="btn" id="wiz-finish">开始使用 →</button>
         </div>
       </div>
     </div>
-    <div class="modal-actions" style="margin-top:6px;">
-      <button class="btn-ghost btn-sm" id="wiz-skip">跳过向导</button>
+    <div class="modal-actions" style="margin-top:10px; justify-content:flex-start;">
+      <button class="btn-ghost btn-sm" id="wiz-skip">跳过，稍后配置</button>
     </div>
   </div>
 </div>
@@ -800,12 +857,13 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
  * ===================================================================== */
 let SESSION_TOKEN = "";
 const PROVIDER_TEMPLATES = [
-  { name: "智谱 GLM",   base: "https://open.bigmodel.cn/api/paas/v4", models: "openai/glm-4.7, openai/glm-4.5-air" },
-  { name: "DeepSeek",  base: "https://api.deepseek.com/v1",          models: "openai/deepseek-chat, openai/deepseek-reasoner" },
-  { name: "阿里云百炼", base: "https://dashscope.aliyuncs.com/compatible-mode/v1", models: "openai/qwen-plus, openai/qwen3.8-flash" },
-  { name: "Moonshot",  base: "https://api.moonshot.cn/v1",           models: "openai/kimi-k2" },
-  { name: "OpenRouter", base: "https://openrouter.ai/api/v1",        models: "openai/openrouter/auto" },
-  { name: "本地 Ollama", base: "http://localhost:11434/v1",           models: "openai/llama3.1" },
+  { name: "智谱 GLM",   base: "https://open.bigmodel.cn/api/paas/v4", models: "openai/glm-4.7, openai/glm-4.5-air", mark: "智", tint: "#3f6ad8" },
+  { name: "DeepSeek",  base: "https://api.deepseek.com/v1",          models: "openai/deepseek-chat, openai/deepseek-reasoner", mark: "D", tint: "#5b6bf0" },
+  { name: "阿里云百炼", base: "https://dashscope.aliyuncs.com/compatible-mode/v1", models: "openai/qwen-plus, openai/qwen3.8-flash", mark: "百", tint: "#8b5cf6" },
+  { name: "Moonshot",  base: "https://api.moonshot.cn/v1",           models: "openai/kimi-k2", mark: "K", tint: "#0ea5a5" },
+  { name: "OpenRouter", base: "https://openrouter.ai/api/v1",        models: "openai/openrouter/auto", mark: "O", tint: "#d97706" },
+  { name: "本地 Ollama", base: "http://localhost:11434/v1",           models: "openai/llama3.1", mark: "🦙", tint: "#71717a" },
+  { name: "中转站/聚合网关", base: "", models: "", relay: true },
 ];
 const PROBE_STYLE = {
   ok:              ["✅ 连通正常", "var(--ok, #16a34a)"],
@@ -830,8 +888,59 @@ function escapeHtml(s) { return String(s).replace(/[&<>"']/g, c =>
 
 function probeStatusCellHtml(result) {
   const [label, color] = PROBE_STYLE[result.verdict] || PROBE_STYLE.error;
-  return `<span style="color:${color}">${label}</span><br><span class="hint">${result.latency_ms}ms · ${escapeHtml((result.detail || "").slice(0, 70))}</span>`;
+  const tip = result.hint || result.detail || "";
+  const badge = result.hint ? "（悬停看排查清单）" : "";
+  return `<span style="color:${color}" title="${escapeHtml(tip)}">${label}${badge}</span><br><span class="hint">${result.latency_ms}ms · ${escapeHtml((result.detail || "").slice(0, 70))}</span>`;
 }
+
+/* ---- Key 形态识别 × 端点交叉核验（混用平台 Key 事故取证）---- */
+function keyStyle(key) {
+  const k = (key || "").trim();
+  if (k.startsWith("ak_")) return ["relay", "聚合中转站风格(ak_ 开头)"];
+  if (k.startsWith("sk-")) return ["openai", "OpenAI 风格(sk- 开头)"];
+  const dot = k.indexOf(".");
+  if (dot > 8 && k.length - dot - 1 > 8 && !/\s/.test(k))
+    return ["zhipu", "智谱风格(id.secret 两段式)"];
+  return ["", ""];
+}
+function endpointFingerprint(base) {
+  const h = (base || "").toLowerCase();
+  const F = [
+    ["open.bigmodel.cn", "智谱官方", "zhipu"],
+    ["api.deepseek.com", "DeepSeek 官方", "openai"],
+    ["dashscope.aliyuncs.com", "阿里云百炼", "openai"],
+    ["api.moonshot.cn", "Moonshot 官方", "openai"],
+    ["api.openai.com", "OpenAI 官方", "openai"],
+    ["openrouter.ai", "OpenRouter", "openai"],
+  ];
+  for (const [frag, label, style] of F)
+    if (h.includes(frag)) return [label, style];
+  return ["自定义/中转站端点", ""];
+}
+let RELAY_HELP_PINNED = false;   // 选了「中转站」模板后保持展开,直到用户改 Base URL
+function refreshApiKeyHint() {
+  const hintEl = $("api-key-hint"), helpEl = $("api-relay-help");
+  if (!hintEl) return;
+  const key = $("api-key").value.trim();
+  const base = $("api-base").value.trim();
+  const [label, expect] = endpointFingerprint(base);
+  if (helpEl) helpEl.classList.toggle(
+    "hidden", !(label === "自定义/中转站端点" && (base || RELAY_HELP_PINNED)));
+  if (!key) { hintEl.textContent = ""; hintEl.style.color = ""; return; }
+  if (/[^\x21-\x7E]/.test(key)) {
+    hintEl.textContent = "⚠️ Key 含中文/表情/空格等非法字符——疑似把提示文案整行粘贴了进来。请只复制服务商发放的纯 Key 令牌。";
+    hintEl.style.color = "var(--bad, #dc2626)";
+    return;
+  }
+  const [style, desc] = keyStyle(key);
+  let msg = desc ? `识别为${desc} · 端点: ${label}` : `端点: ${label}`;
+  let warn = !!(style && expect && style !== expect);
+  if (warn) msg += "\n⚠️ 形态与该端点常见格式不符——疑似混用了其它平台的 Key!";
+  hintEl.textContent = msg;
+  hintEl.style.color = warn ? "#d97706" : "";
+}
+$("api-key").addEventListener("input", refreshApiKeyHint);
+$("api-base").addEventListener("input", () => { RELAY_HELP_PINNED = false; refreshApiKeyHint(); });
 
 async function probeConnectionCell(cid, cell) {
   cell.innerHTML = '<span class="hint">⏳ 探针中…</span>';
@@ -852,11 +961,18 @@ function renderConnTemplates() {
   box.querySelectorAll("[data-tpl]").forEach(b => b.addEventListener("click", () => {
     const t = PROVIDER_TEMPLATES[Number(b.dataset.tpl)];
     ["api-name", "api-key", "api-base", "api-models"].forEach(id => $(id).value = "");
-    $("api-name").value = t.name;
+    $("api-name").value = t.relay ? "我的中转站" : t.name;
     $("api-base").value = t.base;
     $("api-models").value = t.models;
     $("api-modal").classList.remove("hidden");
-    $("api-key").focus();
+    if (t.relay) {
+      RELAY_HELP_PINNED = true;
+      $("api-relay-help").classList.remove("hidden");
+      $("api-base").focus();
+      refreshApiKeyHint();
+    } else {
+      $("api-key").focus();
+    }
   }));
 }
 
@@ -903,6 +1019,7 @@ async function loadConnections() {
 /* 弹窗（保存后自动探针，反馈连通性） */
 $("btn-add-api").addEventListener("click", async () => {
   ["api-name", "api-key", "api-base", "api-models"].forEach(id => $(id).value = "");
+  RELAY_HELP_PINNED = false;
   await ensureSession();
   $("api-modal").classList.remove("hidden");
   $("api-name").focus();
@@ -919,6 +1036,11 @@ $("btn-api-confirm").addEventListener("click", async () => {
   if (!name) { $("api-name").focus(); return; }
   if (!key) { $("api-key").focus(); return; }
   if (!models.length) { $("api-models").focus(); return; }
+  const [kstyle] = keyStyle(key);
+  const [elabel, expect] = endpointFingerprint(base);
+  if (kstyle && expect && kstyle !== expect &&
+      !confirm(`⚠️ Key 形态与「${elabel}」常见格式不符，疑似混用了其它平台的 Key。\n确认 Key 与端点匹配后选择「确定」继续保存并探针，点「取消」返回修改。`))
+    return;
   await ensureSession();
   try {
     await apiCall("POST", "/api/connections",
@@ -953,8 +1075,9 @@ $("btn-discover-models").addEventListener("click", async () => {
   btn.disabled = false; btn.textContent = old;
 });
 
-/* 首次加载 */
-ensureSession().then(loadConnections);
+/* 首次加载（箭头包装：延迟到调用时解析 loadConnections，
+ * 保证后挂的首启向导钩子生效——桌面端 pywebviewready 路径同理） */
+ensureSession().then(() => loadConnections());
 
 /* =====================================================================
  * v1.1 C3 首启向导(三步):模板 → Key+探针 → 完成
@@ -972,18 +1095,44 @@ function showWizard() {
   wizGo(1);
   renderConnTemplates();  // 复用模板数据渲染步骤 1 卡片
   const box = $("wiz-tpl-rows");
-  box.innerHTML = PROVIDER_TEMPLATES.map((t, i) =>
-    `<button class="btn-ghost btn-sm" data-wtpl="${i}" style="padding:10px;">`+
-    `<b>${escapeHtml(t.name)}</b><br><span class="hint">${escapeHtml(t.base.replace("https://", ""))}</span></button>`).join("");
+  box.innerHTML = PROVIDER_TEMPLATES.map((t, i) => [t, i])
+    .filter(([t]) => !t.relay)
+    .map(([t, i]) =>
+    `<button class="wiz-card" data-wtpl="${i}" title="${escapeHtml(t.base)}">`+
+    `<span class="wiz-avatar" style="background:${t.tint}22;color:${t.tint}">${t.mark}</span>`+
+    `<span class="wiz-card-txt"><span class="wiz-card-name">${escapeHtml(t.name)}</span>`+
+    `<span class="wiz-card-host">${escapeHtml(hostOf(t.base))}</span></span></button>`).join("");
   box.querySelectorAll("[data-wtpl]").forEach(b => b.addEventListener("click", () => {
     WIZ_TPL = PROVIDER_TEMPLATES[Number(b.dataset.wtpl)];
-    $("wiz-tpl-name").textContent = WIZ_TPL.name;
+    renderWizPicked();
     $("wiz-models").value = WIZ_TPL.models;
+    $("wiz-key").value = "";
+    refreshWizKeyHint();
     wizGo(2);
+    $("wiz-key").focus();
   }));
 }
+function hostOf(u) {
+  try { return new URL(u).host; } catch { return u || "官方默认"; }
+}
+function renderWizPicked() {
+  const box = $("wiz-picked");
+  if (!box || !WIZ_TPL) return;
+  box.classList.remove("hidden");
+  box.innerHTML =
+    `<span class="wiz-avatar" style="background:${WIZ_TPL.tint}22;color:${WIZ_TPL.tint}">${WIZ_TPL.mark}</span>`+
+    `<span style="min-width:0;"><b>${escapeHtml(WIZ_TPL.name)}</b>`+
+    `<span class="wiz-card-host">${escapeHtml(hostOf(WIZ_TPL.base))}</span></span>`;
+}
+const WIZ_STEP_TEXT = {
+  1: "三步接入你的第一个模型 · 选择服务商",
+  2: "粘贴 API Key 并验证连通",
+  3: "完成，开烧！",
+};
 function wizGo(n) {
-  $("wiz-step-label").textContent = `步骤 ${n}/3`;
+  $("wiz-step-label").textContent = WIZ_STEP_TEXT[n] || "";
+  document.querySelectorAll("#wiz-dots .wiz-dot").forEach((d, idx) =>
+    d.classList.toggle("on", idx < n));
   [1, 2, 3].forEach(k => $("wiz-step" + k).classList.toggle("hidden", k !== n));
 }
 function wizardFinish() {
@@ -1010,6 +1159,24 @@ $("wiz-discover").addEventListener("click", async () => {
   } catch (e) { alert("发现失败: " + (e.message || e)); }
   btn.disabled = false; btn.textContent = "🔍 自动发现模型";
 });
+function refreshWizKeyHint() {
+  const hintEl = $("wiz-key-hint"); if (!hintEl) return;
+  const key = $("wiz-key").value.trim();
+  const [label, expect] = endpointFingerprint(WIZ_TPL ? WIZ_TPL.base : "");
+  if (!key) { hintEl.textContent = ""; hintEl.style.color = ""; return; }
+  if (/[^\x21-\x7E]/.test(key)) {
+    hintEl.textContent = "⚠️ Key 含中文/表情/空格等非法字符——疑似把提示文案整行粘贴了进来。请只复制服务商发放的纯 Key 令牌。";
+    hintEl.style.color = "var(--bad, #dc2626)";
+    return;
+  }
+  const [style, desc] = keyStyle(key);
+  let msg = desc ? `识别为${desc} · 端点: ${label}` : `端点: ${label}`;
+  const warn = !!(style && expect && style !== expect);
+  if (warn) msg += "\n⚠️ 形态与该端点常见格式不符——疑似混用了其它平台的 Key!";
+  hintEl.textContent = msg;
+  hintEl.style.color = warn ? "#d97706" : "";
+}
+$("wiz-key").addEventListener("input", refreshWizKeyHint);
 $("wiz-probe").addEventListener("click", async () => {
   const key = $("wiz-key").value.trim();
   if (!key) { alert("先粘贴 API Key"); return; }
@@ -1025,12 +1192,12 @@ $("wiz-probe").addEventListener("click", async () => {
     const cid = saved.connection.id;
     const probe = await apiCall("POST", `/api/connections/${cid}/probe`, {});
     const [label, color] = PROBE_STYLE[probe.verdict] || PROBE_STYLE.error;
-    box.innerHTML = `<span style="color:${color}">${label}(${probe.latency_ms}ms)</span>`;
+    box.innerHTML = `<span style="color:${color}" title="${escapeHtml(probe.hint || "")}">${label}(${probe.latency_ms}ms)</span>`;
     if (probe.verdict === "ok") {
       wizGo(3);
       $("wiz-done-text").textContent = `✅ ${WIZ_TPL.name} 连接就绪,模型已可用!`;
     } else {
-      box.innerHTML += `<br><span class="hint">连接已暂存但未通过验证——可修改后重试,或删除该连接。</span>`;
+      box.innerHTML += `<br><span class="hint" style="white-space:pre-line;">${escapeHtml(probe.hint || "连接已暂存但未通过验证——可修改后重试,或删除该连接。")}</span>`;
     }
     loadConnections();
   } catch (e) { box.innerHTML = `<span style="color:var(--bad)">❌ ${escapeHtml(String(e.message || e).slice(0, 80))}</span>`; }

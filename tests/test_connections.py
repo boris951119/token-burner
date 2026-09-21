@@ -39,14 +39,14 @@ class TestConnectionStore:
 
     def test_add_validation(self, store):
         with pytest.raises(ValueError):
-            store.add("", "https://x", "k", ["m"])
+            store.add("", "https://x", "sk-testkey-123", ["m"])
         with pytest.raises(ValueError):
             store.add("n", "https://x", "", ["m"])
         with pytest.raises(ValueError):
-            store.add("n", "https://x", "k", [" ", ""])
+            store.add("n", "https://x", "sk-testkey-123", [" ", ""])
 
     def test_delete(self, store):
-        conn = store.add("n", "", "k", ["m"])
+        conn = store.add("n", "", "sk-testkey-123", ["m"])
         assert store.delete(conn["id"]) is True
         assert store.delete(conn["id"]) is False
         assert store.all() == []
@@ -57,13 +57,13 @@ class TestConnectionStore:
         assert store.all() == []
 
     def test_find_by_model(self, store):
-        store.add("a", "https://a", "k1", ["openai/qwen3.8-flash", "openai/qwen3.6-flash"])
-        store.add("b", "https://b", "k2", ["openai/deepseek-v3"])
+        store.add("a", "https://a", "sk-testkey-123", ["openai/qwen3.8-flash", "openai/qwen3.6-flash"])
+        store.add("b", "https://b", "sk-testkey-456", ["openai/deepseek-v3"])
         assert store.find_by_model("openai/deepseek-v3")["name"] == "b"
         assert store.find_by_model("openai/nonexistent") is None
 
     def test_registry_models_union_keeps_order(self, store):
-        store.add("a", "", "k", ["z-model", "a-model"])
+        store.add("a", "", "sk-testkey-123", ["z-model", "a-model"])
         assert registry_models(["preset-1", "a-model"], store) == [
             "preset-1", "a-model", "z-model"]
 
@@ -164,7 +164,7 @@ class TestConnectionEndpoints:
     def test_write_requires_session_token(self, client):
         c, _ = client
         assert c.post("/api/connections", json={
-            "name": "n", "api_key": "k", "models": ["m"]}).status_code == 403
+            "name": "n", "api_key": "sk-testkey-123", "models": ["m"]}).status_code == 403
         assert c.delete("/api/connections/whatever").status_code == 403
 
     def test_delete_missing_returns_404(self, client):
@@ -178,7 +178,7 @@ class TestConnectionEndpoints:
         token = c.get("/api/session").json()["token"]
         before = set(c.get("/api/config").json()["models"])
         c.post("/api/connections", headers={"X-Session-Token": token},
-               json={"name": "n", "api_key": "k", "models": ["openai/brand-new"]})
+               json={"name": "n", "api_key": "sk-testkey-123", "models": ["openai/brand-new"]})
         after = set(c.get("/api/config").json()["models"])
         assert "openai/brand-new" in after and "openai/brand-new" not in before
 
@@ -187,10 +187,10 @@ class TestConnectionEndpoints:
         token = c.get("/api/session").json()["token"]
         # 空模型清单被 Pydantic 模式层拦下(422)
         assert c.post("/api/connections", headers={"X-Session-Token": token},
-                      json={"name": "n", "api_key": "k", "models": []}).status_code == 422
+                      json={"name": "n", "api_key": "sk-testkey-123", "models": []}).status_code == 422
         # 仅空白的名称穿过模式层,由注册表校验升 400
         r = c.post("/api/connections", headers={"X-Session-Token": token},
-                   json={"name": "   ", "api_key": "k", "models": ["m"]})
+                   json={"name": "   ", "api_key": "sk-testkey-123", "models": ["m"]})
         assert r.status_code == 400
 
     def test_stale_token_rejected_fresh_token_accepted(self, client):
@@ -199,12 +199,12 @@ class TestConnectionEndpoints:
         c, _ = client
         stale = "token-from-previous-server-boot"
         r = c.post("/api/connections", headers={"X-Session-Token": stale},
-                   json={"name": "n", "api_key": "k", "models": ["m"]})
+                   json={"name": "n", "api_key": "sk-testkey-123", "models": ["m"]})
         assert r.status_code == 403
         assert "缺少有效会话令牌" in r.json()["detail"]
         fresh = c.get("/api/session").json()["token"]
         assert fresh != stale
         ok = c.post("/api/connections", headers={"X-Session-Token": fresh},
                     json={"name": "n", "base_url": "https://x/v1",
-                          "api_key": "sk-t", "models": ["openai/m"]})
+                          "api_key": "sk-testkey-123", "models": ["openai/m"]})
         assert ok.status_code == 200
