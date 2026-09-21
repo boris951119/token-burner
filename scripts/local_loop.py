@@ -89,6 +89,13 @@ def main() -> int:
          "--project-dir", str(target), "--task", args.task],
         cwd=str(ROOT))
     summary = ROOT / "scripts" / "official_grade" / "grade-summary.json"
+    if grade.returncode == 2:
+        # 9/21 取证：keep 起服失败却把 bookstack 的陈旧 6/34 失败清单
+        # 当成本轮评分打印——环境故障时 summary 是上一题的旧数据，
+        # 读了必投毒（同 grade_repair_loop 的 GradeEnvError 闸）
+        print("[loop] 评分环境故障（rc=2：起服失败/并发锁/无报告）——"
+              "分数未知，现场见 app-boot.log")
+        return 2
     if summary.is_file():
         print("[loop] 评分摘要:", summary.read_text(encoding="utf-8"))
     return grade.returncode

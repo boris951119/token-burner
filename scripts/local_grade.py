@@ -155,13 +155,24 @@ def main() -> int:
 
     port = _free_port(args.port)
     env = dict(os.environ, PORT=str(port))
+    # 起服现场必须落盘：DEVNULL 吞掉子进程 stderr，500 根因（如接口
+    # 漂移 init_db/init_app）永远查不着——9/21 keep 起服失败取证
+    boot_log = GRADE_DIR / "app-boot.log"
+    boot_fp = open(boot_log, "w", encoding="utf-8", errors="replace")
     proc = subprocess.Popen(
         [sys.executable, str(backend / "main.py")],
         cwd=str(backend), env=env,
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        stdout=boot_fp, stderr=boot_fp)
     try:
         if not _wait_health(f"http://127.0.0.1:{port}/api/health"):
-            print("[grade] 应用健康探针超时——起服失败")
+            print(f"[grade] 应用健康探针超时——起服失败（启动日志: {boot_log}）")
+            try:
+                tail = boot_log.read_text(encoding="utf-8", errors="replace"
+                                          ).splitlines()[-12:]
+                for line in tail:
+                    print("  " + line[:160])
+            except Exception:
+                pass
             return 2
         print(f"[grade] 应用就绪: http://127.0.0.1:{port}", flush=True)
 
@@ -186,6 +197,10 @@ def main() -> int:
         for line in tail:
             print("  " + line[:160])
     finally:
+        try:
+            boot_fp.close()
+        except Exception:
+            pass
         # Windows：terminate 不杀孙进程——孤儿 Flask 服务器会锁死
         # 模板目录与端口（2026-09-20 深夜取证：连环健康探针超时/
         # 目录锁的总根源），taskkill /T 连树击杀
