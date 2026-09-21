@@ -73,7 +73,7 @@ class TestMemSentinel:
             "    @app.route('/api/health')\n"
             "    def h(): return {'ok': True}\n"
             "    @app.route('/')\n"
-            "    def idx(): return 'home'\n"
+            "    def idx(): return '<a href=\"/x\">x</a>'\n"
             "    return app\n",
             encoding="utf-8")
         from app.arcbench_smoke import run_smoke

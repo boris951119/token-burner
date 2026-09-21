@@ -164,16 +164,44 @@ _BACKEND_PACKAGE_JSON = {
 
 
 def _requirements_for(code_dir: Path) -> str:
-    """按代码实际 import 的框架生成依赖（写死 flask 会饿死 FastAPI 项目）。"""
+    """按代码实际 import 推导依赖（写死 flask 会饿死 FastAPI 项目；
+    2026-09-21 取证：LLM 用 flask_login 而依赖表没有 → 部署即死）。
+    通用规则：stdlib/本地包剔除；已知框架映射版本；其余三方按 pip
+    名称归一化直出（pip 对 _/- 大小写自动归一）。"""
     import re
+    import sys
 
-    text = "\n".join(
-        _read(p) for p in _py_files(code_dir))
+    local_tops = {p.name for p in Path(code_dir).iterdir()
+                  if (p.is_dir() and not p.name.startswith(".")
+                      and p.name != "__pycache__")
+                  or (p.is_file() and p.suffix == ".py")}
+    stdlib = set(getattr(sys, "stdlib_module_names", ()))
+    text = "\n".join(_read(p) for p in _py_files(code_dir))
+    tops: set[str] = set()
+    for m in re.finditer(r"^\s*(?:from|import)\s+([A-Za-z_][\w.]*)", text, re.M):
+        tops.add(m.group(1).split(".")[0])
+    third = sorted(t for t in tops
+                   if t and t not in stdlib and t not in local_tops)
     deps: list[str] = []
-    if re.search(r"^\s*(from fastapi|import fastapi)\b", text, re.M):
-        deps += ["fastapi>=0.110.0", "uvicorn>=0.29.0"]
-    if re.search(r"^\s*(from flask|import flask)\b", text, re.M):
-        deps.append("flask>=3.0.0")
+    pins = {
+        "flask": "flask>=3.0.0",
+        "fastapi": "fastapi>=0.110.0",
+        "uvicorn": "uvicorn>=0.29.0",
+        "flask_login": "Flask-Login>=0.6.3",
+        "flask_sqlalchemy": "Flask-SQLAlchemy>=3.1.1",
+        "sqlalchemy": "SQLAlchemy>=2.0.0",
+        "PIL": "Pillow>=10.0.0",
+    }
+    for t in third:
+        if t in pins:
+            deps.append(pins[t])
+        else:
+            deps.append(t)   # pip 名称归一化（_ → -，大小写不敏感）
+    # 伴随依赖：代码只 import fastapi 不会写 uvicorn，但导出 runner
+    # 的 ASGI 起服用的就是 uvicorn——缺它部署即死（9/21 测试取证）
+    if any(d.startswith("fastapi") for d in deps) \
+            and not any(d.startswith("uvicorn") for d in deps):
+        deps.append(pins["uvicorn"])
     return "\n".join(deps or ["flask>=3.0.0"]) + "\n"
 
 

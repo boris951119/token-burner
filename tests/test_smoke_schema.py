@@ -41,7 +41,7 @@ def create_app():
 
     @app.route("/")
     def home():
-        return "ok"
+        return "<a href='/list'>List</a> ok"
 
     return app
 '''
@@ -68,7 +68,7 @@ def create_app():
 
     @app.route("/")
     def home():
-        return "ok"
+        return "<a href='/list'>List</a> ok"
 
     return app
 '''
@@ -104,3 +104,71 @@ class TestSchemaWiringSmoke:
             'conn.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY)")\n    ', ""))
         ok, report = run_smoke(code)
         assert ok, report
+
+
+# ---------------------------------------------------------------------------
+# 9/21 BookStack 夜战取证三连（确定性拦截回归）
+# ---------------------------------------------------------------------------
+
+def _flask_app(home_body: str, login_route: bool = False,
+               secret_key: bool = False) -> str:
+    login_part = ""
+    if login_route:
+        login_part = '''
+    @app.route("/login", methods=["GET", "POST"])
+    def login():
+        return "login"
+'''
+    key_part = "    app.secret_key = 'k'\n" if secret_key else ""
+    return (
+        "from flask import Flask, jsonify\n"
+        "def create_app():\n"
+        "    app = Flask(__name__)\n"
+        + key_part
+        + "    @app.route('/api/health')\n"
+        "    def h():\n        return jsonify(status='ok')\n"
+        "    @app.route('/')\n"
+        f"    def home():\n        return {home_body!r}\n"
+        + login_part
+        + "    return app\n"
+    )
+
+
+def _run(tmp_path, app_src: str):
+    code = tmp_path / "code"
+    _write(code / "app_mod" / "__init__.py",
+           "from app_mod.app_mod import *  # noqa: F401,F403\n")
+    _write(code / "app_mod" / "app_mod.py", app_src)
+    return run_smoke(code)
+
+
+class TestNightForensics:
+    """首页死文本/壳页与 secret_key 缺失必须被冒烟确定性拦下。"""
+
+    def test_missing_secret_key_with_login_route(self, tmp_path):
+        ok, report = _run(tmp_path, _flask_app(
+            "<a href='/l'>L</a>", login_route=True, secret_key=False))
+        assert not ok
+        assert "secret_key" in report
+
+    def test_secret_key_present_passes(self, tmp_path):
+        ok, report = _run(tmp_path, _flask_app(
+            "<a href='/l'>L</a>", login_route=True, secret_key=True))
+        assert ok, report
+
+    def test_double_escaped_home(self, tmp_path):
+        ok, report = _run(tmp_path, _flask_app(
+            "&lt;a href='/l'&gt;L&lt;/a&gt;"))
+        assert not ok
+        assert "双重" in report or "|safe" in report
+
+    def test_unrendered_template_home(self, tmp_path):
+        ok, report = _run(tmp_path, _flask_app(
+            "{{ body }} {% for x in y %}{% endfor %}"))
+        assert not ok
+        assert "模板" in report
+
+    def test_linkless_home_is_placeholder(self, tmp_path):
+        ok, report = _run(tmp_path, _flask_app("Welcome to my site"))
+        assert not ok
+        assert "<a>" in report or "占位壳" in report

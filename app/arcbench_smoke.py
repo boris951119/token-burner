@@ -149,6 +149,34 @@ else:                                   # FastAPI
         failures.append(f"GET / -> {home.status_code}（入口路由缺失？）")
         ok = False
 
+# 9/21 BookStack 夜战取证三连（确定性拦截，报错直指修复动作）：
+# ① 首页渲染出未求值模板/被转义 HTML = 页面是死文本，评测全灭；
+# ② 首页没有 <a> 链接 = 占位壳页（评测从首页导航出发）；
+# ③ Flask 有登录路由但缺 secret_key = 登录 POST 必 500。
+if home.status_code == 200:
+    _body = (home.get_data(as_text=True)
+             if hasattr(home, "get_data") else getattr(home, "text", ""))
+    if "{{" in _body or "{%" in _body:
+        failures.append("GET / 渲染出未求值的模板占位符（{{/{%）——"
+                        "模板未被渲染，检查 render_template_string 调用")
+        ok = False
+    elif "&lt;" in _body:
+        failures.append("GET / 渲染出被转义的 HTML（&lt;）——模板双重"
+                        "转义：内层 HTML 传入外层模板必须加 |safe")
+        ok = False
+    elif "<a " not in _body:
+        failures.append("GET / 页面没有任何 <a> 链接——占位壳页，"
+                        "首页必须渲染真实导航（评测全部用例从首页出发）")
+        ok = False
+if hasattr(app, "wsgi_app") and getattr(app, "secret_key", None) is None:
+    _has_login = any(
+        "login" in str(getattr(_r, "rule", ""))
+        for _r in getattr(app, "url_map", []).iter_rules())
+    if _has_login:
+        failures.append("Flask secret_key 未设置——session 登录 POST "
+                        "将 500（组装层 create_app 必须 app.secret_key=...）")
+        ok = False
+
 if not ok:
     failures.append(detail)
     print("\\n".join(failures))

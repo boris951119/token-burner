@@ -35,6 +35,7 @@ _TRAINS = [{"number": "G101", "from": "Beijing South", "to": "Shanghai Hongqiao"
 
 def create_app() -> Flask:
     app = Flask(__name__)
+    app.secret_key = "journey-fixture"  # 有 /login 路由：冒烟硬契约要求
 
     @app.route("/api/health")
     def health():
