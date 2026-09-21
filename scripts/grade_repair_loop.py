@@ -208,8 +208,10 @@ def main() -> int:
     from app.config import load_settings
 
     settings = load_settings(config_file=ROOT / "config.json")
-    settings.models = ((args.model,) if args.model
-                       else ("openai/deepseek-v4-pro",))
+    if args.model:
+        settings.models = (args.model,)
+    # 否则沿用 config.json 模型链——9/21 取证：写死单 pro 赶上网关
+    # 抖动窗口，两轮修复调用全部 600s 超时无备胎可换，修复环空转
 
     project_dir = Path(args.project_dir)
 
