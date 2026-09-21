@@ -939,6 +939,12 @@ class Pipeline:
         if history_tokens > 0:
             guard.record(history_tokens)
         setattr(self.llm, "budget_guard", guard)
+        # resume 同 run 登记『活动护栏』：verify/修复通道的零散 ModelClient
+        # 靠这把兜底接入预算闸——漏登记则恢复后的验证/修复整体绕闸烧钱
+        # （与 run():392 同款；¥210 学费同源。Qoder 交叉审查 9/21 取证）
+        from app.utils.budget import set_active_budget_guard
+
+        set_active_budget_guard(guard)
         # M12-1：协作式取消检查点注入（resume 路径同 run）
         if self._cancel_check is not None:
             guard.attach_cancel_check(self._cancel_check)

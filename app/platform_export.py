@@ -171,10 +171,16 @@ def _requirements_for(code_dir: Path) -> str:
     import re
     import sys
 
-    local_tops = {p.name for p in Path(code_dir).iterdir()
-                  if (p.is_dir() and not p.name.startswith(".")
-                      and p.name != "__pycache__")
-                  or (p.is_file() and p.suffix == ".py")}
+    # 顶层单文件模块（seed_data.py）的 import 名是 seed_data（无扩展名），
+    # 用 p.name 会永不匹配 → 自己的模块被当三方依赖直写 requirements，
+    # 平台 pip 装不上即部署死（Qoder 交叉审查 9/21 取证）
+    local_tops: set[str] = set()
+    for p in Path(code_dir).iterdir():
+        if p.is_dir():
+            if not p.name.startswith(".") and p.name != "__pycache__":
+                local_tops.add(p.name)
+        elif p.is_file() and p.suffix == ".py":
+            local_tops.add(p.stem)
     stdlib = set(getattr(sys, "stdlib_module_names", ()))
     text = "\n".join(_read(p) for p in _py_files(code_dir))
     tops: set[str] = set()

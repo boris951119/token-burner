@@ -124,8 +124,11 @@ if app is None:
     print("\\n".join(failures))
     raise SystemExit(1)
 
-app.config["TESTING"] = True
-app.config["PROPAGATE_EXCEPTIONS"] = True
+# FastAPI 项目没有 Flask 的 app.config——无条件赋值冒烟即崩，冤枉应用
+# 进修复环烧轮次（Qoder 交叉审查 9/21 取证）
+if hasattr(app, "config"):
+    app.config["TESTING"] = True
+    app.config["PROPAGATE_EXCEPTIONS"] = True
 
 if hasattr(app, "test_client"):        # Flask
     client = app.test_client()
@@ -418,8 +421,11 @@ c = app.test_client()
 client = c  # 别名：r11 取证 LLM 惯用 client，NameError 会被误判为应用缺陷
 # 轨迹取证（r12/r13/r15 手工诊断的产品化）：应用侧异常直接带着
 # file:line 冒泡进报告，修复指令不再只看 HTTP 状态码瞎猜。
-app.config["TESTING"] = True
-app.config["PROPAGATE_EXCEPTIONS"] = True
+# FastAPI 项目没有 Flask 的 app.config——无条件赋值冒烟即崩，冤枉应用
+# 进修复环烧轮次（Qoder 交叉审查 9/21 取证）
+if hasattr(app, "config"):
+    app.config["TESTING"] = True
+    app.config["PROPAGATE_EXCEPTIONS"] = True
 
 # === JOURNEY BEGIN（LLM 生成段） ===
 __BODY__
@@ -1149,8 +1155,11 @@ def _journey_gate(
         shutil.copytree(
             code_dir, backup, ignore=shutil.ignore_patterns("__pycache__")
         )
-    except Exception:
-        pass
+    except Exception as exc:
+        # 备份失败必须留痕：回滚段以 backup.is_dir() 为前置断言——静默
+        # 失败 + 路由退化双条件会把整个 code/ 清空（保险丝自身带电，
+        # Qoder 交叉审查 9/21 取证）
+        notes.append(f"[journey] 修复前备份失败 {exc!r}（本次禁用回滚）")
     try:
         from app.agents.repo_fixer import RepoFixer
         from app.utils.schema_audit import audit_schema
@@ -1197,15 +1206,23 @@ def _journey_gate(
         # 路由面退化守卫：修复后探针路由数明显缩水 → 回滚到修复前状态
         post = _probe_routes(code_dir)
         if post is None or len(post[1]) < len(routes) - 1:
-            try:
-                shutil.rmtree(code_dir)
-                shutil.copytree(backup, code_dir)
+            if not backup.is_dir():
+                # 前置断言：备份不存在时绝不 rmtree——「先删后恢复」在
+                # 备份缺失时等于清空 code/（满分夜战成果一把归零）
                 notes.append(
-                    f"[journey] 修复致路由面退化（{len(routes)}→"
-                    f"{len(post[1]) if post else 0}），已回滚修复"
+                    f"[journey] 路由面退化（{len(routes)}→"
+                    f"{len(post[1]) if post else 0}）但无可用备份，保留现状"
                 )
-            except Exception:
-                notes.append("[journey] 路由面退化但回滚失败")
+            else:
+                try:
+                    shutil.rmtree(code_dir)
+                    shutil.copytree(backup, code_dir)
+                    notes.append(
+                        f"[journey] 修复致路由面退化（{len(routes)}→"
+                        f"{len(post[1]) if post else 0}），已回滚修复"
+                    )
+                except Exception:
+                    notes.append("[journey] 路由面退化但回滚失败")
     notes.append(f"[journey] 修复后 {'PASS' if ok else 'FAIL'}")
     if not ok:
         return False, last_report[-300:]
