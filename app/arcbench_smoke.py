@@ -1405,7 +1405,8 @@ def verify_delivery(
             _beat(project_dir, f"验收-R{verify_round}-冒烟修复")
             try:
                 ok, report = auto_repair(
-                    project_dir, settings, max_rounds=max_app_rounds
+                    project_dir, settings, max_rounds=max_app_rounds,
+                    requirement=requirement,
                 )
             except Exception as exc:
                 ok = False
@@ -1449,6 +1450,7 @@ def verify_delivery(
             try:
                 ok2, rep2 = auto_repair(
                     project_dir, settings, max_rounds=max_app_rounds,
+                    requirement=requirement,
                     test_cmd=[sys.executable, str(gate), str(code_dir)],
                     extra_issue=(
                         "锚点覆盖机械校验失败：以下需求原文中的带引号"
@@ -1635,6 +1637,7 @@ def auto_repair(
     test_cmd: list[str] | None = None,
     extra_issue: str = "",
     verify_timeout: int | None = None,
+    requirement: str = "",
 ) -> tuple[bool, str]:
     """冒烟失败后的定向自动修复（RepoFixer 通道）。
 

@@ -327,6 +327,7 @@ def selftest_gate(project_dir: Path, requirement: str, settings,
         try:
             ok, _rep = auto_repair(
                 project_dir, settings, max_rounds=1,
+                requirement=requirement,
                 verify_timeout=1800,
                 # 修复验证信号=自测运行器本尊（RepoFixer 逐轮真实复测）
                 test_cmd=[sys.executable, str(Path(__file__).resolve()),
