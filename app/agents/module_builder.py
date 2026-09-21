@@ -139,7 +139,13 @@ def inject_ui_manifest(plans: list[ModulePlan], requirement: str) -> str | None:
         "  校验逻辑必须兼容该格式；登录成功重定向回首页并显示昵称；\n"
         "- 模板禁止双重转义：内层渲染出的 HTML 传入外层模板时必须\n"
         "  标记安全（Flask 用 |safe）——实跑取证 {{ body }} 未加\n"
-        "  |safe 把整页链接/表单渲染成转义死文本，CRUD 全灭。")
+        "  |safe 把整页链接/表单渲染成转义死文本，CRUD 全灭；\n"
+        "- 导航与入口控件文案必须逐字使用需求原文用语，禁用同义词\n"
+        "  改写：需求写 Shelves 导航就叫 Shelves（不是 Bookshelf），\n"
+        "  登录入口单独叫 Login（禁止合并成 Login/Register）——\n"
+        "  评测按 getByRole(link/button, /^原文$/i) 精确匹配，\n"
+        "  同义词 = 该模块全部用例在导航一步就落空（9/21 冷启动\n"
+        "  彩排取证：一个 Bookshelf 标签拖死 14 题）。")
     return target.name
 
 
