@@ -87,6 +87,46 @@ class GradeEnvError(RuntimeError):
     """评分环境故障（起服失败/无报告）——summary 是陈旧数据不可用。"""
 
 
+def _app_loadable(code_dir: Path) -> tuple[bool, str]:
+    """廉价起服预检：逐模块加载，至少一个模块提供 app/create_app。
+
+    9/21 取证：修复把 main.py 整个重写成蓝图片段且引入不存在的
+    infra 模块，最终复评起服失败 rc=2 循环崩溃，损毁态留在盘上。
+    一次 import 扫描 <2s，替 29 分钟评分当修复后的第一道验尸。
+    子进程执行——生成 app 的模块（db 连接、蓝图注册）不污染本进程。
+    """
+    code_dir = code_dir.resolve()   # 子进程 cwd 会切走，相对路径必失配
+    script = (
+        "import importlib.util, sys, pathlib\n"
+        "code = pathlib.Path(sys.argv[1])\n"
+        "sys.path.insert(0, str(code))\n"
+        "ok = []\n"
+        "for p in sorted(code.glob('*/*.py')):\n"
+        "    name = p.stem\n"
+        "    if name == '__init__':\n"
+        "        continue\n"
+        "    try:\n"
+        "        spec = importlib.util.spec_from_file_location(name, p)\n"
+        "        mod = importlib.util.module_from_spec(spec)\n"
+        "        spec.loader.exec_module(mod)\n"
+        "        if hasattr(mod, 'app') or hasattr(mod, 'create_app'):\n"
+        "            ok.append(name)\n"
+        "    except Exception:\n"
+        "        pass\n"
+        "print(','.join(ok))\n"
+    )
+    try:
+        r = subprocess.run(
+            [sys.executable, "-c", script, str(code_dir)],
+            capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=120, cwd=str(code_dir),
+        )
+    except Exception as exc:
+        return False, f"预检进程异常 {exc!r}"
+    providers = (r.stdout or "").strip()
+    return (bool(providers), providers or "无任何可加载 app")
+
+
 def _run_grade(project_dir: Path, task: str) -> tuple[int, int, list[str]]:
     from scripts.local_grade import main as grade_main  # 复用同进程评分
 
@@ -224,6 +264,17 @@ def main() -> int:
                 break
             except GradeEnvError as exc:
                 if attempt == 2:
+                    # 9/21 取证：修复损毁应用 → 复评连续 rc=2 → 循环带着
+                    # 损毁态崩溃。先回滚快照再抛——盘上永远留可用状态。
+                    if snap is not None:
+                        try:
+                            patch = _archive_diff_and_restore(
+                                project_dir, snap, label + "_envfail")
+                            print(f"[loop] {exc}，已回滚快照"
+                                  f"（diff: {patch.name}）", flush=True)
+                        except Exception as r_exc:
+                            print(f"[loop] {exc}；回滚也失败 {r_exc!r}",
+                                  flush=True)
                     raise
                 print(f"[loop] {exc}，清场 90s 后重试一次", flush=True)
                 time.sleep(90)
@@ -288,9 +339,25 @@ def main() -> int:
                         "--specs", *frags] if frags else None
             if not args.no_rollback:
                 snap = _snapshot(project_dir)
+            print(f"[loop] 修复开始（轮 {rnd}，模型链 {settings.models}）",
+                  flush=True)
             auto_repair(project_dir, settings, max_rounds=1,
                         verify_timeout=1800, test_cmd=test_cmd,
                         extra_issue=issue)
+            print(f"[loop] 修复结束（轮 {rnd}）", flush=True)
+            # 起服预检：修复把入口改坏时（9/21 幻觉 import infra 取证）
+            # 立即回滚，不烧 29 分钟评分去发现应用死了
+            ok, detail = _app_loadable(project_dir / "code")
+            if not ok and snap is not None and not args.no_rollback:
+                patch = _archive_diff_and_restore(
+                    project_dir, snap, f"round{rnd}_deadapp")
+                print(f"[loop] 修复后无任何可加载 app（{detail}）→ 已回滚"
+                      f"（diff: {patch.name}）", flush=True)
+            elif not ok:
+                print(f"[loop] 修复后无任何可加载 app（{detail}）"
+                      f"（--no-rollback，保留现场）", flush=True)
+            else:
+                print(f"[loop] 起服预检通过（app: {detail}）", flush=True)
         except Exception as exc:
             print(f"[loop] 修复异常: {exc!r}"[:300], flush=True)
     # 末轮复评（同样过回滚闸）
