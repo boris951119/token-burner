@@ -686,6 +686,24 @@ def _seed_audit_section(code_dir: Path, requirement: str) -> str:
         + "\n")
 
 
+def _language_audit_section(code_dir: Path, requirement: str) -> str:
+    """UI 语言一致性审计注入修复指令（9/22 so 取证：英文需求生成
+    中文 UI，66 题第一步全灭——管线提示词语言污染界面语言）。"""
+    try:
+        from app.utils.ui_language import audit_ui_language
+
+        findings = audit_ui_language(code_dir, requirement)
+    except Exception:
+        return ""
+    if not findings:
+        return ""
+    return (
+        "【确定性 UI 语言审计（文字系别比对，最高优先级——此缺口不修"
+        "其余修复全部无效）】\n"
+        + "\n".join(f"- {f}" for f in findings[:3])
+        + "\n")
+
+
 def _schema_audit_section(code_dir: Path, findings: list[str] | None = None) -> str:
     """确定性 schema 审计结论注入修复指令（r13 取证：列名漂移 2 轮未定位）。
 
@@ -1273,6 +1291,7 @@ def _journey_gate(
             + _anchor_coverage_section(code_dir, requirement)
             + _interface_drift_section(code_dir, project_dir)
             + _seed_audit_section(code_dir, requirement)
+            + _language_audit_section(code_dir, requirement)
             + "硬性约束：修复后应用必须仍注册下列全部路由（方法不得改动、"
             "不得删除任何既有路由）——\n"
             + "\n".join(routes)
@@ -1683,6 +1702,7 @@ def auto_repair(
             + _package_layout_section(code_dir)
             + _interface_drift_section(code_dir, project_dir)
             + _seed_audit_section(code_dir, requirement)
+            + _language_audit_section(code_dir, requirement)
             + "请最小化修复使冒烟通过：可新增缺失函数、注册缺失路由、"
             "补齐缺失页面——但页面必须是**需求描述的真实功能 UI**"
             "（含导航、表单、列表等真实交互元素），禁止用只含标题或"
