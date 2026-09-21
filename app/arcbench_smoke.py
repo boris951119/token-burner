@@ -604,6 +604,46 @@ def _anchor_coverage_section(code_dir: Path, requirement: str) -> str:
         lines.append(f"- 需求锚点 {a!r} 已出现在: {', '.join(hits[:2])}")
     return "\n".join(lines) + "\n\n"
 
+def _interface_drift_section(code_dir: Path,
+                             project_dir: Path | None = None) -> str:
+    """属性级接口漂移审计注入修复指令（9/21 keep 取证：init_db/
+    _init_db 一个下划线全站 500，LLM 自省 2 轮零提升）。零 LLM
+    AST 比对，发现即高置信；无发现不占提示词。"""
+    try:
+        from app.utils.interface_attr_audit import audit_interface_drift
+
+        findings = audit_interface_drift(code_dir, project_dir)
+    except Exception:
+        return ""
+    if not findings:
+        return ""
+    return (
+        "【确定性接口漂移审计（AST 比对，优先按此修复——每条都是可"
+        "机械验证的缺口）】\n"
+        + "\n".join(f"- {f}" for f in findings[:12])
+        + "\n对齐方式二选一：改调用方用真实存在名，或在提供方加公共"
+        "别名/导出；禁止新建空壳函数应付。\n")
+
+
+def _seed_audit_section(code_dir: Path, requirement: str) -> str:
+    """种子声明落库审计注入修复指令（9/21 keep 取证：官方 yaml 逐字
+    声明被无视、LLM 自编种子致 REQ-2.x 簇 16 项连环落空）。零 LLM
+    字面比对。"""
+    try:
+        from app.utils.seed_contract import audit_seeds
+
+        findings = audit_seeds(code_dir, requirement)
+    except Exception:
+        return ""
+    if not findings:
+        return ""
+    return (
+        "【确定性种子审计（需求 Seed data 逐字契约，优先按此修复）】\n"
+        + "\n".join(f"- {f}" for f in findings[:15])
+        + "\n把每个缺失名字原样补进种子/初始化数据（含大小写与空格）。"
+        + "\n")
+
+
 def _schema_audit_section(code_dir: Path, findings: list[str] | None = None) -> str:
     """确定性 schema 审计结论注入修复指令（r13 取证：列名漂移 2 轮未定位）。
 
@@ -1189,6 +1229,8 @@ def _journey_gate(
             "路由补齐、响应字段补齐）。\n"
             + _schema_audit_section(code_dir, findings=audit_findings)
             + _anchor_coverage_section(code_dir, requirement)
+            + _interface_drift_section(code_dir, project_dir)
+            + _seed_audit_section(code_dir, requirement)
             + "硬性约束：修复后应用必须仍注册下列全部路由（方法不得改动、"
             "不得删除任何既有路由）——\n"
             + "\n".join(routes)
@@ -1597,6 +1639,8 @@ def auto_repair(
             + report[-1500:]
             + "\n"
             + _package_layout_section(code_dir)
+            + _interface_drift_section(code_dir, project_dir)
+            + _seed_audit_section(code_dir, requirement)
             + "请最小化修复使冒烟通过：可新增缺失函数、注册缺失路由、"
             "补齐缺失页面——但页面必须是**需求描述的真实功能 UI**"
             "（含导航、表单、列表等真实交互元素），禁止用只含标题或"

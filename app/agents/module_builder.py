@@ -250,6 +250,11 @@ class ModuleBuilder:
                     break
             if plans:
                 inject_ui_manifest(plans, requirement)
+                from app.utils.seed_contract import inject_seed_contract
+                seed_target = inject_seed_contract(plans, requirement)
+                if seed_target:
+                    print(f"[split] 种子硬契约已注入 {seed_target}",
+                          flush=True)
                 if project_id:
                     self._persist_module_plans(project_id, plans)
                 return plans
