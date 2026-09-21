@@ -670,6 +670,10 @@ class DevLoopEngine:
                 return self.llm.chat(candidate, messages)
             except BudgetExceededError:
                 raise                      # 总闸：预算超支绝不换模型续烧
+            except ValueError as exc:
+                # 未登记模型（脏台账/坏候选）＝这条腿废了，换下一腿
+                last_exc = exc
+                continue
             except RuntimeError as exc:
                 last_exc = exc
                 continue
@@ -715,6 +719,11 @@ class DevLoopEngine:
 
                 ranked = recommend("codegen",
                                    exclude=(self.dev_model,))
+                # 台账只按历史战绩排序，不认识当前登记表——9/21 取证：
+                # 旧坏跑记下的角色名（dev-model/dev/d）上榜后被
+                # ModelClient 拒绝崩穿管线。只准升级到已登记模型。
+                allowed = set(self.settings.models)
+                ranked = [m for m in ranked if m in allowed]
                 repair_model = (ranked[0] if ranked
                                 else self.main_model)
                 print(f"[ledger] 修复升级 → {repair_model} "
