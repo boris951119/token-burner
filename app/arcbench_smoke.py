@@ -103,21 +103,32 @@ for py in sorted(code.glob("*.py")):
         except Exception as exc:
             failures.append(f"import {py.stem}: {exc!r}")
 
-app = None
+def _route_count(_c):
+    try:
+        if hasattr(_c, "url_map"):
+            return sum(1 for _ in _c.url_map.iter_rules())
+        return len(getattr(_c, "routes", []) or [])
+    except Exception:
+        return 0
+
+# 9/22 stackoverflow 取证：候选全收集按【路由数最多】择优——业务包
+# 自带裸自测 app（有 health 无业务路由）迭代序抢先当选 → 冒烟加载
+# 的 app 与导出入口不一致。作者入口=路由面最广者，装配壳垫后。
+_cands = []
 for mod in mods:
     cand = getattr(mod, "app", None) or getattr(mod, "application", None)
     if cand is not None and callable(cand) and not isinstance(cand, type):
-        app = cand
-        print(f"app <- {mod.__name__}")
-        break
-if app is None:
-    # create_app 工厂兜底（与导出 runner 两遍探测同语义——作者入口
-    # 优先，机械装配壳垫后；冒烟漏检=假阴性）
-    for mod in mods:
-        if hasattr(mod, "create_app"):
-            app = mod.create_app()
-            print(f"create_app <- {mod.__name__}")
-            break
+        _cands.append((mod.__name__, cand))
+for mod in mods:
+    if hasattr(mod, "create_app"):
+        try:
+            _cands.append((mod.__name__, mod.create_app()))
+        except Exception:
+            continue
+_entry, app = (None, None)
+if _cands:
+    _entry, app = max(_cands, key=lambda t: _route_count(t[1]))
+    print(f"entry <- {_entry} (routes={_route_count(app)})")
 if app is None:
     print("loaded mods:", [m.__name__ for m in mods], file=sys.stderr)
     failures.append("没有任何模块提供 create_app 或模块级 app 入口")
@@ -279,11 +290,22 @@ for child in sorted(code.iterdir()):
                     mods.append(__import__(py.stem))
                 except Exception as _exc:
                     print("import fail:", py.stem, repr(_exc), file=sys.stderr)
-app = None
+def _route_count(_c):
+    try:
+        if hasattr(_c, "url_map"):
+            return sum(1 for _ in _c.url_map.iter_rules())
+        return len(getattr(_c, "routes", []) or [])
+    except Exception:
+        return 0
+
+_cands = []
 for mod in mods:
     if hasattr(mod, "create_app"):
-        app = mod.create_app()
-        break
+        try:
+            _cands.append(mod.create_app())
+        except Exception:
+            continue
+app = max(_cands, key=_route_count) if _cands else None
 if app is None:
     print("loaded mods:", [m.__name__ for m in mods], file=sys.stderr)
     print("sys.modules keys:", [k for k in sys.modules if not k.startswith("_")], file=sys.stderr)
@@ -341,24 +363,29 @@ for py in sorted(code.glob("*.py")):
         except Exception as _exc:
             print("import fail:", py.stem, repr(_exc), file=sys.stderr)
 
-app = None
-app_module = ""
-# 两遍探测（与导出 runner 同语义）：作者模块级 app 优先，create_app 兜底
+def _route_count(_c):
+    try:
+        if hasattr(_c, "url_map"):
+            return sum(1 for _ in _c.url_map.iter_rules())
+        return len(getattr(_c, "routes", []) or [])
+    except Exception:
+        return 0
+
+# 9/22 stackoverflow 取证：同 VERIFY——候选全收集按路由数择优
+_cands = []
 for mod in mods:
     cand = getattr(mod, "app", None) or getattr(mod, "application", None)
     if cand is not None and callable(cand) and not isinstance(cand, type):
-        app = cand
-        app_module = mod.__name__
-        break
-if app is None:
-    for mod in mods:
-        if hasattr(mod, "create_app"):
-            try:
-                app = mod.create_app()
-            except Exception:
-                continue
-            app_module = mod.__name__
-            break
+        _cands.append((mod.__name__, cand))
+for mod in mods:
+    if hasattr(mod, "create_app"):
+        try:
+            _cands.append((mod.__name__, mod.create_app()))
+        except Exception:
+            continue
+app_module, app = ("", None)
+if _cands:
+    app_module, app = max(_cands, key=lambda t: _route_count(t[1]))
 if app is None:
     print("loaded mods:", [m.__name__ for m in mods], file=sys.stderr)
     print("code dir:", str(code), "exists:", code.is_dir(), file=sys.stderr)
@@ -486,11 +513,22 @@ for child in sorted(code.iterdir()):
                     mods.append(__import__(py.stem))
                 except Exception:
                     pass
-app = None
+def _route_count(_c):
+    try:
+        if hasattr(_c, "url_map"):
+            return sum(1 for _ in _c.url_map.iter_rules())
+        return len(getattr(_c, "routes", []) or [])
+    except Exception:
+        return 0
+
+_cands = []
 for mod in mods:
     if hasattr(mod, "create_app"):
-        app = mod.create_app()
-        break
+        try:
+            _cands.append(mod.create_app())
+        except Exception:
+            continue
+app = max(_cands, key=_route_count) if _cands else None
 if app is None:
     print("loaded mods:", [m.__name__ for m in mods], file=sys.stderr)
     for _name, _m in list(sys.modules.items()):

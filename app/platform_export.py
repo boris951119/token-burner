@@ -59,15 +59,23 @@ def _iter_mods():
             continue
 
 
-app = None
-for _mod in _iter_mods():                       # ① 模块级 app 属性（作者入口）
+def _route_count(_cand):
+    try:
+        if hasattr(_cand, "url_map"):       # Flask/WSGI
+            return sum(1 for _ in _cand.url_map.iter_rules())
+        return len(getattr(_cand, "routes", []) or [])  # ASGI
+    except Exception:
+        return 0
+
+
+_cands = []
+for _mod in _iter_mods():                       # ① 模块级 app/application
     _cand = getattr(_mod, "app", None) or getattr(
         _mod, "application", None)
     if (_cand is not None and callable(_cand)
             and not isinstance(_cand, type)):
-        app = _cand
-        break
-if app is None:                                 # ② create_app 工厂兜底
+        _cands.append(_cand)
+if not _cands:                                  # ② create_app 工厂兜底
     for _mod in _iter_mods():
         if hasattr(_mod, "create_app"):
             try:
@@ -75,11 +83,13 @@ if app is None:                                 # ② create_app 工厂兜底
             except Exception:
                 continue                        # 坏工厂跳过，找下一个
             if _cand is not None:
-                app = _cand
-                break
-
-if app is None:
+                _cands.append(_cand)
+if not _cands:
     raise SystemExit("no create_app/app entry found in backend/")
+# 9/22 stackoverflow 取证：业务包常自带裸自测 app（有 health 无业务
+# 路由），walk_packages 迭代序里抢先当选 → 首页 404 全场团灭。作者
+# 入口必须按【路由数最多】择优——装配保底壳路由更少，意图不变。
+app = max(_cands, key=_route_count)
 
 if __name__ == "__main__":
     if hasattr(app, "wsgi_app"):                # Flask/WSGI
