@@ -50,8 +50,8 @@ def node_unavailable_reason() -> str:
         if r.returncode == 0:
             _node_probe = ""
         else:
-            _node_probe = ("playwright CLI 不可用: "
-                           + ((r.stderr or "") or (r.stdout or "")).strip()[:120])
+            err = ((r.stderr or "") or (r.stdout or "")).strip()
+            _node_probe = f"playwright CLI 不可用: {err[:120]}"
     except Exception as exc:
         _node_probe = f"playwright 探测失败 {exc!r}"[:160]
     return _node_probe
@@ -405,6 +405,21 @@ def run_selftests(project_dir: Path, specs_dir: Path,
                 csum = {"passed": 0, "failures": [], "note": notes_c}
         cfail = list(csum.get("failures") or [])
         cpassed = int(csum.get("passed") or 0)
+        specs = None
+        if specs_dir is not None and Path(specs_dir).is_dir():
+            specs = list(Path(specs_dir).glob("*.spec.ts"))
+        if specs is None:
+            # Playwright 段缺席（环境无 node / specs 生成失败）时，前面的
+            # 导出布局→起服→健康探针→编译判分依然全部有效：布局违约与
+            # 起服死亡两大死因从来不需要 node。旧实现在此处抛错把整闸
+            # （连同这些 node-free 检查）一起报废。
+            return (cpassed, len(cfail), list(cfail),
+                    "[playwright] SKIP（无可用 specs：环境无 node 或生成失败）")
+        if not specs:
+            # 目录在、spec 全被 lint 剔除 = 零信号，不得被编译判分掩盖
+            return (cpassed, 1 + len(cfail),
+                    ["自测 specs 零收集（lint 全数剔除）"] + cfail,
+                    "[playwright] SKIP（specs 目录空）")
         report = project_dir / "selftest-report.json"
         env = dict(os.environ,
                    TARGET_URL=f"http://127.0.0.1:{port}",
@@ -473,15 +488,20 @@ def selftest_gate(project_dir: Path, requirement: str, settings,
         return False, "自测闸关闭（ARCBENCH_SELFTEST=off）"
     project_dir = Path(project_dir)
     reason = node_unavailable_reason()
+    specs_dir: Path | None = None
     if reason:
-        # 生成前先判环境：缺 node 时 specs 写了也跑不了，一分钱不花
-        print(f"[selftest] SKIP: {reason}（行为验收退化为 HTTP 冒烟+旅程闸）",
+        # specs 生成要先烧 LLM token，跑它却需要 node——缺 node 时一分钱
+        # 不花，直接走 node-free 判分段（导出布局+起服+编译清单）
+        print(f"[selftest] SKIP 生成: {reason}（仍跑 node-free 判分）",
               flush=True)
-        return False, f"自测闸跳过：{reason}"
-    _beat(project_dir, "自测闸-生成")
-    specs_dir = ensure_selftests(project_dir, requirement, settings)
-    if specs_dir is None:
-        return False, "自测 specs 生成失败（降级：跳过自测闸）"
+    else:
+        _beat(project_dir, "自测闸-生成")
+        specs_dir = ensure_selftests(project_dir, requirement, settings)
+        if specs_dir is None:
+            # 生成全批失败不再报废整闸：前面的活服起服/健康/编译判分
+            # 与 node 无关，是"布局违约=主死因"的唯一机械抓手
+            print("[selftest] 生成失败（所有批无一落盘）→ 仅跑 node-free 判分",
+                  flush=True)
     passed, failed, failures, tail = run_selftests(
         project_dir, specs_dir, requirements_dir=requirements_dir)
     notes: list[str] = []
@@ -490,7 +510,9 @@ def selftest_gate(project_dir: Path, requirement: str, settings,
         # 真空真值漏洞（2026-09-20 取证）：坏 spec 连坐收集失败 → 0/0
         # 曾被判 PASS——零信号=零证据=FAIL
         _beat(project_dir, "自测闸-零信号")
-        return False, "\n".join(notes + ["自测零信号：specs 未收集到任何用例"])
+        env_note = f"（{reason}，且无 requirements_dir 可判）" if reason else ""
+        return False, "\n".join(
+            notes + [f"自测零信号：specs 未收集到任何用例{env_note}"])
     if not failed:
         _beat(project_dir, "自测闸-通过")
         return True, "\n".join(notes)
