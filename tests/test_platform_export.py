@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import pathlib
 
@@ -220,3 +221,238 @@ def test_author_entry_is_never_shadowed(tmp_path, project):
     assert summary["entry"] == "author"
     assert not (out / "backend" / "app_main").exists(), \
         "作者入口在场时装配保底必须让位，不得旁路修复成果"
+
+
+# ---- 产物依赖自举（9/23 官方 entrypoint 取证）------------------------------
+# 判分容器只跑 `arc compile → cd backend && npm run start`：没有任何一步替
+# 产物 pip install，而镜像 /opt/venv 的依赖来自编译器 requirements
+# （openai/pydantic/langchain 一族），flask/fastapi/uvicorn 一个都没有。
+# 缺依赖的产物整棵树 import 全灭 → 60 秒健康探针必超时 → exit 1 不评分，
+# 且 stderr 与「没有入口」长得一模一样。入口由出口保底兜死，依赖由启动
+# 入口原地补装兜活——两头都要确定性抓手，不能交给镜像运气。
+
+# 伪安装器：装「成功」时落一个可导入模块（入口随之复活），并把每次调用
+# 记进日志——「试了哪几种装法、按什么顺序」因此是可断言事实，不是注释承诺。
+_INSTALLER_STUB = '''\
+import json
+import os
+import sys
+
+
+def run(tool, rc_env):
+    log = os.environ.get("FAKE_INSTALL_LOG")
+    if log:
+        with open(log, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"tool": tool, "argv": sys.argv[1:]}) + "\\n")
+    rc = int(os.environ.get(rc_env, "1"))
+    target = os.environ.get("FAKE_INSTALL_WRITE")
+    if rc == 0 and target:
+        with open(target, "w", encoding="utf-8") as fh:
+            fh.write(
+                "class _App:\\n"
+                "    bootstrapped = True\\n"
+                "    routes = ['GET /health']\\n"
+                "    def __call__(self):\\n"
+                "        return self\\n"
+                "\\n"
+                "def make_app():\\n"
+                "    return _App()\\n")
+    return rc
+
+
+sys.exit(run("__TOOL__", "__RC_ENV__"))
+'''
+
+
+class _Installer:
+    """`python -m pip` 与 `uv` 的可控伪件（默认全失败：忘记配置 ≠ 偷偷成功）。"""
+
+    def __init__(self, root, log, monkeypatch):
+        self.root, self._log, self._mp = root, log, monkeypatch
+        self.reset()
+
+    def reset(self):
+        self._mp.setenv("FAKE_PIP_RC", "1")
+        self._mp.setenv("FAKE_UV_RC", "1")
+        self._mp.delenv("FAKE_INSTALL_WRITE", raising=False)
+
+    def install_ok(self, tool, *, name="pip"):
+        """让 `tool` 这一档安装成功，并把伪模块写到 `name`。"""
+        self._mp.setenv(f"FAKE_{tool.upper()}_RC", "0")
+        self._mp.setenv("FAKE_INSTALL_WRITE", str(name))
+
+    def attempts(self):
+        if not self._log.exists():
+            return []
+        return [json.loads(line) for line in
+                self._log.read_text(encoding="utf-8").splitlines() if line]
+
+
+@pytest.fixture
+def installer(tmp_path, monkeypatch):
+    """PYTHONPATH 先于 site-packages 解析（实测 `python -m pip` 命中伪件），
+    PATH 前置 bin/ 遮蔽 uv——两种装法都在被测代码之外，测试说了算。"""
+    root = tmp_path / "installer"
+    (root / "pip").mkdir(parents=True)
+    (root / "pip" / "__init__.py").write_text("", encoding="utf-8")
+    (root / "pip" / "__main__.py").write_text(
+        _INSTALLER_STUB.replace("__TOOL__", "pip").replace("__RC_ENV__",
+                                                           "FAKE_PIP_RC"),
+        encoding="utf-8")
+    bindir = root / "bin"
+    bindir.mkdir()
+    uv = bindir / "uv"
+    uv.write_text(
+        "#!" + sys.executable + "\n"
+        + _INSTALLER_STUB.replace("__TOOL__", "uv").replace("__RC_ENV__",
+                                                            "FAKE_UV_RC"),
+        encoding="utf-8")
+    uv.chmod(0o755)
+    monkeypatch.setenv("PYTHONPATH", str(root))
+    monkeypatch.setenv("PATH", str(bindir) + os.pathsep + os.environ["PATH"])
+    log = tmp_path / "install-log.jsonl"
+    monkeypatch.setenv("FAKE_INSTALL_LOG", str(log))
+    return _Installer(root, log, monkeypatch)
+
+
+def _dep_missing_backend(tmp_path):
+    """backend/ 里唯一模块依赖一个不存在的包，入口随该包一起消失。"""
+    from app.platform_export import _BACKEND_MAIN
+
+    be = tmp_path / "backend"
+    (be / "svc").mkdir(parents=True)
+    (be / "svc" / "__init__.py").write_text("", encoding="utf-8")
+    (be / "svc" / "svc.py").write_text(
+        "import zzzwebkit\n"
+        "app = zzzwebkit.make_app()\n", encoding="utf-8")
+    (be / "requirements.txt").write_text("zzzwebkit\n", encoding="utf-8")
+    (be / "main.py").write_text(_BACKEND_MAIN, encoding="utf-8")
+    return be
+
+
+def _plain_backend(tmp_path, body, name="solo"):
+    """一个依赖齐全、能直接跑完探测的 backend/。"""
+    from app.platform_export import _BACKEND_MAIN
+
+    be = tmp_path / "backend"
+    be.mkdir()
+    (be / f"{name}.py").write_text(body, encoding="utf-8")
+    (be / "requirements.txt").write_text("flask\n", encoding="utf-8")
+    (be / "main.py").write_text(_BACKEND_MAIN, encoding="utf-8")
+    return be
+
+
+def _exec_entry(be, name):
+    """以独立模块名执行产物启动入口，并还原它对 sys.path/sys.modules 的改动。
+
+    必须还原：入口把 backend/ 插进了 sys.path，留着会让后续测试在同名包上
+    互相串味——假绿比假红难查得多。"""
+    import importlib.util
+
+    path_snap = list(sys.path)
+    mods_snap = set(sys.modules)
+    try:
+        spec = importlib.util.spec_from_file_location(name, be / "main.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+    finally:
+        sys.path[:] = path_snap
+        for gone in set(sys.modules) - mods_snap:
+            sys.modules.pop(gone, None)
+
+
+_CALLABLE = (
+    "class _A:\n"
+    "    def __call__(self):\n"
+    "        return self\n"
+    "\n"
+    "app = _A()\n")
+
+
+def test_bootstrap_revives_entry_and_tries_cheapest_install_first(
+        tmp_path, installer, capsys):
+    be = _dep_missing_backend(tmp_path)
+    installer.install_ok("pip", name=be / "zzzwebkit.py")
+    try:
+        mod = _exec_entry(be, "runner_main_bootstrap")
+    except SystemExit as exc:
+        pytest.fail(f"依赖自举后仍未复活入口: {exc}")
+    assert "依赖已自举" in capsys.readouterr().out
+    assert getattr(mod.app, "bootstrapped", None) is True, \
+        "重探必须拿到装完依赖后才可导入的作者入口"
+    got = installer.attempts()
+    assert [a["tool"] for a in got] == ["pip"], \
+        f"裸 pip 成功就不该再试更贵的装法: {got}"
+
+
+def test_bootstrap_falls_back_to_uv_when_pip_is_absent(tmp_path, installer):
+    """官方 reproduction 镜像的 /opt/venv 由 `uv venv` 建立、默认不带 pip：
+    `python -m pip` 必 rc=1，此时 uv 是唯一活路，梯子必须走到第二档。"""
+    be = _dep_missing_backend(tmp_path)
+    installer.install_ok("uv", name=be / "zzzwebkit.py")
+    try:
+        mod = _exec_entry(be, "runner_main_uv")
+    except SystemExit as exc:
+        pytest.fail(f"uv 兜底未生效: {exc}")
+    assert getattr(mod.app, "bootstrapped", None) is True
+    assert [a["tool"] for a in installer.attempts()] == ["pip", "uv"]
+
+
+def test_uninstallable_deps_report_truth(tmp_path, installer, capsys):
+    """装不动（无网 / 镜像里根本没有安装器）必须如实报缺依赖，不得假装成功。"""
+    be = _dep_missing_backend(tmp_path)
+    with pytest.raises(SystemExit) as got:
+        _exec_entry(be, "runner_main_dead")
+    msg = str(got.value)
+    assert "missing imports" in msg and "zzzwebkit" in msg, msg
+    assert "NOT bootstrapped" in msg, msg
+    assert "依赖已自举" not in capsys.readouterr().out
+    ladder = [(a["tool"], "--break-system-packages" in a["argv"])
+              for a in installer.attempts()]
+    assert ladder == [("pip", False), ("uv", False),
+                      ("pip", True), ("uv", True)], \
+        f"梯子必须「常规在前、特例在后」且四档试尽才认输: {ladder}"
+
+
+def test_no_install_attempt_when_nothing_is_missing(tmp_path, installer):
+    """入口在场就走快路：判分容器可能无网，一次徒劳的安装会把 60 秒健康
+    预算整段烧掉。"""
+    mod = _exec_entry(_plain_backend(tmp_path, _CALLABLE), "runner_main_fast")
+    assert mod.app is not None
+    assert installer.attempts() == [], "无缺包却动了安装器 = 白烧启动预算"
+
+
+def test_broken_module_is_not_misdiagnosed_as_missing_dep(tmp_path, installer):
+    """代码写坏（非缺包）不得被误诊成依赖问题：坏模块照旧静默跳过，否则
+    注定徒劳的 pip 会吃掉健康预算，还顺手掩盖真病因。"""
+    be = _plain_backend(tmp_path, "raise ValueError('bad module')\n")
+    with pytest.raises(SystemExit) as got:
+        _exec_entry(be, "runner_main_broken")
+    assert "missing imports" not in str(got.value), str(got.value)
+    assert installer.attempts() == [], "坏模块触发安装 = 诊断方向错了"
+
+
+def test_stdlib_only_gap_never_installs(tmp_path, installer):
+    """只缺标准库名时绝不动安装器：装什么都救不回来，却会烧掉起服预算。
+    （3.12 才有的标准库**符号**如 itertools.batched 抛的是 ImportError 而非
+    ModuleNotFoundError，压根不进 _missing——同样是这条快路。）"""
+    be = _plain_backend(tmp_path,
+                        "import json.no_such_submodule\napp = 1\n")
+    with pytest.raises(SystemExit) as got:
+        _exec_entry(be, "runner_main_stdlib")
+    assert installer.attempts() == [], "标准库缺口不该动安装器"
+    msg = str(got.value)
+    assert "missing imports" in msg, f"仍要如实报缺什么: {msg}"
+    assert "NOT bootstrapped" not in msg, f"标准库缺口不该归为依赖未装: {msg}"
+
+
+def test_312_only_stdlib_symbol_is_not_a_dep(tmp_path, installer):
+    """3.11 里 `from itertools import batched` 抛 ImportError（不可名状的
+    缺名），必须与「缺三方包」分流：前者静默跳过该模块，后者才谈自举。"""
+    be = _plain_backend(tmp_path,
+                        "from itertools import batched\napp = 1\n")
+    with pytest.raises(SystemExit) as got:
+        _exec_entry(be, "runner_main_312")
+    assert installer.attempts() == []
+    assert "missing imports" not in str(got.value)

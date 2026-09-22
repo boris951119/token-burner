@@ -35,6 +35,8 @@ _BACKEND_MAIN = '''\
 ① 模块级 app/application 可调用属性（作者入口优先——pro 修好的
   main.py 若能 import，必须压过机械装配的保底壳，否则修复被旁路）
 ② 任意模块 create_app() 工厂（机械装配兜底）
+两遍全空且探测期见过「缺三方依赖」时，原地按 backend/requirements.txt
+补装一次再探（官方容器不保证替产物装依赖）。
 起服：WSGI（有 wsgi_app，Flask）→ app.run；ASGI（FastAPI/Starlette）
 → uvicorn。
 """
@@ -52,6 +54,8 @@ for _child in sorted(_CODE.iterdir()):
             and not (_child / "__init__.py").exists()):
         sys.path.insert(0, str(_child))
 
+_missing: set[str] = set()          # 探测期缺失的顶层导入名
+
 
 def _iter_mods():
     for _m in pkgutil.walk_packages([str(_CODE)]):
@@ -59,6 +63,11 @@ def _iter_mods():
             continue
         try:
             yield importlib.import_module(_m.name)
+        except ModuleNotFoundError as _exc:
+            # 缺依赖与代码写坏是两种病：前者记下来交给依赖自举，后者
+            # 照旧静默跳过（坏模块不得拖累整棵树的入口探测——9/23 walk
+            # 语义实证：包名失败后子模块仍会被尝试，父包异常原样重抛）
+            _missing.add(str(getattr(_exc, "name", "") or "").split(".")[0])
         except Exception:
             continue
 
@@ -72,24 +81,106 @@ def _route_count(_cand):
         return 0
 
 
-_cands = []
-for _mod in _iter_mods():                       # ① 模块级 app/application
-    _cand = getattr(_mod, "app", None) or getattr(
-        _mod, "application", None)
-    if (_cand is not None and callable(_cand)
-            and not isinstance(_cand, type)):
-        _cands.append((_mod.__name__, _cand))
-if not _cands:                                  # ② create_app 工厂兜底
-    for _mod in _iter_mods():
+def _discover():
+    _c = []
+    for _mod in _iter_mods():                   # ① 模块级 app/application
+        _cand = getattr(_mod, "app", None) or getattr(
+            _mod, "application", None)
+        if (_cand is not None and callable(_cand)
+                and not isinstance(_cand, type)):
+            _c.append((_mod.__name__, _cand))
+    if _c:
+        return _c
+    for _mod in _iter_mods():                   # ② create_app 工厂兜底
         if hasattr(_mod, "create_app"):
             try:
                 _cand = _mod.create_app()
             except Exception:
                 continue                        # 坏工厂跳过，找下一个
             if _cand is not None:
-                _cands.append((_mod.__name__, _cand))
+                _c.append((_mod.__name__, _cand))
+    return _c
+
+
+def _third_party_missing():
+    """探测期缺失名里真正属于第三方依赖的那部分。
+
+    标准库名不触发装包：解释器版本错配（3.12 语法/新符号）装什么救不回来，
+    而产物 requirements.txt 里也不会有它——只报真正的缺包，避免拿一次
+    注定徒劳的 40 秒去换必然的超时。"""
+    return _missing - set(getattr(sys, "stdlib_module_names", ()))
+
+
+def _bootstrap_deps():
+    """产物依赖自举：官方 reproduction entrypoint 只做
+    `arc compile → cd backend && npm run start`，从不 pip install
+    backend/requirements.txt——镜像 venv 里也没有 flask（编译器自带依赖
+    仅 openai/pydantic/langchain 一族）。缺依赖时整棵树 import 全灭，
+    60 秒健康探针必然超时 = 不评分。原地补装一次：有网即活，无网也只是
+    回到原来的死法。
+
+    四种解释器形态按「先常规后特例」依次试，各档失败都很快（缺工具/参数
+    不认识都不耗网络），只有真在装的那一次会吃时间：
+    ① 裸 pip（任何带 pip 的 venv）
+    ② uv 装进 --python 所指解释器（官方 reproduction 镜像正是这一形：
+       /opt/venv 由 `uv venv` 建、默认不带 pip，`python -m pip` 必失败）
+    ③ pip + --break-system-packages（Ubuntu Noble 系统解释器 PEP 668）
+    ④ uv + --break-system-packages（uv 指向系统解释器）
+    总预算 40 秒：剩下 ~20 秒够 flask 起服，超预算的尝试直接放弃。
+    """
+    req = _CODE / "requirements.txt"
+    if not req.is_file() or not _third_party_missing():
+        return False
+    import subprocess
+    import time
+
+    pip_base = ["install", "--quiet", "--disable-pip-version-check",
+                "-r", str(req)]
+    uv_base = ["pip", "install", "--quiet", "--python", sys.executable,
+               "-r", str(req)]
+    plans = [
+        [sys.executable, "-m", "pip", *pip_base],
+        ["uv", *uv_base],
+        [sys.executable, "-m", "pip", *pip_base, "--break-system-packages"],
+        ["uv", *uv_base, "--break-system-packages"],
+    ]
+    deadline = time.monotonic() + 40
+    for cmd in plans:
+        left = deadline - time.monotonic()
+        if left <= 2:
+            break
+        try:
+            # stdin=DEVNULL：装不动时绝不许弹交互提示（无人值守容器里
+            # 一次 read 就能把健康预算耗成永久挂起）
+            if subprocess.run(cmd, timeout=left, check=False,
+                              stdin=subprocess.DEVNULL).returncode == 0:
+                print(f"[backend] 依赖已自举: {sorted(_third_party_missing())}",
+                      flush=True)
+                # 装完清查找器缓存：site-packages 的目录快照解释器启动时
+                # 已取过，新落盘的包可能仍不可见
+                importlib.invalidate_caches()
+                return True
+        except FileNotFoundError:
+            continue                     # 该工具不存在（如无 uv），试下一种
+        except Exception as exc:
+            print(f"[backend] 依赖自举尝试失败: {exc!r}"[:200], flush=True)
+            continue
+    return False
+
+
+_cands = _discover()
+if not _cands and _bootstrap_deps():
+    _cands = _discover()          # 装完重探：失败模块不会留在 sys.modules
 if not _cands:
-    raise SystemExit("no create_app/app entry found in backend/")
+    # 尸检要能一眼分清「没入口」和「缺依赖」：keep r0 死法是前者（保底
+    # 壳已在导出时兜住），9/23 官方 entrypoint 取证新增后者——镜像不装
+    # 产物依赖，缺 flask 与缺入口在 stderr 里长得一模一样。
+    _msg = "no create_app/app entry found in backend/"
+    if _missing:
+        _msg += f" (missing imports: {sorted(_missing)})"
+        if _third_party_missing():
+            _msg += " [deps NOT bootstrapped: no install attempt succeeded]"
+    raise SystemExit(_msg)
 # 9/22 stackoverflow 取证：业务包常自带裸自测 app（有 health 无业务
 # 路由），walk_packages 迭代序里抢先当选 → 首页 404 全场团灭。作者
 # 入口必须按【路由数最多】择优——装配保底壳路由更少，意图不变。
