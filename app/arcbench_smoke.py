@@ -125,10 +125,15 @@ for mod in mods:
             _cands.append((mod.__name__, mod.create_app()))
         except Exception:
             continue
+_CONVENTION = ("main", "app", "app_main", "project_main",
+                "server", "wsgi", "run")
+_pref = [x for x in _cands if x[0].lower() in _CONVENTION]
+pool = _pref or _cands
 _entry, app = (None, None)
-if _cands:
-    _entry, app = max(_cands, key=lambda t: _route_count(t[1]))
-    print(f"entry <- {_entry} (routes={_route_count(app)})")
+if pool:
+    _entry, app = max(pool, key=lambda t: _route_count(t[1]))
+    print(f"entry <- {_entry} (routes={_route_count(app)}, "
+          f"candidates={len(_cands)})")
 if app is None:
     print("loaded mods:", [m.__name__ for m in mods], file=sys.stderr)
     failures.append("没有任何模块提供 create_app 或模块级 app 入口")
@@ -302,10 +307,14 @@ _cands = []
 for mod in mods:
     if hasattr(mod, "create_app"):
         try:
-            _cands.append(mod.create_app())
+            _cands.append((mod.__name__, mod.create_app()))
         except Exception:
             continue
-app = max(_cands, key=_route_count) if _cands else None
+_CONVENTION = ("main", "app", "app_main", "project_main",
+                "server", "wsgi", "run")
+_pref = [x for x in _cands if x[0].lower() in _CONVENTION]
+pool = _pref or _cands
+app = max(pool, key=lambda t: _route_count(t[1]))[1] if pool else None
 if app is None:
     print("loaded mods:", [m.__name__ for m in mods], file=sys.stderr)
     print("sys.modules keys:", [k for k in sys.modules if not k.startswith("_")], file=sys.stderr)
@@ -383,9 +392,13 @@ for mod in mods:
             _cands.append((mod.__name__, mod.create_app()))
         except Exception:
             continue
+_CONVENTION = ("main", "app", "app_main", "project_main",
+                "server", "wsgi", "run")
+_pref = [x for x in _cands if x[0].lower() in _CONVENTION]
+pool = _pref or _cands
 app_module, app = ("", None)
-if _cands:
-    app_module, app = max(_cands, key=lambda t: _route_count(t[1]))
+if pool:
+    app_module, app = max(pool, key=lambda t: _route_count(t[1]))
 if app is None:
     print("loaded mods:", [m.__name__ for m in mods], file=sys.stderr)
     print("code dir:", str(code), "exists:", code.is_dir(), file=sys.stderr)
@@ -525,10 +538,14 @@ _cands = []
 for mod in mods:
     if hasattr(mod, "create_app"):
         try:
-            _cands.append(mod.create_app())
+            _cands.append((mod.__name__, mod.create_app()))
         except Exception:
             continue
-app = max(_cands, key=_route_count) if _cands else None
+_CONVENTION = ("main", "app", "app_main", "project_main",
+                "server", "wsgi", "run")
+_pref = [x for x in _cands if x[0].lower() in _CONVENTION]
+pool = _pref or _cands
+app = max(pool, key=lambda t: _route_count(t[1]))[1] if pool else None
 if app is None:
     print("loaded mods:", [m.__name__ for m in mods], file=sys.stderr)
     for _name, _m in list(sys.modules.items()):

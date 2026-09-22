@@ -74,7 +74,7 @@ for _mod in _iter_mods():                       # ① 模块级 app/application
         _mod, "application", None)
     if (_cand is not None and callable(_cand)
             and not isinstance(_cand, type)):
-        _cands.append(_cand)
+        _cands.append((_mod.__name__, _cand))
 if not _cands:                                  # ② create_app 工厂兜底
     for _mod in _iter_mods():
         if hasattr(_mod, "create_app"):
@@ -83,13 +83,18 @@ if not _cands:                                  # ② create_app 工厂兜底
             except Exception:
                 continue                        # 坏工厂跳过，找下一个
             if _cand is not None:
-                _cands.append(_cand)
+                _cands.append((_mod.__name__, _cand))
 if not _cands:
     raise SystemExit("no create_app/app entry found in backend/")
 # 9/22 stackoverflow 取证：业务包常自带裸自测 app（有 health 无业务
 # 路由），walk_packages 迭代序里抢先当选 → 首页 404 全场团灭。作者
 # 入口必须按【路由数最多】择优——装配保底壳路由更少，意图不变。
-app = max(_cands, key=_route_count)
+# 9/22 keep#2 取证：流氓演示模块路由更多时纯路由数会被击败——
+# 约定入口名（main/app/project_main/…）优先，池内再比路由数。
+_CONVENTION = ("main", "app", "app_main", "project_main",
+               "server", "wsgi", "run")
+_pref = [_x for _x in _cands if _x[0].lower() in _CONVENTION]
+app = max(_pref or _cands, key=lambda _x: _route_count(_x[1]))[1]
 
 if __name__ == "__main__":
     if hasattr(app, "wsgi_app"):                # Flask/WSGI
