@@ -40,81 +40,207 @@ _GEN_SYSTEM = (
     "通知文案），不许只断言元素存在；\n"
     "7. 每个 test 一个场景，test.describe 分组；禁止 sleep/等待魔法数"
     "（用 expect 的自动等待）；禁止访问外部网络。\n"
-    "8. 覆盖所有 REQ 的核心场景；每条场景独立可跑。"
+    "8. 只为 user 消息中列出的需求节点生成测试（其余节点由其他批次"
+    "覆盖），每个节点至少一组场景；每条场景独立可跑。"
 )
+
+_NODE_HEADER_RE = re.compile(r"^###\s+(\S+)")
+_NODE_BATCH_MAX = 8
+_NODE_BATCH_CHARS = 15000
+
+
+def _split_atomic_nodes(requirement: str) -> tuple[list[tuple[str, str]], str]:
+    """管线需求文本 → ([(req_id, 节点原文含模块上下文)], 全局契约段)。
+
+    节点级重试的地基：按 ingest 渲染的「### <REQ id> …（验收标准）」切
+    节点，每批自带「## 模块」上下文；夹具契约等非模块章节作为全局段随
+    每批发给 LLM。无 ### 结构返回空表（调用方回落整段单批）。"""
+    nodes: list[tuple[str, str]] = []
+    global_parts: list[str] = []
+    folder_ctx: list[str] = []
+    cur_id: str | None = None
+    cur_lines: list[str] = []
+    mode = "pre"
+
+    def flush() -> None:
+        nonlocal cur_id, cur_lines
+        if cur_id is not None:
+            nodes.append((cur_id, "\n".join(cur_lines).strip()))
+        cur_id, cur_lines = None, []
+
+    for ln in requirement.splitlines():
+        if ln.startswith("## "):
+            flush()
+            if ln[3:].strip().startswith("模块"):
+                mode = "folder"
+                folder_ctx = [ln]
+            else:
+                mode = "other"
+                global_parts.append(ln)
+        elif ln.startswith("### ") and mode in ("folder", "node"):
+            flush()
+            m = _NODE_HEADER_RE.match(ln)
+            cur_id = m.group(1) if m else "?"
+            cur_lines = folder_ctx + [ln]
+            mode = "node"
+        elif cur_id is not None:
+            cur_lines.append(ln)
+        elif mode == "folder":
+            folder_ctx.append(ln)
+        elif mode == "other":
+            global_parts.append(ln)
+    flush()
+    return nodes, "\n".join(global_parts).strip()
+
+
+def _batch_nodes(nodes: list[tuple[str, str]]) -> list[list[tuple[str, str]]]:
+    """节点 → 有序小批（保模块邻接；单节点超窗自成一批不截断）。"""
+    batches: list[list[tuple[str, str]]] = []
+    cur: list[tuple[str, str]] = []
+    size = 0
+    for nid, text in nodes:
+        if cur and (len(cur) >= _NODE_BATCH_MAX
+                    or size + len(text) > _NODE_BATCH_CHARS):
+            batches.append(cur)
+            cur, size = [], 0
+        cur.append((nid, text))
+        size += len(text)
+    if cur:
+        batches.append(cur)
+    return batches
+
+
+def _parse_gen_payload(raw: str) -> list[tuple[str, str, str]]:
+    """LLM 响应 → [(req_id, name, code)]（生成内容卫生闸保留原语义）。"""
+    body = raw.strip()
+    if body.startswith("```"):
+        lines = body.splitlines()
+        body = "\n".join(lines[1:-1]) if len(lines) > 2 else body
+    data = json.loads(body)
+    tests = data.get("tests") or []
+    specs = [(str(t.get("req_id") or "REQ"),
+              str(t.get("name") or "scenario"),
+              str(t.get("code") or "")) for t in tests]
+    specs = [(a, b, c) for a, b, c in specs if "@playwright/test" in c]
+    cleaned: list[tuple[str, str, str]] = []
+    for a, b, c in specs:
+        text = c.strip()
+        # 生成内容卫生（2026-09-20 取证：LLM 曾输出带行号前缀的
+        # "1 | import ..."——一个坏 spec 让 Playwright 整体收集
+        # 失败，0/0 被误判通过）
+        if not text.startswith("import"):
+            continue
+        if re.search(r"^\s*\d+\s*\|", text, re.MULTILINE):
+            continue
+        cleaned.append((a, b, text))
+    if not cleaned:
+        raise ValueError("生成结果无有效 spec")
+    return cleaned
+
+
+def _write_specs(specs_dir: Path, cleaned: list[tuple[str, str, str]],
+                 batch_no: int) -> int:
+    n = 0
+    for k, (rid, name, code) in enumerate(cleaned):
+        safe = "".join(ch if ch.isalnum() or ch in "._-" else "_"
+                       for ch in f"{rid}_{name}")[:60]
+        (specs_dir / f"{safe or f'test_b{batch_no}_{k}'}.spec.ts").write_text(
+            code, encoding="utf-8")
+        n += 1
+    return n
+
+
+def _covered_ids(specs_dir: Path) -> set[str]:
+    """已落盘 specs 覆盖的 req_id 集（文件名前缀 = sanitize 后的 req_id）。"""
+    if not specs_dir.is_dir():
+        return set()
+    return {f.stem.split("_", 1)[0] for f in specs_dir.glob("*.spec.ts")}
 
 
 def ensure_selftests(project_dir: Path, requirement: str,
                      settings) -> Path | None:
-    """自测 specs 生成（持久化：已存在则跳过，修复轮不重写）。"""
+    """自测 specs 生成——节点级批量版（9/22 keep-r0 取证：整应用单次
+    LLM 调用全有或全无，配额瞬断一次即报废整闸）。
+
+    按 ATOMIC 节点切批逐批生成：单批失败只作废该批，收尾对失败批重试
+    一轮；specs 按 req_id 前缀持久化，重入只补缺失节点（断点续生成）。
+    部分覆盖 > 零覆盖。已存在 specs 不重写（修复轮只重跑纪律不变）。"""
     project_dir = Path(project_dir)
     specs_dir = project_dir / "tests" / "selftest"
-    if specs_dir.is_dir() and any(specs_dir.glob("*.spec.ts")):
-        return specs_dir
     from app.utils.model_client import ModelClient
     from app.utils.requirement_anchors import collect_anchors_from_text
 
-    # 精确文案注入（2026-09-20 取证：需求截断到 14k 导致生成器"凭想象"
-    # 写定位器——期望 'Search notes' 而需求原文是 'Search'，全盘落空）。
-    # pro 上下文足够容纳完整需求（84KB≈30k tokens）。
-    try:
-        buckets = collect_anchors_from_text(requirement)
-        anchors = sorted({a for lst in buckets.values() for a in lst})
-    except Exception:
-        anchors = []
-    anchor_lines = "\n".join(f"- {a!r}" for a in anchors[:60])
-    mc = ModelClient(settings)
-    prompt = (
-        "需求文档全文如下。请按系统规则生成覆盖核心场景的 "
-        "Playwright 验收测试。\n\n"
-        "## 需求原文中的逐字文案（定位器必须使用这些精确字符串，"
-        "禁止改写、禁止凭印象造词如 'Search notes'）\n"
-        + anchor_lines
-        + "\n\n## 需求文档全文\n" + requirement[:90000]
-    )
-    models = tuple(settings.models[:2]) or ("openai/gpt-4o",)
-    last: Exception | None = None
-    for model in models:
-        try:
-            raw = mc.chat(model, [
-                {"role": "system", "content": _GEN_SYSTEM},
-                {"role": "user", "content": prompt},
-            ]).content or ""
-            body = raw.strip()
-            if body.startswith("```"):
-                lines = body.splitlines()
-                body = "\n".join(lines[1:-1]) if len(lines) > 2 else body
-            data = json.loads(body)
-            tests = data.get("tests") or []
-            specs = [(str(t.get("req_id") or "REQ"),
-                      str(t.get("name") or "scenario"),
-                      str(t.get("code") or "")) for t in tests]
-            specs = [(a, b, c) for a, b, c in specs if "@playwright/test" in c]
-            cleaned: list[tuple[str, str, str]] = []
-            for a, b, c in specs:
-                text = c.strip()
-                # 生成内容卫生（2026-09-20 取证：LLM 曾输出带行号前缀的
-                # "1 | import ..."——一个坏 spec 让 Playwright 整体收集
-                # 失败，0/0 被误判通过）
-                if not text.startswith("import"):
-                    continue
-                if re.search(r"^\s*\d+\s*\|", text, re.MULTILINE):
-                    continue
-                cleaned.append((a, b, text))
-            if not cleaned:
-                raise ValueError("生成结果无有效 spec")
-            specs_dir.mkdir(parents=True, exist_ok=True)
-            for k, (rid, name, code) in enumerate(cleaned):
-                safe = "".join(ch if ch.isalnum() or ch in "._-" else "_"
-                               for ch in f"{rid}_{name}")[:60]
-                (specs_dir / f"{safe or f'test_{k}'}.spec.ts").write_text(
-                    code, encoding="utf-8")
-            lint_specs(specs_dir, project_dir)
+    nodes, global_ctx = _split_atomic_nodes(requirement)
+    covered = _covered_ids(specs_dir)
+    if nodes:
+        pending = [(nid, text) for nid, text in nodes if nid not in covered]
+        if not pending:
             return specs_dir
-        except Exception as exc:  # 逐模型接力
-            last = exc
-    print(f"[selftest] 生成失败: {last!r}")
-    return None
+    else:
+        # 无节点结构（非 ingest 渲染的题面文本）：回落整段单批
+        if covered:
+            return specs_dir
+        pending = [("__all__", requirement[:90000])]
+
+    mc = ModelClient(settings)
+    models = tuple(settings.models[:2]) or ("openai/gpt-4o",)
+
+    def gen_batch(batch_no: int, batch: list[tuple[str, str]]) -> bool:
+        if batch[0][0] == "__all__":
+            body, anchor_src = batch[0][1], batch[0][1]
+        else:
+            body = "\n\n".join(text for _, text in batch)
+            anchor_src = body + "\n" + global_ctx
+        # 精确文案注入（2026-09-20 取证：需求截断到 14k 导致生成器
+        # "凭想象"写定位器——期望 'Search notes' 而需求原文是 'Search'）
+        try:
+            buckets = collect_anchors_from_text(anchor_src)
+            anchors = sorted({a for lst in buckets.values() for a in lst})
+        except Exception:
+            anchors = []
+        anchor_lines = "\n".join(f"- {a!r}" for a in anchors[:60])
+        prompt = (
+            "下面列出本批需求节点。请按系统规则为这些节点生成 "
+            "Playwright 验收测试。\n\n"
+            "## 本批需求逐字文案（定位器必须使用这些精确字符串，"
+            "禁止改写、禁止凭印象造词如 'Search notes'）\n"
+            + anchor_lines
+            + ("\n\n## 全局夹具契约（种子精确字符串以此为准）\n"
+               + global_ctx[:6000] if global_ctx else "")
+            + "\n\n## 本批需求节点原文\n" + body
+        )
+        last: Exception | None = None
+        for model in models:
+            try:
+                raw = mc.chat(model, [
+                    {"role": "system", "content": _GEN_SYSTEM},
+                    {"role": "user", "content": prompt},
+                ]).content or ""
+                cleaned = _parse_gen_payload(raw)
+                specs_dir.mkdir(parents=True, exist_ok=True)
+                _write_specs(specs_dir, cleaned, batch_no)
+                return True
+            except Exception as exc:  # 逐模型接力
+                last = exc
+        ids = " ".join(nid for nid, _ in batch)
+        print(f"[selftest] 批{batch_no}（{ids}）生成失败: {last!r}"[:240])
+        return False
+
+    batches = _batch_nodes(pending)
+    failed = [(i, b) for i, b in enumerate(batches)
+              if not gen_batch(i, b)]
+    for i, b in failed:  # 节点级重试：收尾补跑一轮失败批
+        gen_batch(i, b)
+    still = [nid for nid, _ in pending if nid not in _covered_ids(specs_dir)
+             and nid != "__all__"]
+    if nodes:
+        print(f"[selftest] 节点覆盖 {len(nodes) - len(still)}/{len(nodes)}"
+              + (f"，仍缺: {' '.join(still[:12])}" if still else ""))
+    if not _covered_ids(specs_dir):
+        print("[selftest] 生成失败（所有批无一落盘）")
+        return None
+    lint_specs(specs_dir, project_dir)
+    return specs_dir
 
 
 def _ensure_node_modules_link(specs_dir: Path) -> None:
