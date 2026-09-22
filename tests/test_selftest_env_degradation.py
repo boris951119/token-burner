@@ -96,6 +96,9 @@ def test_env_off_switch_still_first(tmp_path, monkeypatch):
 class _FakeProc:
     pid = 4242
 
+    def poll(self):
+        return None            # 一直活着（官方健康轮询只在进程退出时提前放弃）
+
     def terminate(self):
         pass
 
@@ -118,7 +121,7 @@ def _stub_server(monkeypatch, tmp_path):
     monkeypatch.setattr(sg, "_free_port", lambda prefer: 39999)
     monkeypatch.setattr(sg.subprocess, "Popen",
                         lambda *a, **k: _FakeProc())
-    monkeypatch.setattr(sg, "_wait_health", lambda url, deadline_s=90: True)
+    monkeypatch.setattr(sg, "_wait_health", lambda url, deadline_s=60, proc=None: True)
 
 
 def test_run_selftests_without_specs_still_starts_server(tmp_path, monkeypatch):
@@ -156,6 +159,9 @@ def test_boot_death_is_counted_and_carries_traceback(tmp_path, monkeypatch):
         def __init__(self, *a, **k):
             k["stdout"].write("ModuleNotFoundError: no module named 'notes'")
 
+        def poll(self):
+            return 1           # 已退出：官方 runner 同口径立刻判 runtime_unhealthy
+
         def terminate(self):
             pass
 
@@ -168,10 +174,13 @@ def test_boot_death_is_counted_and_carries_traceback(tmp_path, monkeypatch):
     monkeypatch.setattr(pe, "export_platform_layout", fake_export)
     monkeypatch.setattr(sg, "_free_port", lambda prefer: 39998)
     monkeypatch.setattr(sg.subprocess, "Popen", _DyingProc)
-    monkeypatch.setattr(sg, "_wait_health", lambda url, deadline_s=90: False)
+    monkeypatch.setattr(sg, "_wait_health",
+                        lambda url, deadline_s=60, proc=None: False)
     passed, failed, failures, tail = sg.run_selftests(tmp_path, None)
     assert (passed, failed) == (0, 1)
     assert "ModuleNotFoundError" in failures[0], "死因必须进修复指令"
+    assert "服务进程已退出 rc=1" in failures[0], \
+        "判词要点明进程死了而不是启动慢——否则修复环会往'再等等'的方向找"
 
 
 def test_relative_project_dir_still_launches_absolute(tmp_path, monkeypatch,
@@ -189,6 +198,9 @@ def test_relative_project_dir_still_launches_absolute(tmp_path, monkeypatch,
         def __init__(self, argv, *a, **k):
             captured["argv"] = list(argv)
             k["stdout"].write("booted")
+
+        def poll(self):
+            return None
 
         def terminate(self):
             pass
@@ -210,7 +222,7 @@ def test_relative_project_dir_still_launches_absolute(tmp_path, monkeypatch,
     monkeypatch.setattr(pe, "export_platform_layout", fake_export)
     monkeypatch.setattr(sg, "_free_port", lambda prefer: 39997)
     monkeypatch.setattr(sg.subprocess, "Popen", _NoopProc)
-    monkeypatch.setattr(sg, "_wait_health", lambda url, deadline_s=90: True)
+    monkeypatch.setattr(sg, "_wait_health", lambda url, deadline_s=60, proc=None: True)
     sg.run_selftests(Path("proj"), None)
     assert Path(captured["argv"][1]).is_absolute(), captured["argv"]
 

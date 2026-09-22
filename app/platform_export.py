@@ -321,6 +321,26 @@ def _requirements_for(code_dir: Path) -> str:
     return "\n".join(deps or ["flask>=3.0.0"]) + "\n"
 
 
+_DB_DATA_EXT = (".db", ".db-journal", ".db-wal", ".db-shm",
+                ".sqlite", ".sqlite3",
+                ".sqlite-journal", ".sqlite-wal", ".sqlite-shm")
+
+
+def _is_runtime_data(p: Path) -> bool:
+    """ sqlite 运行库判定——这类文件一律不得进交付包。
+
+    9/23 keep r1 取证：导出把 code/notes.db（49KB）整份搬进 backend/，
+    而这个库是自测闸每一轮改写完的残局（测试建的笔记、被删掉的行、改过
+    的标签都在里面）。平台起服读到的就是这个脏初态：种子重复、被测数据
+    缺失，官方用例成批落空——而本地自测因为同一份脏库反而全绿。官方侧的
+    跑测环境给每个套件一个全新的 sqlite 路径（ARC_DB_FILE），参考实现
+    一律「空库启动 + 启动时播种」，干净库才是这条链路的正确初态。
+    剥掉之后本地自测也换成干净环境：启动即播种的应用照旧绿，依赖现成库
+    文件的应用立刻判红进修复环——原本那颗无声的假绿就此变成可修的失败。"""
+    name = p.name.lower()
+    return name.endswith(_DB_DATA_EXT)
+
+
 def export_platform_layout(output_dir: Path, project_dir: Path) -> dict:
     """把生成项目适配导出为官方 runner 布局，返回导出摘要。
 
@@ -353,6 +373,8 @@ def export_platform_layout(output_dir: Path, project_dir: Path) -> dict:
         if src.is_dir() or parts & {"__pycache__", "instance", ".git"}:
             continue
         if src.suffix == ".py":
+            continue
+        if _is_runtime_data(src):
             continue
         rel = src.relative_to(code_dir)
         dst = backend / rel

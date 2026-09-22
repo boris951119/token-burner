@@ -232,3 +232,60 @@ class TestSpecRunWallClock:
         assert "actionTimeout" in cfg
         # 官方判分复现不设该变量：默认 0 = 沿用 test 超时，口径不变
         assert "process.env.PLAYWRIGHT_ACTION_TIMEOUT || 0" in cfg
+
+
+class TestOfficialStartupParity:
+    """官方 runner 的启动侧口径（本地模拟材料 entrypoint 读到的常量）：
+    健康轮询 60 次×1s，且服务进程一退出就立刻放弃。我们此前等 90s 且不
+    看进程死活——慢启动交付本地绿、平台判 runtime_unhealthy 全场零分，
+    起服即死的又白烧满一分钟墙钟。"""
+
+    def test_health_deadline_is_the_official_budget(self):
+        assert sg.HEALTH_DEADLINE_S == 60
+        import inspect
+        src = inspect.getsource(sg._wait_health)
+        assert "HEALTH_DEADLINE_S" in src, "默认值必须取自那个常量"
+
+    def test_dead_process_aborts_the_wait_instead_of_burning_it(self):
+        import subprocess
+        import sys
+        import time
+        proc = subprocess.Popen([sys.executable, "-c", "pass"])
+        proc.wait()
+        t0 = time.time()
+        assert not sg._wait_health("http://127.0.0.1:1/api/health",
+                                   proc=proc)
+        assert time.time() - t0 < 5, "服务已退出还等满预算＝白烧修复轮"
+
+    def test_live_server_is_probed_green(self):
+        import http.server
+        import threading
+        import time
+
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b'{"status":"ok"}')
+
+            def log_message(self, *a):
+                pass
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        port = srv.server_address[1]
+        th = threading.Thread(target=srv.serve_forever, daemon=True)
+        th.start()
+        try:
+            t0 = time.time()
+            assert sg._wait_health(f"http://127.0.0.1:{port}/api/health")
+            assert time.time() - t0 < 3
+        finally:
+            srv.shutdown()
+            srv.server_close()
+            th.join(timeout=3)
+
+    def test_boot_failure_message_names_the_budget_and_exit_code(self, tmp_path):
+        """判词要直指「官方同口径也会判死」，否则修复环会以为再等等就行。"""
+        import inspect
+        src = inspect.getsource(sg.run_selftests)
+        assert "服务进程已退出" in src and "runtime_unhealthy" in src

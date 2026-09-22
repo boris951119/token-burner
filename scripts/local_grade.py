@@ -86,7 +86,10 @@ def _acquire_grade_lock():
     return lock
 
 
-def _wait_health(url: str, deadline_s: float = 90) -> bool:
+def _wait_health(url: str, deadline_s: float = 60, proc=None) -> bool:
+    """就绪探针，预算与放弃条件照抄官方 runner（60 次×1s，服务进程一退出
+    就 break）。本地复现的意义在于读数可迁移，90s 的宽限只会让我们把平台
+    判 runtime_unhealthy 的交付看成"本地能起"。"""
     t0 = time.time()
     while time.time() - t0 < deadline_s:
         try:
@@ -94,7 +97,10 @@ def _wait_health(url: str, deadline_s: float = 90) -> bool:
                 if r.status == 200:
                     return True
         except Exception:
-            time.sleep(0.6)
+            pass
+        if proc is not None and proc.poll() is not None:
+            return False
+        time.sleep(1)
     return False
 
 
@@ -164,7 +170,8 @@ def main() -> int:
         cwd=str(backend), env=env,
         stdout=boot_fp, stderr=boot_fp)
     try:
-        if not _wait_health(f"http://127.0.0.1:{port}/api/health"):
+        if not _wait_health(f"http://127.0.0.1:{port}/api/health",
+                            proc=proc):
             print(f"[grade] 应用健康探针超时——起服失败（启动日志: {boot_log}）")
             try:
                 tail = boot_log.read_text(encoding="utf-8", errors="replace"

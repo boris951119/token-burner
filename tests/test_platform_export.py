@@ -49,6 +49,37 @@ def test_backend_entry_has_port_and_health_contract(tmp_path, project):
     assert "create_app" in entry
 
 
+def test_start_command_and_bind_match_official_runner(tmp_path, project):
+    """官方启动姿势（本地模拟材料的 entrypoint 实测）：cd backend →
+    PORT=<runtime port> npm run start → curl http://127.0.0.1:<port>
+    /api/health。任何一环对不上都是 runtime_unhealthy 全场零分，
+    所以这三条写死成契约而不是靠人工核对。"""
+    out = tmp_path / "out"
+    export_platform_layout(out, project)
+    pkg = json.loads((out / "backend" / "package.json").read_text(
+        encoding="utf-8"))
+    assert "start" in pkg["scripts"], "runner 只认 npm run start"
+    assert "main.py" in pkg["scripts"]["start"]
+    entry = (out / "backend" / "main.py").read_text(encoding="utf-8")
+    assert 'host="0.0.0.0"' in entry, "绑 127.0.0.1 时容器外探针永远拿不到 200"
+    assert '"3301"' in entry, "PORT 缺省值必须与 runner 默认端口一致"
+
+
+def test_sqlite_runtime_db_never_ships(tmp_path, project):
+    """9/23 keep r1 取证：code/notes.db 是自测闸一轮轮改写后的残局，
+    随迁即把脏初态交给平台判分（种子重复、被测行缺失），本地却因同一份
+    脏库全绿。运行库必须剥掉，让本地与平台跑在同一个干净初态上。"""
+    code = project / "code"
+    (code / "notes.db").write_text("dirty test state", encoding="utf-8")
+    (code / "notes.db-wal").write_text("w", encoding="utf-8")
+    (code / "view" / "app.sqlite3").write_text("d", encoding="utf-8")
+    out = tmp_path / "out"
+    export_platform_layout(out, project)
+    names = {p.name for p in (out / "backend").rglob("*") if p.is_file()}
+    assert not ({"notes.db", "notes.db-wal", "app.sqlite3"} & names), names
+    assert "style.css" in names, "真资产仍要随迁，剥的只是运行库"
+
+
 def test_frontend_shell_buildable_shape(tmp_path, project):
     out = tmp_path / "out"
     export_platform_layout(out, project)

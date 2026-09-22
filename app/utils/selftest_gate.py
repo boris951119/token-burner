@@ -60,7 +60,13 @@ def node_unavailable_reason() -> str:
 # 13 条 timedOut 各自把 60s test 预算整条耗光，全部挂在 locator.fill
 # 等不到元素上——等 15s 拿到的报错与等 60s 一字不差，每轮净省 ~9 分钟。
 # 修复环能跑几轮是被墙钟预算卡死的，省下的钟点就是多出的修复轮。
+# 15s 的选值与官方口径核对过：官方提交侧配置是 test 60s / expect 10s，
+# 断言等元素只给 10 秒，动作等待卡在 15s 只比那条线松 5 秒——判红方向
+# 与官方一致，不是我们自己另立更严的规矩。
 SPEC_ACTION_TIMEOUT_MS = 15000
+
+# 起服就绪预算（秒），照抄官方 runner 的健康轮询常量。
+HEALTH_DEADLINE_S = 60
 
 
 def _spec_env(project_dir: Path, port: int, specs_dir) -> dict[str, str]:
@@ -389,7 +395,14 @@ def _free_port(prefer: int) -> int:
         return port
 
 
-def _wait_health(url: str, deadline_s: float = 90) -> bool:
+def _wait_health(url: str, deadline_s: float = HEALTH_DEADLINE_S,
+                 proc=None) -> bool:
+    """起服就绪探针——预算与放弃条件都照官方 runner 的口径。
+
+    9/23 对表官方启动脚本：健康等待是硬编码 60 次×1s，且服务进程一退出
+    就立刻 break。我们此前等 90s 且不看进程死活，两头都错在危险的方向上：
+    起服即死的应用白等满 90 秒（修复轮就是这么烧掉的），61-90s 才就绪的
+    慢启动应用在本地判绿、到平台判 runtime_unhealthy 全场零分。"""
     t0 = time.time()
     while time.time() - t0 < deadline_s:
         try:
@@ -397,7 +410,10 @@ def _wait_health(url: str, deadline_s: float = 90) -> bool:
                 if r.status == 200:
                     return True
         except Exception:
-            time.sleep(0.5)
+            pass
+        if proc is not None and proc.poll() is not None:
+            return False
+        time.sleep(1)
     return False
 
 
@@ -439,7 +455,8 @@ def run_selftests(project_dir: Path, specs_dir: Path,
         cwd=str(backend), env=dict(os.environ, PORT=str(port)),
         stdout=boot_fp, stderr=subprocess.STDOUT)
     try:
-        if not _wait_health(f"http://127.0.0.1:{port}/api/health"):
+        if not _wait_health(f"http://127.0.0.1:{port}/api/health",
+                            proc=proc):
             boot_fp.flush()
             why = ""
             try:
@@ -447,7 +464,12 @@ def run_selftests(project_dir: Path, specs_dir: Path,
                     encoding="utf-8", errors="replace").strip()[-1200:]
             except Exception:
                 pass
-            return 0, 1, [f"健康探针超时，后端输出尾部：\n{why}"], why
+            rc = proc.poll()
+            dead = (f"（服务进程已退出 rc={rc}，官方 runner 同口径会在第一时间"
+                    f"判 runtime_unhealthy）" if rc is not None else
+                    f"（{HEALTH_DEADLINE_S}s 内未就绪，官方预算同样为 "
+                    f"{HEALTH_DEADLINE_S}s）")
+            return 0, 1, [f"健康探针超时{dead}，后端输出尾部：\n{why}"], why
         # 编译清单判分（零 LLM、秒级）：需求逐字事实 × 活服。失败串以
         # REQ id 开头，与自测失败同清单进修复环即为定向指令。
         csum: dict = {"passed": 0, "failures": []}
