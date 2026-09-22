@@ -403,3 +403,19 @@ def test_click_subset_of_controls_and_flows_to_checklist(tmp_path):
         assert set(ck.click_controls) <= set(ck.control_labels), rid
     hit = [c for c in cls.values() if c.click_controls]
     assert hit, "夹具里必须有一条点击事实，否则本测等于没测"
+
+
+def test_backtick_written_ui_labels_reach_the_click_channel():
+    """界面文案在题面里有引号与 Markdown 反引号两种写法（6 套题面实测
+    点击事实 0 : 31 的分布）：只认引号的那一版，整条「必须做成可点控件」
+    判分在反引号类任务上静默失效。opens/打开 也在点击动词表内——需求写
+    "opens the `New Shelf` flow" 就是要求一个入口控件。"""
+    from app.acceptance_compile import _click_quotes_in
+
+    assert _click_quotes_in(
+        "The user clicks `Login` in the top navigation bar.") == ["Login"]
+    assert _click_quotes_in(
+        "opens the `New Shelf` flow and clicks `Save Shelf`") \
+        == ["New Shelf", "Save Shelf"]
+    # 反引号里的端点与标识符不是界面文案，不得成为判分事实
+    assert _click_quotes_in("clicks `/api/books` then `submit_form`") == []

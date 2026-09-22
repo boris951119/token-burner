@@ -158,10 +158,13 @@ def _click_quotes_in(text: str) -> list[str]:
     if not text:
         return out
     body = _MD_FENCE.sub(" ", _MD_IMG.sub("", text))
-    for pat in (_QUOTED_D, _QUOTED_CJK, _QUOTED_S):
+    # 反引号通道不能漏：题面有两种界面文案写法（引号 / Markdown 反引号），
+    # 只认引号的那一类任务整条通道静默失效——6 套题面实测比是 0 : 30+。
+    for pat, bt in ((_QUOTED_D, False), (_QUOTED_CJK, False),
+                    (_QUOTED_S, False), (_QUOTED_BT, True)):
         for m in pat.finditer(body):
             q = _clean_quote(m.group(1))
-            if not q or _CJK_MSG.search(q):
+            if not q or _CJK_MSG.search(q) or (bt and not _ui_like(q)):
                 continue
             if not _CLICK_VERB.search(body[:m.start()]):
                 continue
