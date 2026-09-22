@@ -169,11 +169,20 @@ def _walk_tree(root: dict) -> list[NodeChecklist]:
 
 
 def _build_node(child: dict, module_id: str) -> NodeChecklist:
+    return _facts(
+        req_id=str(child.get("id") or ""),
+        name=str(child.get("name") or ""),
+        desc=str(child.get("description") or ""),
+        scenarios=child.get("scenarios") or [],
+        module_id=module_id,
+    )
+
+
+def _facts(req_id: str, name: str, desc: str, scenarios: list[dict],
+           module_id: str) -> NodeChecklist:
+    """节点四要素 → NodeChecklist（YAML 与文本两通道共用的事实口径）。"""
     from app.utils.ui_language import requirement_language
 
-    desc = str(child.get("description") or "")
-    name = str(child.get("name") or "")
-    scenarios = child.get("scenarios") or []
     steps_text_all = [desc, name]
     home_visible = bool(_HOME_HINT.search(desc) or _ENTRY_HINT.search(desc))
     behavior: list[str] = []
@@ -199,7 +208,7 @@ def _build_node(child: dict, module_id: str) -> NodeChecklist:
     behavior = [b for b in behavior if b not in seeds and b not in controls]
     full_text = "\n".join(steps_text_all)
     return NodeChecklist(
-        req_id=str(child.get("id") or ""),
+        req_id=req_id,
         req_name=name,
         module_id=module_id,
         language=requirement_language(full_text),
@@ -209,6 +218,69 @@ def _build_node(child: dict, module_id: str) -> NodeChecklist:
         behavior_expectations=behavior,
         scenarios=[dict(s) for s in scenarios],
     )
+
+
+_NODE_TEXT_RE = re.compile(r"^###\s+(\S+)(.*)$")
+_SCEN_TEXT_RE = re.compile(r"^\s*[-*]\s*场景\s*[:：]\s*(.*)$")
+_STEP_TEXT_RE = re.compile(
+    r"^\s*(GIVEN|WHEN|THEN|AND|BUT)\s*[:：]\s*(.*)$", re.I)
+
+
+def compile_checklists_from_text(requirement: str) -> list[NodeChecklist]:
+    """管线需求文本（arcbench_ingest 渲染版）→ 逐节点验收清单（零 LLM）。
+
+    拆分期注入用：那时只有渲染文本没有 YAML 文件。与 compile_checklists
+    同一事实通道（_facts），无 ### 节点段/无场景步骤的题面返回空表。"""
+    out: list[NodeChecklist] = []
+    cur: dict | None = None
+
+    def flush() -> None:
+        if cur is None:
+            return
+        out.append(_facts(
+            req_id=cur["id"], name=cur["name"], desc="\n".join(cur["desc"]),
+            scenarios=cur["scenarios"], module_id=cur["module"]))
+
+    module = "ROOT"
+    for ln in (requirement or "").splitlines():
+        if ln.startswith("## "):
+            flush()
+            cur = None
+            if ln[3:].strip().startswith("模块"):
+                mm = re.match(r"模块[:：]\s*(\S+)", ln[3:].strip())
+                if mm:
+                    module = mm.group(1)
+            continue
+        m = _NODE_TEXT_RE.match(ln)
+        if m:
+            flush()
+            cur = {"id": m.group(1),
+                   "name": m.group(2).replace("（验收标准）", "").strip(),
+                   "desc": [], "scenarios": [], "module": module}
+            continue
+        if cur is None:
+            continue
+        sm = _SCEN_TEXT_RE.match(ln)
+        if sm:
+            cur["scenarios"].append({"name": sm.group(1), "steps": []})
+            continue
+        tm = _STEP_TEXT_RE.match(ln)
+        if tm:
+            step = {"keyword": tm.group(1).upper(), "content": tm.group(2)}
+            if not cur["scenarios"]:
+                cur["scenarios"].append({"name": "", "steps": []})
+            # AND/BUT 归属前一关键词（与官方 GWT 语义一致）
+            kw = tm.group(1).upper()
+            if kw in ("AND", "BUT") and cur["scenarios"][-1]["steps"]:
+                prev = cur["scenarios"][-1]["steps"][-1]["keyword"]
+                step = {"keyword": prev, "content": tm.group(2)}
+                cur["scenarios"][-1]["steps"].append(step)
+            else:
+                cur["scenarios"][-1]["steps"].append(step)
+            continue
+        cur["desc"].append(ln)
+    flush()
+    return out
 
 
 # ---------------------------------------------------------------- 渲染器
@@ -292,6 +364,39 @@ def render_checklist_spec(checklists: list[NodeChecklist]) -> str:
         + "\ntest.describe('compiled acceptance checklist', () => {\n"
         + body + "\n});\n"
     )
+
+
+def render_ux_checklist(checklists: list[NodeChecklist],
+                        max_nodes: int = 48) -> str:
+    """逐节点验收清单 → 开发契约注入段（规格保真度：UX 结构逐字入契约）。
+
+    keep#2 取证死因：锚点清单是摊平的文案集合，模型分不清「哪个词是
+    按钮、哪个词是动作后提示、哪个词是种子」——逐节点行保留 GWT 通道
+    归属，写码首轮即可按语义对准控件。空事实节点不出行，控制 token。"""
+    lines: list[str] = []
+    for ck in checklists:
+        parts: list[str] = []
+        if ck.control_labels:
+            parts.append("控件须可见: " + "、".join(
+                f'"{c}"' for c in ck.control_labels[:8]))
+        if ck.behavior_expectations:
+            parts.append("动作后须出现: " + "、".join(
+                f'"{b}"' for b in ck.behavior_expectations[:6]))
+        if ck.seed_entities:
+            parts.append("种子可见: " + "、".join(
+                f'"{s}"' for s in ck.seed_entities[:8]))
+        if parts:
+            lines.append(f"- {ck.req_id} {ck.req_name}｜" + "｜".join(parts))
+        if len(lines) >= max_nodes:
+            break
+    if not lines:
+        return ""
+    return (
+        "\n\n【验收节点逐字清单（机械抽取自需求 GWT 结构，逐条满足）】\n"
+        "控件/提示/种子文案必须逐字作为对应语义的可见元素实现"
+        "（按钮=<button>、输入提示=placeholder、动作后反馈=真实渲染的"
+        "提示区文本），禁止同义改写、禁止只在源码字符串里出现而不可见。\n"
+        + "\n".join(lines))
 
 
 def to_json(checklists: list[NodeChecklist]) -> str:

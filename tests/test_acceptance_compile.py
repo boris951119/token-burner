@@ -143,3 +143,42 @@ def test_to_json_roundtrip(tmp_path):
     cls = compile_checklists(_write(tmp_path))
     data = json.loads(to_json(cls))
     assert [d["req_id"] for d in data] == [c.req_id for c in cls]
+
+
+class TestTextChannel:
+    """拆分期只有 ingest 渲染文本没有 YAML——文本通道与 YAML 通道同口径。"""
+
+    def _text(self):
+        import yaml
+        from app.arcbench_ingest import render_requirement_text
+        return render_requirement_text(yaml.safe_load(REQ_YAML))
+
+    def test_parity_with_yaml_channel(self, tmp_path):
+        from app.acceptance_compile import compile_checklists_from_text
+        yaml_side = {c.req_id: c for c in compile_checklists(_write(tmp_path))}
+        text_side = {c.req_id: c for c in
+                     compile_checklists_from_text(self._text())}
+        assert set(text_side) == set(yaml_side)
+        for rid, ref in yaml_side.items():
+            got = text_side[rid]
+            assert got.seed_entities == ref.seed_entities, rid
+            assert got.control_labels == ref.control_labels, rid
+            assert got.behavior_expectations == ref.behavior_expectations, rid
+            assert got.home_visible == ref.home_visible, rid
+            assert got.module_id == ref.module_id, rid
+
+    def test_plain_text_no_structure_empty(self):
+        from app.acceptance_compile import compile_checklists_from_text
+        assert compile_checklists_from_text("纯文本讨论稿，无节点段。") == []
+
+
+def test_render_ux_checklist_channel_attribution(tmp_path):
+    from app.acceptance_compile import compile_checklists, render_ux_checklist
+    s = render_ux_checklist(compile_checklists(_write(tmp_path)))
+    assert "验收节点逐字清单" in s
+    line = next(ln for ln in s.splitlines() if "REQ-1.1" in ln)
+    assert '"New note"' in line and "控件须可见" in line
+    assert '"Alpha one"' in line and "种子可见" in line
+    assert '"Title"' in line and "动作后须出现" in line
+    # 无事实节点不出行，控制 token
+    assert "REQ-9.1" in s  # 登录节点有控件与可见种子
