@@ -987,13 +987,24 @@ def run_smoke(code_dir: Path, python: str | None = None) -> tuple[bool, str]:
     verify = Path(tempfile.gettempdir()) / "arcbench_smoke_verify.py"
     verify.write_text(_VERIFY_TEMPLATE, encoding="utf-8")
 
-    proc = subprocess.run(
-        [python or sys.executable, str(verify), str(code_dir)],
-        capture_output=True, text=True, encoding="utf-8", errors="replace",
-        env=dict(os.environ, PYTHONIOENCODING="utf-8"),
-        timeout=180,
-        cwd=str(code_dir),
-    )
+    try:
+        proc = subprocess.run(
+            [python or sys.executable, str(verify), str(code_dir)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env=dict(os.environ, PYTHONIOENCODING="utf-8"),
+            timeout=180,
+            cwd=str(code_dir),
+        )
+    except subprocess.TimeoutExpired:
+        # 与 _probe_routes 同口径：冒烟超时是「没通过」，不是「冒烟器炸了」。
+        # 上抛会穿过 verify_delivery 的冒烟段（该段无 try），把已经写完的
+        # 项目换成一次崩溃退出。
+        return False, (
+            "冒烟验证超时（180s 熔断）：导入应用模块时疑似被阻塞——"
+            "典型成因是模块级 while True/常驻服务/等待输入。"
+            "应用应可 import 而不阻塞（服务启动放 __main__ 守卫内）。")
+    except OSError as exc:
+        return False, f"冒烟验证启动失败: {exc!r}"
     report = (proc.stdout or "") + (proc.stderr or "")[-500:]
     ok = proc.returncode == 0
     # 内存哨兵（官方环境 2GB 内存取证）：应用进程峰值超限判 FAIL——

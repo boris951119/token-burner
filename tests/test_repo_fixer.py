@@ -225,3 +225,45 @@ class TestSyntaxRejection:
         passed, out = _fixer(FakeLLM(PLAN, [FIXED_CALC]), repo)._verify(
             [sys.executable, "-m", "pytest", "-q"], ["test_calc.py"])
         assert passed is True, out[-400:]
+
+    def test_verify_timeout_is_a_failed_round_not_a_crash(self, repo,
+                                                          monkeypatch):
+        """被测程序挂住（死循环/常驻服务）属于修复要处理的失败。
+
+        旧行为：subprocess.TimeoutExpired 直接上抛，吃掉整条修复线与
+        本轮已烧的 token，且调用方只能看到「自动修复异常」。
+        """
+        import subprocess as sp
+
+        def boom(*a, **kw):
+            raise sp.TimeoutExpired(cmd=["pytest"], timeout=300)
+
+        monkeypatch.setattr("app.agents.repo_fixer.subprocess.run", boom)
+        passed, out = _fixer(FakeLLM(PLAN, [FIXED_CALC]), repo)._verify(
+            [sys.executable, "-m", "pytest", "-q"], ["test_calc.py"])
+        assert passed is False
+        assert "超时" in out and "无限循环" in out
+
+        monkeypatch.setattr("app.agents.repo_fixer.subprocess.run",
+                            lambda *a, **kw: (_ for _ in ()).throw(
+                                FileNotFoundError("python")))
+        passed, out = _fixer(FakeLLM(PLAN, [FIXED_CALC]), repo)._verify(
+            ["python"], None)
+        assert passed is False and "启动失败" in out
+
+    def test_timeout_ends_fix_loop_with_reason(self, repo, monkeypatch):
+        """端到端：超时走完 max_rounds 后给出可读 error，而非抛异常。"""
+        import subprocess as sp
+
+        def boom(*a, **kw):
+            raise sp.TimeoutExpired(cmd=["pytest"], timeout=300)
+
+        monkeypatch.setattr("app.agents.repo_fixer.subprocess.run", boom)
+        llm = FakeLLM(PLAN, [FIXED_CALC],
+                      repatch=[{"path": "calc.py", "content": FIXED_CALC}])
+        result = _fixer(llm, repo, max_rounds=2).fix("add 错误",
+                                                     test_files=["test_calc.py"])
+        assert result.ok is False
+        assert "超时" in result.error          # 原因可读，不是「自动修复异常」
+        assert result.ok is False
+        assert "超时" in result.error or "验证" in result.error

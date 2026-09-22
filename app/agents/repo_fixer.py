@@ -268,11 +268,21 @@ class RepoFixer:
         if test_files:
             cmd += list(test_files)
         self._clear_pycache()
-        proc = subprocess.run(cmd, cwd=self.repo, capture_output=True,
-                              text=True, encoding="utf-8", errors="replace",
-                              timeout=self.test_timeout,
-                              env=dict(os.environ, PYTHONIOENCODING="utf-8",
-                                       PYTHONDONTWRITEBYTECODE="1"))
+        try:
+            proc = subprocess.run(cmd, cwd=self.repo, capture_output=True,
+                                  text=True, encoding="utf-8", errors="replace",
+                                  timeout=self.test_timeout,
+                                  env=dict(os.environ, PYTHONIOENCODING="utf-8",
+                                           PYTHONDONTWRITEBYTECODE="1"))
+        except subprocess.TimeoutExpired:
+            # 超时是「验证失败」而不是「验证器炸了」：上抛会吃掉整条修复线
+            # （生成代码里的死循环/不退出服务恰恰是修复要处理的对象）。
+            return False, (
+                f"验证命令超时（{self.test_timeout}s 熔断）: {' '.join(cmd)}\n"
+                "被测程序可能存在无限循环或启动后不退出——请检查循环退出"
+                "条件与常驻服务调用（应用应可 import 而不阻塞）。")
+        except OSError as exc:
+            return False, f"验证命令启动失败: {exc!r}"
         output = (proc.stdout or "") + (proc.stderr or "")
         return proc.returncode == 0, output
 

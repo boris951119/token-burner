@@ -312,11 +312,17 @@ def lint_specs(specs_dir: Path, project_dir: Path | None = None) -> int:
     rejected = specs_dir.parent / "selftest_rejected"
     survivors = 0
     for f in sorted(specs_dir.glob("*.spec.ts")):
-        pt = subprocess.run(
-            [npx, "playwright", "test", f.name, "--list"],
-            cwd=str(GRADE_DIR), env=env,
-            capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=180)
+        try:
+            pt = subprocess.run(
+                [npx, "playwright", "test", f.name, "--list"],
+                cwd=str(GRADE_DIR), env=env,
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=180)
+        except (subprocess.TimeoutExpired, OSError):
+            # 判不动就保留：lint 的目的是隔离坏 spec，一次 npx 卡死不构成
+            # 「该 spec 是坏的」的证据——上抛还会把整道自测闸一起作废。
+            survivors += 1
+            continue
         ok = pt.returncode == 0 and "No tests found" not in (pt.stdout or "")
         if ok:
             survivors += 1
@@ -443,10 +449,22 @@ def run_selftests(project_dir: Path, specs_dir: Path,
                    PLAYWRIGHT_OUTPUT_DIR=str(project_dir / "selftest-results"))
         _ensure_node_modules_link(specs_dir)
         npx = shutil.which("npx") or shutil.which("npx.cmd") or "npx"
-        pt = subprocess.run(
-            [npx, "playwright", "test"], cwd=str(GRADE_DIR), env=env,
-            capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=1800)
+        try:
+            pt = subprocess.run(
+                [npx, "playwright", "test"], cwd=str(GRADE_DIR), env=env,
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace", timeout=1800)
+        except subprocess.TimeoutExpired:
+            # 1800s 熔断也必须给修复环一条信号。上抛的代价是整道自测闸作废
+            # （调用方只能记一句"异常"），而超时本身多半就是可修的缺陷：
+            # 某个旅程用例挂起（服务无响应 / 选择器一路等到超时）。
+            return (cpassed, 1 + len(cfail),
+                    ["自测执行超时（1800s 熔断）：存在挂起的旅程用例"] + cfail,
+                    "[playwright] TIMEOUT 1800s")
+        except OSError as exc:
+            return (cpassed, 1 + len(cfail),
+                    [f"playwright 启动失败: {exc!r}"] + cfail,
+                    f"[playwright] 启动失败 {exc!r}")
         (project_dir / "selftest-run.log").write_text(
             (pt.stdout or "") + "\n===== STDERR =====\n" + (pt.stderr or ""),
             encoding="utf-8")
