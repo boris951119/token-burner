@@ -195,8 +195,11 @@ def _wait_health(url: str, deadline_s: float = 90) -> bool:
 
 
 def run_selftests(project_dir: Path, specs_dir: Path,
-                  port_hint: int = 3411) -> tuple[int, int, list[str], str]:
-    """导出布局 → 起服 → 跑自测 specs → (passed, failed, failures, tail)。"""
+                  port_hint: int = 3411,
+                  requirements_dir: Path | None = None
+                  ) -> tuple[int, int, list[str], str]:
+    """导出布局 → 起服 → 编译清单 HTTP 判分（可选）→ 跑自测 specs
+    → (passed, failed, failures, tail)。"""
     from app.platform_export import export_platform_layout
 
     project_dir = Path(project_dir)
@@ -223,6 +226,19 @@ def run_selftests(project_dir: Path, specs_dir: Path,
     try:
         if not _wait_health(f"http://127.0.0.1:{port}/api/health"):
             return 0, 0, ["健康探针超时"], ""
+        # 编译清单判分（零 LLM、秒级）：需求逐字事实 × 活服。失败串以
+        # REQ id 开头，与自测失败同清单进修复环即为定向指令。
+        csum: dict = {"passed": 0, "failures": []}
+        if requirements_dir:
+            try:
+                from app.utils.acceptance_judge import judge_requirements
+                csum = judge_requirements(
+                    requirements_dir, f"http://127.0.0.1:{port}")
+            except Exception as exc:
+                notes_c = f"[compiled] 判分异常降级 {exc!r}"[:120]
+                csum = {"passed": 0, "failures": [], "note": notes_c}
+        cfail = list(csum.get("failures") or [])
+        cpassed = int(csum.get("passed") or 0)
         report = project_dir / "selftest-report.json"
         env = dict(os.environ,
                    TARGET_URL=f"http://127.0.0.1:{port}",
@@ -239,7 +255,8 @@ def run_selftests(project_dir: Path, specs_dir: Path,
             (pt.stdout or "") + "\n===== STDERR =====\n" + (pt.stderr or ""),
             encoding="utf-8")
         if not report.is_file():
-            return 0, 0, ["无自测报告"], (pt.stdout or "")[-800:]
+            return (cpassed, 1 + len(cfail),
+                    ["无自测报告"] + cfail, (pt.stdout or "")[-800:])
         data = json.loads(report.read_text(encoding="utf-8"))
         passed = failed = 0
         failures: list[str] = []
@@ -258,7 +275,12 @@ def run_selftests(project_dir: Path, specs_dir: Path,
                     failures.append(spec.get("title", "?"))
         for s in data.get("suites", []):
             walk(s)
-        return passed, failed, failures, (pt.stdout or "")[-1500:]
+        if passed + failed == 0 and cpassed + len(cfail):
+            # specs 零收集单独留信号——编译判分再绿也掩盖不了坏 spec 连坐
+            failures = ["自测 specs 零收集（坏 spec 连坐？）"]
+            failed = 1
+        return (passed + cpassed, failed + len(cfail),
+                failures + cfail, (pt.stdout or "")[-1500:])
     finally:
         # Windows：terminate 不杀孙进程（Flask reload/子线程句柄），锁死
         # 模板目录——taskkill /T 连树击杀，兜底 terminate/kill
@@ -274,7 +296,8 @@ def run_selftests(project_dir: Path, specs_dir: Path,
 
 
 def selftest_gate(project_dir: Path, requirement: str, settings,
-                  max_rounds: int = 2) -> tuple[bool, str]:
+                  max_rounds: int = 2,
+                  requirements_dir: Path | None = None) -> tuple[bool, str]:
     """自测闸：生成（首次）→ 跑 → 失败定向修复 → 复跑。有界，可止损。"""
     from app.arcbench_smoke import _beat, auto_repair
 
@@ -287,7 +310,8 @@ def selftest_gate(project_dir: Path, requirement: str, settings,
     specs_dir = ensure_selftests(project_dir, requirement, settings)
     if specs_dir is None:
         return False, "自测 specs 生成失败（降级：跳过自测闸）"
-    passed, failed, failures, tail = run_selftests(project_dir, specs_dir)
+    passed, failed, failures, tail = run_selftests(
+        project_dir, specs_dir, requirements_dir=requirements_dir)
     notes: list[str] = []
     notes.append(f"[selftest] 首轮 {passed}/{passed + failed}")
     if passed + failed == 0:
@@ -331,13 +355,15 @@ def selftest_gate(project_dir: Path, requirement: str, settings,
                 verify_timeout=1800,
                 # 修复验证信号=自测运行器本尊（RepoFixer 逐轮真实复测）
                 test_cmd=[sys.executable, str(Path(__file__).resolve()),
-                          "--run", "--project-dir", str(project_dir)],
+                          "--run", "--project-dir", str(project_dir),
+                          *(["--requirements-dir", str(requirements_dir)]
+                            if requirements_dir else [])],
                 extra_issue=issue)
         except Exception as exc:
             notes.append(f"[selftest][R{rnd}] 修复异常 {exc!r}"[:160])
             break
         passed, failed, failures, tail = run_selftests(
-            project_dir, specs_dir)
+            project_dir, specs_dir, requirements_dir=requirements_dir)
         notes.append(f"[selftest][R{rnd}] {passed}/{passed + failed}")
         if passed + failed == 0:
             notes.append("[selftest][R{r}] 零信号止损".format(r=rnd))
@@ -362,13 +388,18 @@ def _cli() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--run", action="store_true")
     ap.add_argument("--project-dir", required=True)
+    ap.add_argument("--requirements-dir", default=None,
+                    help="需求目录（含 requirements.yaml）：启用编译清单判分")
     args = ap.parse_args()
     project_dir = Path(args.project_dir)
     specs_dir = project_dir / "tests" / "selftest"
     if not specs_dir.is_dir():
         print("[selftest] specs 目录缺失")
         return 2
-    passed, failed, failures, tail = run_selftests(project_dir, specs_dir)
+    passed, failed, failures, tail = run_selftests(
+        project_dir, specs_dir,
+        requirements_dir=(Path(args.requirements_dir)
+                          if args.requirements_dir else None))
     print(f"[selftest] {passed}/{passed + failed} passed")
     for f in failures[:20]:
         print(f"  FAIL {f}")

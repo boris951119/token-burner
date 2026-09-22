@@ -605,7 +605,9 @@ def _anchor_missing(code_dir: Path, requirement: str) -> list[str]:
         probe.write_text(_ANCHOR_COVERAGE_TEMPLATE, encoding="utf-8")
         proc = subprocess.run(
             [sys.executable, str(probe), str(code_dir)],
-            capture_output=True, text=True, timeout=240, cwd=str(code_dir))
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            timeout=240, cwd=str(code_dir))
         pages: dict[str, str] = {}
         for line in (proc.stdout or "").splitlines():
             if line.startswith("@@PAGES@@"):
@@ -642,7 +644,9 @@ def _anchor_coverage_section(code_dir: Path, requirement: str) -> str:
     try:
         proc = subprocess.run(
             [sys.executable, str(probe), str(code_dir)],
-            capture_output=True, text=True, timeout=240, cwd=str(code_dir))
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env=dict(os.environ, PYTHONIOENCODING="utf-8"),
+            timeout=240, cwd=str(code_dir))
     except Exception:
         return ""
     pages: dict[str, str] = {}
@@ -983,7 +987,9 @@ def run_smoke(code_dir: Path, python: str | None = None) -> tuple[bool, str]:
 
     proc = subprocess.run(
         [python or sys.executable, str(verify), str(code_dir)],
-        capture_output=True, text=True, timeout=180,
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        env=dict(os.environ, PYTHONIOENCODING="utf-8"),
+        timeout=180,
         cwd=str(code_dir),
     )
     report = (proc.stdout or "") + (proc.stderr or "")[-500:]
@@ -1089,7 +1095,9 @@ def _probe_routes(code_dir: Path) -> tuple[str, list[str]] | None:
     try:
         proc = subprocess.run(
             [sys.executable, str(probe), str(code_dir)],
-            capture_output=True, text=True, timeout=180,
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env=dict(os.environ, PYTHONIOENCODING="utf-8"),
+            timeout=180,
             cwd=str(code_dir),
         )
     except (subprocess.TimeoutExpired, OSError):
@@ -1111,7 +1119,9 @@ def _probe_routes(code_dir: Path) -> tuple[str, list[str]] | None:
 def _run_script(cmd: list[str], timeout: int = 120) -> tuple[bool, str]:
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout,
+            cmd, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=timeout,
+            env=dict(os.environ, PYTHONIOENCODING="utf-8"),
             cwd=str(cmd[-1]),
         )
     except subprocess.TimeoutExpired as exc:
@@ -1382,6 +1392,7 @@ def verify_delivery(
     settings,
     max_app_rounds: int = 3,
     max_verify_rounds: int = 3,
+    requirements_dir: Path | None = None,
 ) -> tuple[bool, str]:
     """交付前自检闭环：冒烟→修复→旅程→修复→循环直到全过或轮次耗尽。
 
@@ -1529,7 +1540,8 @@ def verify_delivery(
     try:
         from app.utils.selftest_gate import selftest_gate
 
-        sok, sreport = selftest_gate(project_dir, requirement, settings)
+        sok, sreport = selftest_gate(project_dir, requirement, settings,
+                                     requirements_dir=requirements_dir)
         notes.append(f"[selftest] {'PASS' if sok else 'FAIL'}")
         if sok:
             _beat(project_dir, "验收-通过")

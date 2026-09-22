@@ -97,3 +97,9 @@ agent-blank-based.zip
 app.db
 *.db
 !arcbench-agent-runtime/**
+
+# 编译自评分环运行产物（spec/报告可再生，不入库）
+scripts/official_grade/specs-compiled/
+scripts/official_grade/compiled-report.json
+scripts/official_grade/compiled-summary.json
+scripts/official_grade/compiled-results/

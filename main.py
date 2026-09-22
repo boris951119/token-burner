@@ -367,7 +367,8 @@ def main(argv: list[str] | None = None) -> int:
             from app.arcbench_smoke import verify_delivery
 
             ok, report = verify_delivery(
-                result.project_dir, requirement, settings
+                result.project_dir, requirement, settings,
+                requirements_dir=(req_dir if req_dir.is_dir() else None),
             )
             print(f"[verify] {'PASS' if ok else 'FAIL'}", flush=True)
             print(f"[verify] {report[-600:]}", flush=True)
