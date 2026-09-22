@@ -15,7 +15,11 @@
   直接可抓），进修复环即为定向指令；
 - 语料近乎为空时不逐条判红（否则一个根因摊成 N 条幻影失败）：入口页含
   JS 挂载点 → skipped 射程外（客户端渲染，静态判分看不见），否则记一条
-  「首页无可见文本」根因失败。
+  「首页无可见文本」根因失败；
+- 第三条通道兜客户端渲染（9/23 三组对照取证）：文案虽不在可见文本里、
+  但确实出现在页内脚本正文 = 浏览器渲染得出来 → 该条记射程外（不判红不
+  判绿，报告里点名条数）。只在页内源码里也不存在才判红，故 keep#2 那类
+  「换语言/塞隐藏位」的造假照旧全红。
 通用性（9/22 判据）：规则不含任何题目词——任何 web 应用 × 任何
 GWT 需求树都同样可判。
 """
@@ -118,6 +122,14 @@ _THIN_CORPUS = 40
 _JS_MOUNT = re.compile(
     r"""<(?:div|main|body|noscript)[^>]*\bid=["']"""
     r"""(?:app|root|next|nuxt|app-root|react-root|vue-root)["']""", re.I)
+# 逐字事实的第三条通道：页面内联脚本正文。9/23 三组对照实测（服务端渲染 /
+# 内联脚本注水 / fetch 拉 JSON 的客户端渲染应用）——_JS_MOUNT 那条整体降级
+# 只在语料 <40 字符时触发，而客户端渲染应用只要有一条静态导航栏就能越过该
+# 阈值（实测 80 字符），于是需求文案**全部**判红：3/3 幻影、0 真信号。改按
+# 单条事实取证：文案确实出现在脚本正文里 = 浏览器渲染得出来、静态判分射程
+# 外（不判红也不判绿）；文案在页面源码里根本不存在仍然判红（keep#2 那类
+# 「换语言/塞隐藏位」的造假恰好属于这一类，不受本次放宽影响）。
+_SCRIPT_BODY = re.compile(r"<script[^>]*>([\s\S]*?)</script>", re.I)
 
 
 def _norm(s: str) -> str:
@@ -131,14 +143,15 @@ def _fetch(url: str, timeout: float) -> str:
 
 
 def _crawl_pages(base_url: str, max_pages: int,
-                 timeout: float) -> tuple[str, str, bool]:
+                 timeout: float) -> tuple[str, str, bool, str]:
     """入口 BFS 一跳：返回（全页可见文本语料, 属性值语料, 入口页是否
-    JS 挂载壳）。"""
+    JS 挂载壳, 页内脚本正文语料）。"""
     base = base_url.rstrip("/")
     queue: list[str] = ["/"]
     seen: set[str] = set()
     texts: list[str] = []
     attrs: list[str] = []
+    scripts: list[str] = []
     shell = False
     while queue and len(seen) <= max_pages:
         path = queue.pop(0)
@@ -157,11 +170,12 @@ def _crawl_pages(base_url: str, max_pages: int,
         rendered = _strip_invisible(_SCRIPT.sub(" ", body))
         attrs += _ATTRVAL.findall(rendered)
         texts.append(_norm(_html.unescape(_TAG.sub(" ", rendered))))
+        scripts += [_html.unescape(s) for s in _SCRIPT_BODY.findall(body)]
         for href in _HREF.findall(body):
             if (href.startswith("/") and not href.startswith("//")
                     and not _ASSET.search(href) and href not in seen):
                 queue.append(href.split("?")[0].split("#")[0])
-    return "\n".join(texts), "\n".join(attrs), shell
+    return ("\n".join(texts), "\n".join(attrs), shell, "\n".join(scripts))
 
 
 def _iter_facts(checklists: Iterable[NodeChecklist]):
@@ -182,9 +196,11 @@ def judge_checklists(checklists: list[NodeChecklist], base_url: str,
     facts = list(_iter_facts(checklists))
     if not facts:
         return {"passed": 0, "failed": 0, "total": 0, "failures": []}
-    text_blob, attr_blob, shell = _crawl_pages(base_url, max_pages, timeout)
+    text_blob, attr_blob, shell, script_blob = _crawl_pages(
+        base_url, max_pages, timeout)
     text_norm = _norm(text_blob)
     attr_norm = _norm(attr_blob)
+    script_norm = _norm(script_blob)
     if len(text_norm) < _THIN_CORPUS and len(attr_norm) < _THIN_CORPUS:
         # 官方交付容器无 node → Playwright 段 SKIP，本判分器是唯一质量闸。
         # 语料近乎为空时"事实全部缺席"是判分器失明的假象，不是 N 个缺陷：
@@ -204,15 +220,29 @@ def judge_checklists(checklists: list[NodeChecklist], base_url: str,
                     f"先修首页）"],
                 "note": "判分语料为空：逐条事实判红已归并为一条根因"}
     failures: list[str] = []
+    client_side: list[str] = []
     for req_id, kind, ent in facts:
         e = _norm(ent)
         if (e and (e in text_norm or e in attr_norm)):
             continue
+        if e and e in script_norm:
+            # 文案只存在于页内脚本正文：客户端渲染，浏览器出得来像素，
+            # 静态判分出不来——射程外，不判红也不判绿（判红即幻影失败，
+            # 修复环会围着一条修不好的指令烧掉整轮）。
+            client_side.append(f'{req_id} 编译清单[{kind}] "{ent}"')
+            continue
         failures.append(
             f'{req_id} 编译清单[{kind}] "{ent}" 未出现在入口可达页面')
     total = len(facts)
-    return {"passed": total - len(failures), "failed": len(failures),
-            "total": total, "failures": failures}
+    out = {"passed": total - len(failures) - len(client_side),
+           "failed": len(failures), "total": total, "failures": failures,
+           "client_side": len(client_side)}
+    if client_side:
+        out["note"] = (
+            f"{len(client_side)} 条逐字事实仅见于页内脚本正文"
+            f"（{'; '.join(client_side[:3])}…）：客户端渲染，静态判分射程外，"
+            f"未判红也未判绿")
+    return out
 
 
 def judge_requirements(requirements_dir, base_url: str,

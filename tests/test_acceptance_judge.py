@@ -65,10 +65,13 @@ def test_channels_and_failures(base_url):
     assert any("Nope" in f for f in r["failures"])
 
 
-def test_script_content_not_counted_as_visible(base_url):
-    # script 里的文案不算可见（防 JS 常量伪装成 UI）
+def test_script_only_fact_is_out_of_scope_not_green(base_url):
+    """页内脚本正文是第三条通道：既不让 JS 常量**判绿**（那是伪装成 UI），
+    也不再判红——客户端渲染的文案浏览器出得来像素，静态判分没资格说
+    「未出现」（9/23 三组对照取证）。"""
     r = judge_checklists([_ck(seed_entities=["不该算数"])], base_url)
-    assert r["failed"] == 1
+    assert r["failed"] == 0 and r["passed"] == 0
+    assert r["client_side"] == 1 and "客户端渲染" in r["note"]
 
 
 def test_non_home_nodes_skipped(base_url):
@@ -200,3 +203,60 @@ def test_visible_form_controls_survive_stripping(base_url):
     ck = [_ck(control_labels=["Take a note"])]
     r = judge_checklists(ck, base_url)
     assert r["passed"] == 1 and r["failed"] == 0
+
+
+# ---- 客户端渲染应用：整体阈值降级不够，必须逐条取证（9/23 三组对照）----
+# 三组对照实测：服务端渲染正确应用、内联脚本注水的客户端渲染应用、fetch 拉
+# JSON 的客户端渲染应用。后两组的静态可见文本 80/99 字符——越过了 _THIN_CORPUS
+# 那道 40 字符的整体降级门（只要有一条静态导航栏就越过），于是需求文案
+# 3/3 全判红、零真信号：修复环两轮 1800s 验证 + 真金 token 全烧在修不好的
+# 指令上。按单条事实取证后：脚本里有这份文案 → 射程外；源码里根本没有 →
+# 照旧判红（keep#2 那类「换语言/塞隐藏位」的造假属于后者，不受影响）。
+
+SPA_INLINE = {"/": (
+    '<html><body>'
+    '<nav><a href="/">Shelf Tracker home</a> &middot; '
+    '<a href="/about">About this shelf tracker</a></nav>'
+    '<div id="app"></div>'
+    '<script>const books = ["Dune", "Project Hail Mary"];'
+    'document.getElementById("app").innerHTML ='
+    " '<h1>My Shelf</h1><button>Add Book</button>'"
+    " + books.map(b => '<li>' + b + '</li>').join('');</script>"
+    '</body></html>')}
+
+
+def test_inline_script_copy_is_out_of_scope_not_phantom_red():
+    srv = _serve(SPA_INLINE)
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+    ck = [_ck(seed_entities=["My Shelf", "Dune", "Project Hail Mary"],
+              control_labels=["Add Book", "Ghost Phrase"])]
+    r = judge_checklists(ck, url)
+    srv.shutdown()
+    assert r["failed"] == 1, r["failures"]        # 只有源码里查无此文的判红
+    assert "Ghost Phrase" in r["failures"][0]
+    assert r["passed"] == 0                       # 射程外不等于判绿
+    assert r["client_side"] == 4
+    assert "客户端渲染" in r["note"]
+
+
+SPA_API = {
+    "/": ('<html><body>'
+          '<nav><a href="/">Shelf Tracker home</a> &middot; '
+          '<a href="/about">About this shelf tracker</a></nav>'
+          '<main id="app"><p>Loading the shelf&hellip;</p></main>'
+          '<script>fetch("/api/state").then(r => r.json()).then(s => {'
+          'document.getElementById("app").innerHTML = s.title;});</script>'
+          '</body></html>'),
+    "/api/state": '{"title": "My Shelf"}',
+}
+
+
+def test_fetch_driven_copy_stays_red_as_known_limit():
+    """已知射程边界并钉住：判分器不读 API 响应，文案在页面源码里不存在
+    即判红。宁可留这一条假红，也不给「源码里没有」开绿灯——那是 keep#2
+    造假的同一扇门。"""
+    srv = _serve(SPA_API)
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+    r = judge_checklists([_ck(seed_entities=["My Shelf"])], url)
+    srv.shutdown()
+    assert r["failed"] == 1 and r.get("client_side") == 0

@@ -69,6 +69,11 @@ _MD_IMG = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _SEED_LINE = re.compile(r"seed\s*data\s*:", re.I)
 _FILE_RESIDUE = re.compile(
     r"\.(png|jpe?g|gif|svg|webp|ts|js|py|md|json|ya?ml|css|html)$", re.I)
+# 路由/URL 整串（9/23 判分器幻影取证）：GWT 首步惯用 WHEN the user opens "/"，
+# 引号通道把 "/" 当控件文案收进来——于是**一份服务端渲染、文案齐全的正确应用**
+# 在平台唯一那道闸上仍稳定判红 1 条（实测 3/4 通过，红的就是这条）。路由是
+# 跳转目标，浏览器把它显示在地址栏而非 DOM 里，任何逐字可见性断言都永不成立。
+_ROUTE_TOKEN = re.compile(r"^(?:https?://\S*|\.{0,2}/\S*|#\S*/\S*)$")
 _HOME_HINT = re.compile(r"home\s*page|homepage|首页", re.I)
 # 凭据类种子（邮箱/密码/token）是登录输入值，不承诺页面可见——通用判据。
 _CREDENTIAL_HINT = re.compile(r"@|password|passwd|token|secret", re.I)
@@ -99,6 +104,8 @@ def _clean_quote(s: str) -> str | None:
     s = s.strip()
     if not s or _FILE_RESIDUE.search(s):
         return None
+    if _ROUTE_TOKEN.match(s):
+        return None                     # 路由/URL 是跳转目标，不是界面文案
     if _SEED_LINE.search(s) or len(s.split()) > 12:
         return None                     # 描述残渣/整句，不是 UI 文案
     return s

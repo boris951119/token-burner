@@ -303,3 +303,62 @@ def test_ux_checklist_forbids_invisible_placement(tmp_path):
 
     s = render_ux_checklist(compile_checklists(_write(tmp_path)))
     assert "display:none" in s and "注释" in s and "可见" in s
+
+
+# ---- 路由/URL 整串不是界面文案（9/23 判分器幻影取证）-------------------
+# GWT 首步惯用 WHEN the user opens "/"。引号通道照单全收时 "/" 变成一条
+# 「必须出现在页面上」的控件文案——三组对照实测：一份服务端渲染、文案齐全
+# 的**正确**应用因此稳定判红 1 条，而这条红修不好（浏览器把路由显示在地址
+# 栏，DOM 里根本没有它）。修复环拿到它只会往页面上写无意义的斜杠。
+
+REQ_YAML_ROUTE = """
+id: ROOT
+type: FOLDER
+children:
+  - id: REQ-1
+    name: Home
+    type: ATOMIC
+    description: 'Seed data: "/" and the book "Dune". The home page lists them.'
+    scenarios:
+      - name: open
+        steps:
+          - keyword: WHEN
+            content: 'the user opens "/" and clicks "Archived/Deleted"'
+          - keyword: THEN
+            content: 'the app routes to "/notes" or "#/settings"
+              or "https://example.com/shelf"'
+"""
+
+
+def _route_ck(tmp_path):
+    return {c.req_id: c for c in
+            compile_checklists(_write(tmp_path, REQ_YAML_ROUTE))}["REQ-1"]
+
+
+def test_route_tokens_are_not_facts_in_any_channel(tmp_path):
+    ck = _route_ck(tmp_path)
+    for route in ("/", "/notes", "#/settings", "https://example.com/shelf"):
+        assert route not in ck.control_labels, route
+        assert route not in ck.seed_entities, route
+        assert route not in ck.behavior_expectations, route
+
+
+def test_label_that_merely_contains_a_slash_survives(tmp_path):
+    """剔除口径是「整串就是一个路由」，不是「带斜杠就剔」——
+    Archived/Deleted 这类真实按钮文案不得被连带倒掉。"""
+    ck = _route_ck(tmp_path)
+    assert "Archived/Deleted" in ck.control_labels
+    assert "Dune" in ck.seed_entities
+
+
+def test_route_filter_boundaries():
+    """判据是「整串就是一个路径」，不是「带斜杠就剔」：漏收让 UX 契约变薄，
+    多收让判分器摊派修不好的幻影失败，两头都要钉住。"""
+    from app.acceptance_compile import _clean_quote
+
+    for keep in ("Archived/Deleted", "#1 Bestseller", "A / B", "Notes",
+                 "/ and \\ are separators"):
+        assert _clean_quote(keep) == keep, keep
+    for drop in ("/", "/notes", "/#", "#/settings", "./x", "../x",
+                 "https://example.com/s", "/a/b?c=1"):
+        assert _clean_quote(drop) is None, drop
