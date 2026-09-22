@@ -270,6 +270,44 @@ def test_fetch_driven_copy_is_out_of_scope_not_phantom_red():
     assert "客户端渲染源" in r["note"] and "接口返回值" in r["note"]
 
 
+def test_absent_behind_an_unlinked_entry_page_names_the_link():
+    """零星缺席 + 首页一条站内链接都没有：指令要点「首页链过去」这一层。
+    只说「未出现」，修复环就往首页再抄一遍文案——页面本来在别处。"""
+    pages = {
+        "/": ('<html><body><h1>Reading Desk</h1>'
+              '<p>Shelves and the books inside them, all in one place'
+              ' for daily reading.</p></body></html>'),
+        "/shelf": ('<html><body><h1>Shelf</h1>'
+                   '<p>My Shelf lists every book parked here today.</p>'
+                   '</body></html>'),
+    }
+    srv = _serve(pages)
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+    r = judge_checklists([_ck(seed_entities=["My Shelf"])], url)
+    srv.shutdown()
+    assert r["failed"] == 1, r
+    assert "未出现在入口可达页面" in r["failures"][0]
+    assert "站内链接" in r["failures"][0]
+
+
+def test_absent_with_working_links_gets_no_link_hint():
+    """首页链得出门、文案仍然不在 → 是真缺内容，不该甩锅给导航。"""
+    pages = {
+        "/": ('<html><body><h1>Reading Desk</h1>'
+              '<p>Shelves and the books inside them, all in one place'
+              ' for daily reading.</p><a href="/shelf">Shelf</a></body></html>'),
+        "/shelf": ('<html><body><h1>Shelf</h1>'
+                   '<p>Nothing parked on this shelf today at all.</p>'
+                   '</body></html>'),
+    }
+    srv = _serve(pages)
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+    r = judge_checklists([_ck(seed_entities=["My Shelf"])], url)
+    srv.shutdown()
+    assert r["failed"] == 1, r
+    assert "站内链接" not in r["failures"][0]
+
+
 def test_api_dump_without_rendering_code_stays_red():
     """反作弊：接口里堆满需求文案，页面脚本却没有一句写 DOM 的动作——数据
     到不了屏幕，这一路不收（keep#2 造假门换的是 JSON 马甲而已）。"""

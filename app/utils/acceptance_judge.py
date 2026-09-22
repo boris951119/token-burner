@@ -57,6 +57,9 @@ _HREF = re.compile(r"""href=["']([^"'?#]+)""", re.I)
 # （fetch("/api/state") / axios.get('/api/x') / load(`/api/items?page=2`)）。
 _JS_PATH = re.compile(r"""['"`](/[A-Za-z0-9_./-]+(?:\?[A-Za-z0-9_=&.%-]*)?)""")
 _API_MAX = 12                             # 数据源探测预算：一次判分多打几发
+_API_TIMEOUT = 3.0                        # 接口探针的秒表：JSON 端点该是快东西
+                                          # 挂住的端点不值得拖长整闸（每轮判分都
+                                          # 要过一遍，修复轮预算是按墙钟算的）
 # 页内脚本到底有没有把数据写进 DOM 的证据。接口返回值算不算「浏览器渲得
 # 出来」全看这一步：没有渲染代码的接口只是把需求文案换个地方堆着（keep#2
 # 造假门的第二扇），那一路不给射程外。
@@ -450,7 +453,7 @@ def _api_sources(base: str, scripts: str, skip: set[str],
             break
         paths.append(path)
         try:
-            body = _fetch(base + path, timeout)
+            body = _fetch(base + path, min(timeout, _API_TIMEOUT))
         except Exception:
             continue
         if _is_json(body):
@@ -561,7 +564,14 @@ def judge_checklists(checklists: list[NodeChecklist], base_url: str,
             f"种子数据），首页用链接指过去——评测先导航再断言可见文案，路由不"
             f"在则全部用例第一步即落空。缺口的样例：{examples} …"))
     else:
-        failures += [f'{r} 编译清单[{k}] "{e}" 未出现在入口可达页面'
+        # 「未出现在入口可达页面」有两种修法：内容真没做，或做了但首页没链
+        # 过去。后者只补文案修不好，所以入口只有一个页、又一条站内链接都没
+        # 有时，指令必须把这一层点出来（整墙判红会走归并通道，这里是零星
+        # 缺席那一档——同样值得指对方向）。
+        hint = ("（且首页没有一条站内链接：这些内容若在别的页面，首页必须"
+                "用链接指过去——评测先导航再断言，链不过去就等于没有）"
+                if crawl.html_pages <= 1 and not crawl.links else "")
+        failures += [f'{r} 编译清单[{k}] "{e}" 未出现在入口可达页面{hint}'
                      for r, k, e in absent]
     # ---- 可点击通道（append 在最尾：不得挤掉上面任何一条指令）----------
     # 两种「不像控件」的红分开判：文案只是正文/标题，或顶着按钮标签却点了
