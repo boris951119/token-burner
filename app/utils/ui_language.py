@@ -21,6 +21,18 @@ from pathlib import Path
 
 _CJK = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]")
 _LATIN = re.compile(r"[A-Za-z]")
+_WS = re.compile(r"\s+")
+_HTML_COMMENT = re.compile(r"<!--[\s\S]*?-->")
+_JS_BLOCK_COMMENT = re.compile(r"/\*[\s\S]*?\*/")
+_JS_LINE_COMMENT = re.compile(r"//[^\n]*")
+# 界面文案可能只存在于前端资产里，扫描面必须覆盖前后端
+_HTML_SUFFIX = {".html", ".htm"}
+_JS_SUFFIX = {".js", ".mjs", ".cjs", ".jsx", ".ts", ".tsx", ".vue"}
+_UI_SUFFIX = {".py"} | _HTML_SUFFIX
+# 第三方/构建产物不参与审计（体积大且非本次生成的文案）
+_SKIP_DIR = {"node_modules", "dist", "build", "__pycache__", "site-packages",
+             ".venv", "venv", ".git", "vendor"}
+_MAX_FILES = 400
 
 
 def _read(p: Path) -> str:
@@ -41,54 +53,94 @@ def requirement_language(requirement: str) -> str:
     return "cjk" if cjk > latin else "latin"
 
 
-def _cjk_in_string_literals(src: str) -> list[str]:
-    """AST 抽取字符串字面量中的 CJK 片段（注释天然排除）。"""
+def _snippet(s: str) -> str:
+    return _WS.sub(" ", s).strip()[:40]
+
+
+def _cjk_in_literals(src: str) -> list[str]:
+    """Python 源码里 UI 文案位（字符串字面量）的 CJK 片段。
+
+    注释天然排除（AST），**文档字符串也排除**（9/23 取证：导出的官方
+    runner 入口模板自带中文 docstring → 每个交付应用都被判违规，而这条
+    在修复指令里标着「最高优先级」，等于把修复环支去改注释）。
+    """
     hits: list[str] = []
     try:
         tree = ast.parse(src)
     except SyntaxError:
-        # 模板/HTML 文件非 Python——整文件按字面处理（HTML 无注释豁免）
-        for m in _CJK.finditer(src):
-            hits.append(src[max(0, m.start() - 10):m.start() + 10])
+        return []
+    doc_ids = set()
+    for n in ast.walk(tree):
+        if isinstance(n, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                          ast.AsyncFunctionDef)):
+            body = getattr(n, "body", None) or []
+            if (body and isinstance(body[0], ast.Expr)
+                    and isinstance(body[0].value, ast.Constant)
+                    and isinstance(body[0].value.value, str)):
+                doc_ids.add(id(body[0].value))
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and id(node) not in doc_ids and _CJK.search(node.value)):
+            hits.append(_snippet(node.value))
             if len(hits) >= 3:
                 break
-        return hits
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if _CJK.search(node.value):
-                hits.append(node.value.strip()[:40])
-                if len(hits) >= 3:
-                    break
+    return hits
+
+
+def _cjk_in_markup(src: str, *, html: bool = False) -> list[str]:
+    """非 Python 前端资产（HTML/JS/TS/Vue）的 CJK 文案位。
+
+    整段界面文案可以只活在 home.js 的模板串里——只扫 .py/.html 等于放行。
+    注释按 /* */ 与 // 剔除；`//` 一并截掉字符串里的协议头（宁漏不误，
+    假阳性的代价是把「最高优先级」指令支去改注释，比漏检贵得多）。
+    """
+    if html:
+        src = _HTML_COMMENT.sub(" ", src)
+    else:
+        src = _JS_BLOCK_COMMENT.sub(" ", src)
+        src = _JS_LINE_COMMENT.sub(" ", src)
+    hits = [_snippet(src[max(0, m.start() - 12):m.start() + 12])
+            for m in list(_CJK.finditer(src))[:3]]
     return hits
 
 
 def audit_ui_language(code_dir: Path, requirement: str) -> list[str]:
-    """需求语言 vs 代码 UI 字符串语言的一致性审计。
+    """需求语言 vs 交付界面文案语言的一致性审计（前后端全资产）。
 
     返回违规清单（人类可读，供修复指令直接引用）；空 = 一致或无法
-    判定。只对标字符串字面量与模板/HTML 文件——生成代码的中文注释
-    合法（管线提示词语言所致），不构成违规。
+    判定。字符串字面量与模板/HTML 正文对标——注释与文档字符串合法
+    （管线提示词语言所致），不构成违规。
     """
     lang = requirement_language(requirement)
     if lang != "latin":              # 目前只强制：英文需求 → 禁 CJK UI
         return []
     code_dir = Path(code_dir)
     bad: list[tuple[str, str]] = []
-    for py in sorted(code_dir.rglob("*.py")):
-        hits = _cjk_in_string_literals(_read(py))
+    scanned = 0
+    for p in sorted(code_dir.rglob("*")):
+        if scanned >= _MAX_FILES:
+            break
+        if not p.is_file():
+            continue
+        suf = p.suffix.lower()
+        if suf not in _UI_SUFFIX and suf not in _JS_SUFFIX:
+            continue
+        if any(part in _SKIP_DIR for part in p.parts):
+            continue
+        scanned += 1
+        src = _read(p)
+        hits = (_cjk_in_literals(src) if suf == ".py"
+                else _cjk_in_markup(src, html=suf in _HTML_SUFFIX))
         if hits:
-            bad.append((py.relative_to(code_dir).as_posix(), hits[0]))
-    for html in sorted(list(code_dir.rglob("*.html"))
-                       + list(code_dir.rglob("*.htm"))):
-        hits = _cjk_in_string_literals(_read(html))
-        if hits:
-            bad.append((html.relative_to(code_dir).as_posix(), hits[0]))
+            bad.append((p.relative_to(code_dir).as_posix(), hits[0]))
     if not bad:
         return []
-    files = ", ".join(f for f, _ in bad[:8])
+    detail = "；".join(f"{f} 如 {s!r}" for f, s in bad[:3])
+    more = "…" if len(bad) > 3 else ""
     return [
-        f"需求为英文，但 {len(bad)} 个文件的 UI 字符串含中文（{files}"
-        f"…）——评测按英文 ARIA 名定位，中文界面 = 全部用例落空。必须把"
+        f"需求为英文，但 {len(bad)} 个文件的界面文案含中文（{detail}{more}）"
+        f"——评测按英文 ARIA 名定位，中文界面 = 全部用例落空。必须把"
         f"所有界面文案（导航/按钮/标题/表单标签/占位符/提示消息/页面"
-        f"标题）改写为英文，语言以需求原文为唯一标准；代码注释不受限。"
+        f"标题）改写为英文，语言以需求原文为唯一标准；代码注释与"
+        f"文档字符串不受限。"
     ]
