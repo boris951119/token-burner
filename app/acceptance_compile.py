@@ -94,6 +94,10 @@ class NodeChecklist:
     # 动作后期望文案（WHEN 操作产生的 snackbar/跳转等），静态判分不覆盖，
     # 供修复环做定向指令：
     behavior_expectations: list[str] = field(default_factory=list)
+    # control_labels 里由「点击/按下/选择」类动词引出的子集：这类文案必须
+    # 落在可点控件里（<button>/<a>/role=menuitem…），只做成正文文字在评测
+    # 眼里等于不存在——该通道的硬判分在 acceptance_judge。
+    click_controls: list[str] = field(default_factory=list)
     scenarios: list[dict] = field(default_factory=list)   # 原 GWT steps
 
     def to_dict(self) -> dict:
@@ -134,6 +138,34 @@ def _quotes_in(text: str, *, skip_seed_clause: bool = False,
         for m in _QUOTED_S.finditer(body):
             q = _clean_quote(m.group(1))
             if q and not (for_control and _CJK_MSG.search(q)) and q not in out:
+                out.append(q)
+    return out
+
+
+# 需求里的「点击 "X"」是一条硬通道：评测按 getByRole('button'/'link', {name})
+# 定位 X，这类断言没有文本兜底——X 只做成正文文字，该节点全部用例即落空
+# （官方题两连败的死因）。动词按引号前最近窗口逐条判定，不能按整步含不含
+# click 归类：一步里常混着输入动词（type "Search" and click "Go"），整步
+# 判定会把搜索框误升成「必须是按钮」。
+_CLICK_VERB = re.compile(
+    r"(?:click|press|tap|hit|select|choose|toggle|open|submit"
+    r"|点击|按下|轻点|选择|切换|打开|提交)[\s\w'’()/…-]{0,16}$", re.I)
+
+
+def _click_quotes_in(text: str) -> list[str]:
+    """WHEN 步骤里由点击类动词引出的引号文案（须落在可点控件的子集）。"""
+    out: list[str] = []
+    if not text:
+        return out
+    body = _MD_FENCE.sub(" ", _MD_IMG.sub("", text))
+    for pat in (_QUOTED_D, _QUOTED_CJK, _QUOTED_S):
+        for m in pat.finditer(body):
+            q = _clean_quote(m.group(1))
+            if not q or _CJK_MSG.search(q):
+                continue
+            if not _CLICK_VERB.search(body[:m.start()]):
+                continue
+            if q not in out:
                 out.append(q)
     return out
 
@@ -241,6 +273,7 @@ def _facts(req_id: str, name: str, desc: str, scenarios: list[dict],
     home_visible = bool(_HOME_HINT.search(desc) or _ENTRY_HINT.search(desc))
     behavior: list[str] = []
     controls: list[str] = []
+    clicks: list[str] = []
     for sc in scenarios:
         for s in sc.get("steps") or []:
             kw = str(s.get("keyword") or "").upper()
@@ -253,6 +286,9 @@ def _facts(req_id: str, name: str, desc: str, scenarios: list[dict],
                     for q in _quotes_in(content, for_control=True):
                         if q not in controls:
                             controls.append(q)
+                    for q in _click_quotes_in(content):
+                        if q not in clicks:
+                            clicks.append(q)
             elif kw == "THEN":
                 for q in _quotes_in(content):
                     if q not in behavior:
@@ -260,6 +296,9 @@ def _facts(req_id: str, name: str, desc: str, scenarios: list[dict],
     seeds = [s for s in _seed_entities_of(desc) if not _CREDENTIAL_HINT.search(s)]
     # THEN 里复述的种子名不算行为断言（它们由 seed 通道静态覆盖）
     behavior = [b for b in behavior if b not in seeds and b not in controls]
+    # 可点击子集必须是控件全集的子集：控件通道另有剔除口径（整句中文提示、
+    # 路由串等），此处独走一套正则会判红一条主通道已经放弃的事实。
+    clicks = [c for c in clicks if c in controls]
     full_text = "\n".join(steps_text_all)
     return NodeChecklist(
         req_id=req_id,
@@ -270,6 +309,7 @@ def _facts(req_id: str, name: str, desc: str, scenarios: list[dict],
         seed_entities=seeds,
         control_labels=controls,
         behavior_expectations=behavior,
+        click_controls=clicks,
         scenarios=[dict(s) for s in scenarios],
     )
 
@@ -433,6 +473,10 @@ def render_ux_checklist(checklists: list[NodeChecklist],
         if ck.control_labels:
             parts.append("控件须可见: " + "、".join(
                 f'"{c}"' for c in ck.control_labels[:8]))
+        if ck.click_controls:
+            parts.append("其中需求要求点击（必须是 <button>/<a>/勾选框，"
+                         "正文文字不算控件）: " + "、".join(
+                             f'"{c}"' for c in ck.click_controls[:6]))
         if ck.behavior_expectations:
             parts.append("动作后须出现: " + "、".join(
                 f'"{b}"' for b in ck.behavior_expectations[:6]))
@@ -452,6 +496,11 @@ def render_ux_checklist(checklists: list[NodeChecklist],
         "提示区文本），禁止同义改写；也禁止把文案塞进隐藏位置——"
         "display:none / hidden 元素、HTML 注释、<template> 都算未实现"
         "（评测按渲染后的可见性断言，藏在页面源码里的文案一分不得）。\n"
+        "「控件须可见」只要求**控件本身**在入口可达页出现；"
+        "「动作后须出现」必须由点击/提交真的触发后才渲染——"
+        "把动作后的提示、编辑框、确认项静态铺在页面上凑数，等于交互链"
+        "没实现"
+        "= 评测按需求顺序操作时依旧落空。\n"
         + "\n".join(lines))
 
 

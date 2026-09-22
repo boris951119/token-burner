@@ -56,6 +56,25 @@ def node_unavailable_reason() -> str:
         _node_probe = f"playwright 探测失败 {exc!r}"[:160]
     return _node_probe
 
+# 自测轮的动作等待上限（毫秒）。9/23 计时取证：一轮 32 用例跑 16 分钟，
+# 13 条 timedOut 各自把 60s test 预算整条耗光，全部挂在 locator.fill
+# 等不到元素上——等 15s 拿到的报错与等 60s 一字不差，每轮净省 ~9 分钟。
+# 修复环能跑几轮是被墙钟预算卡死的，省下的钟点就是多出的修复轮。
+SPEC_ACTION_TIMEOUT_MS = 15000
+
+
+def _spec_env(project_dir: Path, port: int, specs_dir) -> dict[str, str]:
+    """自测 playwright 子进程的环境（config 按这些变量取值）。
+
+    单独成函数是因为动作超时是本轮墙钟的主旋钮，而它长在起服流程深处
+    ——不外提就只能靠真跑取证。"""
+    return dict(os.environ,
+                TARGET_URL=f"http://127.0.0.1:{port}",
+                GRADE_REPORT=str(Path(project_dir) / "selftest-report.json"),
+                PLAYWRIGHT_TEST_DIR=str(specs_dir),
+                PLAYWRIGHT_ACTION_TIMEOUT=str(SPEC_ACTION_TIMEOUT_MS),
+                PLAYWRIGHT_OUTPUT_DIR=str(Path(project_dir) / "selftest-results"))
+
 _GEN_SYSTEM = (
     "你是资深测试工程师。根据需求文档编写 Playwright 验收测试。"
     "规则：\n"
@@ -66,8 +85,24 @@ _GEN_SYSTEM = (
     "import { test, expect } from '@playwright/test';\n"
     "3. 用相对路径导航（test 的 baseURL 由运行环境注入），"
     "如 page.goto('/');\n"
-    "4. 断言必须严格且面向用户可见行为：getByRole/button/link/heading/"
-    "placeholder + 可见文本逐字断言（保持需求原文语言与大小写）；\n"
+    "4. 定位只允许可访问性通道（官方评测 helpers 实测只走这条路，"
+    "CSS 选择器与 data-testid 零使用）：交互控件按需求语义选角色并"
+    "严格断言——按钮 getByRole('button',{name})、链接 'link'、菜单 "
+    "'menuitem'、切换 'tab'、勾选 'checkbox'/'radio'、下拉 'combobox'+"
+    "'option'、弹窗 'dialog'、表格 'row'/'cell'/'columnheader'、"
+    "标题 'heading'；需求点名的区域（侧栏/导航/列表/卡片）要断对应"
+    "地标角色（'complementary'/'navigation'/'article'），需求没点名的"
+    "不要凭空造；禁止 page.locator('css')/#id/.class/[data-testid]；"
+    "getByText 只用于非交互的结果文本，不得用它点按钮；\n"
+    "4b. 填输入框是官方最硬的一关：官方 fillField 的通道只有 "
+    "getByLabel → getByPlaceholder → getByRole('textbox') → "
+    "getByRole('searchbox')，没有任何文本兜底——输入框一律 "
+    "getByLabel(需求原文标签) 定位（多行 'textbox'、搜索 'searchbox'），"
+    "定位不到就是实现缺 label/placeholder，不许改用 getByText 绕过；\n"
+    "4c. 操作反馈按官方兜底口径断言：getByRole('alert') 或 "
+    "getByRole('status') 或结果文本 getByText（.or() 串起来，"
+    "任一命中即通过）——不要比官方更严；\n"
+    "4d. 可见文本逐字断言（保持需求原文语言与大小写）；\n"
     "5. 需求中的 Seed data 是评测夹具：断言这些数据在页面上可见；\n"
     "6. 交互流（创建/删除/编辑）必须真实执行并断言结果（列表变化/"
     "通知文案），不许只断言元素存在；\n"
@@ -449,11 +484,7 @@ def run_selftests(project_dir: Path, specs_dir: Path,
                     ["自测 specs 零收集（lint 全数剔除）"] + cfail,
                     "[playwright] SKIP（specs 目录空）" + jnote)
         report = project_dir / "selftest-report.json"
-        env = dict(os.environ,
-                   TARGET_URL=f"http://127.0.0.1:{port}",
-                   GRADE_REPORT=str(report),
-                   PLAYWRIGHT_TEST_DIR=str(specs_dir),
-                   PLAYWRIGHT_OUTPUT_DIR=str(project_dir / "selftest-results"))
+        env = _spec_env(project_dir, port, specs_dir)
         _ensure_node_modules_link(specs_dir)
         npx = shutil.which("npx") or shutil.which("npx.cmd") or "npx"
         try:

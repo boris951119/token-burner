@@ -11,7 +11,10 @@ from app.utils.acceptance_judge import judge_checklists
 PAGES = {
     "/": ('<html><body><a href="/list">L</a><a href="/x.css">c</a>'
           '<p>Welcome to 笔记站</p></body></html>'),
+    # 「press "Take a note"」在需求里是一条硬通道（评测按 button 定位），
+    # 夹具应用因此必须真的有个按钮，只有 placeholder 就是缺陷而非替代通道。
     "/list": ('<html><body><p>Sprint goals</p>'
+              '<button>Take a note</button>'
               '<input placeholder="Take a note">'
               '<label>Email address</label>'
               '<script>var s="Sprint goals 不该算数"</script>'
@@ -107,6 +110,8 @@ def test_requirements_e2e(base_url, tmp_path):
 
     r = judge_requirements(tmp_path, base_url)
     assert r["total"] >= 2 and r["failed"] == 0, r["failures"]
+    # 可点通道必须真的判过（not 静默跳过）：夹具的 WHEN 是 press "Take a note"
+    assert "1/1 条「点击 X」类控件确为可点元素" in r.get("note", "")
 
 
 # ---- 判分语料近乎为空：平台侧唯一的闸不得摊派幻影失败 ----
@@ -313,3 +318,84 @@ def test_hidden_stuffing_is_never_merged_away():
     assert all("不可见位置" in f for f in r["failures"]), r["failures"][0]
     assert not any("界面未实现" in f for f in r["failures"])
     assert "note" not in r
+
+
+# ---- 可点击控件通道（9/23 退役产物快照取证）-----------------------------
+# 「文案在页面上」判绿之后依旧 0 分的那一类：需求写的是「点击 X」，评测
+# 按 getByRole('button'/'link', {name}) 硬定位，正文文字与标题一概不算。
+
+_FILLER = "<p>" + "zz body copy for a real page. " * 3 + "</p>"
+
+
+def _url_for(body: str):
+    """夹具页必须越过 _THIN_CORPUS：语料过薄时判分器走「首页无可见文本」
+    根因通道，逐条判分根本不启动。"""
+    srv = _serve({"/": "<html><body>" + body + _FILLER + "</body></html>"})
+    return f"http://127.0.0.1:{srv.server_address[1]}"
+
+
+class TestClickControlChannel:
+    def test_plain_text_control_is_red(self):
+        r = judge_checklists(
+            [_ck(control_labels=["Take a note"], click_controls=["Take a note"],
+                 seed_entities=[],
+                 behavior_expectations=[])],
+            _url_for('<h2>Take a note</h2><input placeholder="Take a note...">'))
+        assert r["failed"] == 1
+        assert "可点击控件" in r["failures"][0]
+        assert r["failures"][0].startswith("REQ-2.1 ")
+        assert "2" not in str(r["passed"]) or r["passed"] == 1
+
+    def test_real_button_is_green(self):
+        r = judge_checklists(
+            [_ck(control_labels=["Take a note"], click_controls=["Take a note"])],
+            _url_for('<button>Take a note</button>'))
+        assert r["failed"] == 0, r["failures"]
+        assert "1/1" in r.get("note", "")
+
+    def test_every_official_channel_counts(self):
+        """button / a[href] / role=menuitem / 勾选框的 label / submit 值——
+        都是评测认的可点通道，漏认一条就是一条幻红。"""
+        body = ('<button>Alpha</button><a href="/x">Beta</a>'
+                '<span role="menuitem">Gamma</span>'
+                '<label for="c1">Delta</label><input id="c1" type="checkbox">'
+                '<label>Epsilon<input type="radio" name="r"></label>'
+                '<input type="submit" value="Zeta">')
+        labs = ["Alpha", "Beta", "Gamma", "Delta", "Epsilon", "Zeta"]
+        r = judge_checklists(
+            [_ck(control_labels=labs, click_controls=labs)], _url_for(body))
+        assert r["failed"] == 0, r["failures"]
+        assert "6/6" in r.get("note", "")
+
+    def test_decorative_label_is_not_a_channel(self):
+        """<label> 包的是文本框时，点击它并不构成 button/link——
+        「Take a note」正是这样被伪装成控件的。"""
+        r = judge_checklists(
+            [_ck(control_labels=["Take a note"], click_controls=["Take a note"])],
+            _url_for('<label>Take a note<input type="text"></label>'))
+        assert r["failed"] == 1 and "可点击控件" in r["failures"][0]
+
+    def test_absent_control_not_double_judged(self):
+        """主通道已经判「未出现」的，可点通道不得再补一条同因指令。"""
+        r = judge_checklists(
+            [_ck(control_labels=["Ghost"], click_controls=["Ghost"])],
+            _url_for('<p>something else</p>' + '<!-- filler -->'
+                     * 6 + '<b>' + 'x' * 60 + '</b>'))
+        assert sum("Ghost" in f for f in r["failures"]) == 1
+        assert not any("可点击控件" in f for f in r["failures"])
+
+    def test_script_rendered_control_out_of_scope(self):
+        r = judge_checklists(
+            [_ck(control_labels=["Widget"], click_controls=["Widget"])],
+            _url_for('<div id="root"></div>'
+                     '<script>render("Widget ' + "y" * 50 + '")</script>'))
+        assert not any("可点击控件" in f for f in r["failures"])
+
+    def test_many_bad_controls_collapse_to_a_count(self):
+        labs = [f"Bulk {i}" for i in range(12)]
+        body = "".join(f"<p>{x}</p>" for x in labs)
+        r = judge_checklists(
+            [_ck(control_labels=labs, click_controls=labs)], _url_for(body))
+        role_fails = [f for f in r["failures"] if "可点击控件" in f]
+        assert len(role_fails) == 8
+        assert any("另有 4 条" in f for f in r["failures"])

@@ -164,6 +164,7 @@ class TestTextChannel:
             assert got.seed_entities == ref.seed_entities, rid
             assert got.control_labels == ref.control_labels, rid
             assert got.behavior_expectations == ref.behavior_expectations, rid
+            assert got.click_controls == ref.click_controls, rid
             assert got.home_visible == ref.home_visible, rid
             assert got.module_id == ref.module_id, rid
 
@@ -362,3 +363,43 @@ def test_route_filter_boundaries():
     for drop in ("/", "/notes", "/#", "#/settings", "./x", "../x",
                  "https://example.com/s", "/a/b?c=1"):
         assert _clean_quote(drop) is None, drop
+
+
+def test_ux_checklist_keeps_actions_gated(tmp_path):
+    """9/23 快照取证：静态判分环把「控件须可见」讲成硬契约后，模型把
+    每个节点的控件与动作后文案一次性摊在首页（一排同名按钮 + 无交互），
+    本地全绿而评测按序操作依旧落空——清单必须把「触发时机」说清楚。"""
+    from app.acceptance_compile import compile_checklists, render_ux_checklist
+
+    s = render_ux_checklist(compile_checklists(_write(tmp_path)))
+    assert "控件本身" in s, "控件与动作后文案的可见时机必须分开说"
+    assert "触发" in s and "交互链" in s
+
+
+# ---- 可点击控件子集（9/23 取证：文案可见 ≠ 控件存在）--------------------
+# 官方按 getByRole('button'/'link', {name}) 点控件，无文本兜底；判分器要把
+# 「必须做成可点控件」的事实从「必须出现在页面上」里分出来，动词归属
+# 只能逐条看引号前的最近动词——一步里常混着输入动词。
+
+def test_click_verb_attributes_per_quote():
+    from app.acceptance_compile import _click_quotes_in
+
+    step = ('Click the "Take a note" form, enter a title in the "Title" '
+            'field and content in the "Note content" field')
+    assert _click_quotes_in(step) == ["Take a note"]
+    assert _click_quotes_in('Hover a row, open options, choose "Delete Note"') \
+        == ["Delete Note"]
+    assert _click_quotes_in("按下「保存」按钮后出现提示") == ["保存"]
+    # 没有点击动词 / 动词离引号太远（跨句）都不算
+    assert _click_quotes_in('The "Title" field shows the note title') == []
+    assert _click_quotes_in('Click somewhere then type "Search"') == []
+
+
+def test_click_subset_of_controls_and_flows_to_checklist(tmp_path):
+    from app.acceptance_compile import compile_checklists
+
+    cls = {c.req_id: c for c in compile_checklists(_write(tmp_path))}
+    for rid, ck in cls.items():
+        assert set(ck.click_controls) <= set(ck.control_labels), rid
+    hit = [c for c in cls.values() if c.click_controls]
+    assert hit, "夹具里必须有一条点击事实，否则本测等于没测"

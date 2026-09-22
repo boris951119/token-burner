@@ -16,6 +16,11 @@
 - 语料近乎为空时不逐条判红（否则一个根因摊成 N 条幻影失败）：入口页含
   JS 挂载点 → skipped 射程外（客户端渲染，静态判分看不见），否则记一条
   「首页无可见文本」根因失败；
+- 第四条通道「可点击控件」（9/23 退役产物快照取证）：需求写「点击 X」时，
+  X 光在页面上可见还不算，必须落在可点控件里（<button>/<a>/显式交互 role/
+  勾选框的 label/button 类 input 的 value）——评测点控件走 getByRole
+  ('button'|'link', {name})，这类断言没有文本兜底；认不出控件语义的一律
+  不判红（宁漏不幻），同因超出 8 条时归并成一条计数；
 - 第三条通道兜客户端渲染（9/23 三组对照取证）：文案虽不在可见文本里、
   但确实出现在页内脚本正文 = 浏览器渲染得出来 → 该条记射程外（不判红不
   判绿，报告里点名条数）。只在页内源码里也不存在才判红，故 keep#2 那类
@@ -140,6 +145,9 @@ _SCRIPT_BODY = re.compile(r"<script[^>]*>([\s\S]*?)</script>", re.I)
 # 门槛按比例+绝对量双重收：只漏几条标签的正常应用仍走逐条精确指令。
 _WALL_RATIO = 0.7
 _WALL_MIN = 10
+# 可点击通道的逐条指令上限：同类缺陷一条就够说清修法，超出部分归并成
+# 一条计数（修复环只吃前 20 条指令，不能让同一形状刷屏）。
+_CLICK_FAIL_MAX = 8
 
 
 def _norm(s: str) -> str:
@@ -155,6 +163,81 @@ def _fetch(url: str, timeout: float) -> str:
 def _is_html(src: str) -> bool:
     head = src[:2048].lstrip().lower()
     return head.startswith(("<!doctype html", "<html")) or "<body" in head
+
+
+# ---- 可点击控件通道（9/23 取证）----------------------------------------
+# 「文案在页面上」并不等于「控件存在」：评测点控件走的是
+# getByRole('button'/'link'/'menuitem', {name})，这类断言没有文本兜底，
+# 把需求的点击对象渲染成正文文字/标题，该节点全部用例照样落空。
+# 官方 helpers 里 clickNamed 一路兜到 getByText，但同文件的 openComposer
+# 是硬 getByRole('button') —— 兜底只属于个别 helper，不属于判分口径。
+_ATTR_LOOSE = re.compile(
+    r"""([\w:-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>]+))""")
+
+
+def _attrs_loose(pairs_src: str) -> dict:
+    """控件属性宽松版：也收无引号值（value=Go / type=checkbox 均为合法
+    HTML，生成端偶有出现）。隐藏判定用的 _ATTR_PAIR 保持原口径不动。"""
+    out: dict[str, str] = {}
+    for k, a, b, c in _ATTR_LOOSE.findall(pairs_src or ""):
+        out[k.lower()] = a or b or c
+    return out
+
+
+_CTRL_TAGS = {"button", "a", "summary", "option", "legend"}
+_CTRL_ROLES = {"button", "link", "menuitem", "menuitemradio", "menuitemcheckbox",
+               "tab", "option", "checkbox", "radio", "combobox", "switch"}
+_BTN_INPUT = {"submit", "button", "image", "reset"}
+_CHOICE_INPUT = {"checkbox", "radio"}
+# 开标签后取多长当元素正文：模板里闭标签常缺，不设上限会吞掉整页
+_WIN = 600
+
+
+def _interactive_corpus(html: str) -> str:
+    """页面上所有可点/可选控件的正文文字与可访问名，归一成待匹配语料。
+
+    只认确定的语义（button/a/summary/option/legend、显式交互 role、
+    button 类 input 的 value/aria-label、勾选类控件的 label），认不出的
+    一律不算控件：宁可漏判这条红，也不造幻影红——幻红会让修复环围着一
+    条修不好的指令烧掉整轮。label 单独处理，因为 <label>文字</label>
+    只有包住（或 for 指向）勾选框时才是可点通道，纯装饰性 label 不是。
+    """
+    src = _SCRIPT.sub(" ", html)
+    tags: list[tuple[str, dict, str, str]] = []
+    for m in _TAG_ANY.finditer(src):
+        if m.group(1):
+            continue                          # 闭标签
+        tag = (m.group(2) or "").lower()
+        raw_inner = src[m.end():m.end() + _WIN]
+        stop = re.search(rf"</{re.escape(tag)}[\s>]", raw_inner, re.I)
+        if stop:
+            raw_inner = raw_inner[:stop.start()]
+        tags.append((tag, _attrs_loose(m.group(3)),
+                     _norm(_TAG.sub(" ", raw_inner)), raw_inner))
+    choice_ids = {p.get("id", "").strip() for t, p, _, _ in tags
+                  if t == "input"
+                  and p.get("type", "").strip().lower() in _CHOICE_INPUT}
+    out: list[str] = []
+    for tag, pairs, inner, raw_inner in tags:
+        role = pairs.get("role", "").strip().lower()
+        if tag == "input":
+            itype = pairs.get("type", "").strip().lower()
+            if itype in _BTN_INPUT or itype in _CHOICE_INPUT:
+                out += [pairs.get("value", ""), pairs.get("aria-label", ""),
+                        pairs.get("title", "")]
+            continue
+        if tag == "label":
+            for_id = pairs.get("for", "").strip()
+            wrapped = re.search(
+                r"<input\b[^>]*type\s*=\s*['\"]?(checkbox|radio)",
+                raw_inner, re.I)
+            if (for_id and for_id in choice_ids) or wrapped:
+                out.append(inner)              # 该 label 即勾选框的可点名
+            continue
+        if tag in _CTRL_TAGS or role in _CTRL_ROLES:
+            out += [inner, pairs.get("aria-label", ""), pairs.get("title", "")]
+    return _norm(" ".join(c for c in out if c))
+
 
 
 @dataclass
@@ -234,6 +317,15 @@ def _iter_facts(checklists: Iterable[NodeChecklist]):
             yield ck.req_id, "控件文案", lab
 
 
+def _iter_click_facts(checklists: Iterable[NodeChecklist]):
+    """需求以「点击 X」形式承诺、因而必须是可点控件的那部分文案。"""
+    for ck in checklists:
+        if not ck.home_visible:
+            continue
+        for lab in ck.click_controls:
+            yield ck.req_id, lab
+
+
 def judge_checklists(checklists: list[NodeChecklist], base_url: str,
                      max_pages: int = 17,
                      timeout: float = 6.0) -> dict:
@@ -311,6 +403,34 @@ def judge_checklists(checklists: list[NodeChecklist], base_url: str,
     else:
         failures += [f'{r} 编译清单[{k}] "{e}" 未出现在入口可达页面'
                      for r, k, e in absent]
+    # ---- 可点击通道（append 在最尾：不得挤掉上面任何一条指令）----------
+    # 「文案在页面上」但只是正文/标题 —— 需求承诺的是「点击 X」，评测按
+    # getByRole('button'/'link', {name}) 硬定位。主通道判绿掩盖的就是这一类，
+    # keep 两连败的死因，故必须在同一道零 LLM 闸里补判。
+    ctrl_corpus = ""
+    click_seen = click_bad = 0
+    for req_id, lab in _iter_click_facts(checklists):
+        e = _norm(lab)
+        if not e or (e not in text_norm and e not in attr_norm):
+            continue     # 缺席/塞隐藏位已由主通道各自判过
+        if e in script_norm:
+            continue            # 客户端渲染：静态判分射程外
+        if not ctrl_corpus:
+            ctrl_corpus = _interactive_corpus(crawl.raw)
+        click_seen += 1
+        if e in ctrl_corpus:
+            continue
+        click_bad += 1
+        if click_bad <= _CLICK_FAIL_MAX:
+            failures.append(
+                f'{req_id} 编译清单[可点击控件] "{lab}" 在页面上只是文本，'
+                f'不是可点击元素：需求写的是点击它，评测按 getByRole'
+                f'("button"/"link", {{name}}) 定位且这类断言没有文本兜底'
+                f'——把它做成 <button> 或 <a href>，文案逐字放进元素内部')
+    if click_bad > _CLICK_FAIL_MAX:
+        failures.append(
+            f'另有 {click_bad - _CLICK_FAIL_MAX} 条「点击 X」类控件同样只是'
+            f'文本（同类缺陷，逐条指令已达上限）：按上一条的口径一次改完')
     out = {"passed": found,
            "failed": len(failures), "total": total, "failures": failures,
            "client_side": len(client_side)}
@@ -323,6 +443,10 @@ def judge_checklists(checklists: list[NodeChecklist], base_url: str,
         notes.append(f"{len(client_side)} 条逐字事实仅见于页内脚本正文"
                      f"（{'; '.join(client_side[:3])}…）：客户端渲染，静态判分"
                      f"射程外，未判红也未判绿")
+    if click_seen:
+        notes.append(f"{click_seen - click_bad}/{click_seen} 条「点击 X」类控件"
+                     f"确为可点元素"
+                     + (f"，{click_bad} 条只是文本已判红" if click_bad else ""))
     if notes:
         out["note"] = "；".join(notes)
     return out

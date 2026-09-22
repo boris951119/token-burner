@@ -164,3 +164,71 @@ def test_no_structure_falls_back_single_shot(gate, monkeypatch):
 def test_all_batches_dead_returns_none(gate, monkeypatch):
     _patch_client(monkeypatch, fail_ids=list(_ALL_IDS), fail_rounds=99)
     assert sg.ensure_selftests(gate, _REQ_TEXT, _Settings()) is None
+
+
+class TestGenSystemLocatorPolicy:
+    """9/23 官方 helpers 取证：修复环优化的必须是可访问性通道。
+
+    自测 specs 一旦用 CSS/testid 定位，修复轮就会把实现往「测试能过、
+    评测看不见」的方向推——keep#3 的 1 passed/31 unexpected 形状。
+    """
+
+    def test_aria_channels_mandatory(self):
+        for ch in ("getByRole", "getByLabel", "getByPlaceholder",
+                   "'button'", "'link'", "'textbox'", "'searchbox'",
+                   "'menuitem'", "'dialog'", "'status'", "'alert'"):
+            assert ch in sg._GEN_SYSTEM, ch
+
+    def test_non_aria_locators_banned(self):
+        assert "data-testid" in sg._GEN_SYSTEM
+        assert "禁止" in sg._GEN_SYSTEM and "locator('css')" in sg._GEN_SYSTEM
+        # getByText 只留给非交互结果文本，不得用来点按钮
+        assert "不得用它点按钮" in sg._GEN_SYSTEM
+
+    def test_feedback_assertion_not_stricter_than_official(self):
+        """官方 expectSuccessFeedback 是 alert→status→结果文本兜底；
+        自测若只认实况区，会把官方能过的实现判红、白烧修复轮。"""
+        i, j = (sg._GEN_SYSTEM.index(s) for s in ("4c. 操作反馈", "4d."))
+        seg = sg._GEN_SYSTEM[i:j]
+        assert "'alert'" in seg and "'status'" in seg
+        assert "getByText" in seg and ".or()" in seg
+
+    def test_landmark_roles_contracted(self):
+        """官方 openTrash 之流按 getByRole('complementary') 硬取侧栏，
+        没有文本兜底——需求点名的区域必须落到地标角色。"""
+        for r in ("'complementary'", "'navigation'", "'article'"):
+            assert r in sg._GEN_SYSTEM, r
+
+    def test_fill_channel_matches_official_helpers(self):
+        """官方 fillField 无 getByText 通道：输入框必须 label/placeholder 可达。"""
+        i, j = (sg._GEN_SYSTEM.index(s) for s in ("4b. 填输入框", "4c."))
+        seg = sg._GEN_SYSTEM[i:j]
+        for ch in ("getByLabel", "getByPlaceholder", "'textbox'", "'searchbox'"):
+            assert ch in seg, ch
+
+    def test_prompt_carries_no_official_task_names(self):
+        """合规红线：随包提示词不得含官方专名/原文文案。"""
+        low = sg._GEN_SYSTEM.lower()
+        for w in ("bookstack", "keep", "stackoverflow", "take a note",
+                  "arc-bench", "agentic-requirement-compiler"):
+            assert w not in low, w
+
+
+class TestSpecRunWallClock:
+    """一轮自测的墙钟预算直接决定修复环能跑几轮（9/23 实测 16 分钟/轮）。"""
+
+    def test_action_timeout_is_set_for_selftest_runs(self, tmp_path):
+        env = sg._spec_env(tmp_path, 3399, tmp_path / "tests" / "selftest")
+        assert env["PLAYWRIGHT_ACTION_TIMEOUT"] == str(sg.SPEC_ACTION_TIMEOUT_MS)
+        assert 0 < sg.SPEC_ACTION_TIMEOUT_MS < 60000
+        assert env["TARGET_URL"].endswith(":3399")
+        assert env["GRADE_REPORT"].endswith("selftest-report.json")
+
+    def test_config_actually_reads_the_knob(self):
+        """环境变量名一改，config 里的读取就静默失效——只有真跑才看得出来，
+        故把名字一致性钉成静态断言。"""
+        cfg = (sg.GRADE_DIR / "playwright.config.ts").read_text(encoding="utf-8")
+        assert "PLAYWRIGHT_ACTION_TIMEOUT" in cfg
+        assert "actionTimeout" in cfg
+        # 官方判分复现不设该变量：默认 0 = 沿用 test 超时，口径不变
+        assert "process.env.PLAYWRIGHT_ACTION_TIMEOUT || 0" in cfg
