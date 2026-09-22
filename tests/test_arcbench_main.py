@@ -284,3 +284,49 @@ class TestRunnerModelAutocomplete:
         assert s.single_model_mode is False
         assert s.models[0] == "openai/deepseek-v4-pro"
         assert len(s.models) == 3
+
+
+# ---- Linux 容器取证：官方题面曾被闲聊路由判 direct_answer 静默 rc=1 ----
+
+class TestForcedRouteOnTreeEntry:
+    def test_tree_entry_forces_team_flow_route(self, monkeypatch, tmp_path,
+                                               req_dir):
+        from app.orchestrator import Route
+
+        out = tmp_path / "wsR"
+        _env(monkeypatch, out)
+        captured = _patch_llm_paths(
+            monkeypatch, _team_result(tmp_path / "dr"))
+        rc = entry.main([str(req_dir), "-o", str(out), "--type", "web",
+                         "--mode", "auto"])
+        assert rc == 0
+        route = captured["run_kwargs"]["route"]
+        assert route is not None
+        assert route.route is Route.TEAM_FLOW
+        assert route.task_type == "编程"
+        assert not route.needs_user_confirm
+        # 模块化判定输入：FOLDER 数 → estimated_files ≥ 阈值 6
+        assert route.estimated_files >= 6
+
+    def test_text_entry_keeps_llm_router(self, monkeypatch, tmp_path):
+        out = tmp_path / "wsT"
+        _env(monkeypatch, out)
+        captured = _patch_llm_paths(
+            monkeypatch, _team_result(tmp_path / "dt"))
+        rc = entry.main(["做一个备忘录网页应用", "-o", str(out),
+                         "--mode", "auto"])
+        assert rc == 0
+        assert captured["run_kwargs"].get("route") is None
+
+    def test_non_success_terminal_leaves_stdout_trace(
+            self, monkeypatch, tmp_path, req_dir, capsys):
+        from app.pipeline import PipelineResult
+
+        out = tmp_path / "wsD"
+        _env(monkeypatch, out)
+        _patch_llm_paths(monkeypatch,
+                         PipelineResult(kind="direct_answer", answer="x"))
+        rc = entry.main([str(req_dir), "-o", str(out), "--mode", "auto"])
+        assert rc == 1
+        assert "管线非成功终态: kind=direct_answer" in (
+            capsys.readouterr().out)

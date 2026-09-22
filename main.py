@@ -323,6 +323,26 @@ def main(argv: list[str] | None = None) -> int:
                 )
             result = pipeline.resume(project_id)
         else:
+            preset_route = None
+            if tree is not None:
+                # 官方题面入口零路由决策：requirements.yaml 解析成功即铁定
+                # 是编程任务，闲聊/问答意图分类器在此永远是纯误判面——
+                # Linux 容器实证 6.8k 字符题面被路由判成 direct_answer，
+                # 管线静默 rc=1（平台侧 0 分且日志无任何线索）。
+                from app.orchestrator import Route, RoutingResult
+
+                n_folders = sum(
+                    1 for c in tree.get("children") or []
+                    if c.get("type") == "FOLDER"
+                )
+                preset_route = RoutingResult(
+                    route=Route.TEAM_FLOW,
+                    task_type="编程",
+                    difficulty_score=8,
+                    difficulty_level="高",
+                    reason="arcbench 需求树入口：强制完整团队流程",
+                    estimated_files=max(6, n_folders + 2),
+                )
             result = pipeline.run(
                 requirement,
                 # 不传 models 时管线会退到硬编码默认三模型（无对应密钥），
@@ -333,6 +353,7 @@ def main(argv: list[str] | None = None) -> int:
                 spec_confirm="确认",
                 project_dirname="arcbench-app",
                 requirement_brief=requirement_brief,
+                route=preset_route,
             )
     except Exception as exc:  # 平台需要明确的失败终态
         import traceback
@@ -396,6 +417,10 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"[export] 布局适配失败（交付不受影响）: {exc!r}",
                       flush=True)
         return 0
+    # 非异常的非成功终态此前只进事件流不落 stdout——容器尸检时
+    # 只见 rc=1 无线索（Linux direct_answer 误判实证），显式留痕。
+    print(f"[main] 管线非成功终态: kind={result.kind} "
+          f"msg={(getattr(result, 'message', '') or '')[:200]}", flush=True)
     bridge.run_failed(f"管线终点: {result.kind}")
     return 1
 
