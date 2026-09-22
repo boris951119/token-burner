@@ -222,6 +222,10 @@ def test_multi_model_flag_falls_back_to_single_when_preset_empty(monkeypatch):
     """预设为空/全同注入模型：自然回落单模型模式。"""
     settings = Settings(models=["openai/glm-5.3"], platform_multi_model=True)
     monkeypatch.setenv("MODEL", "glm-5.3")
+    # 隔离中转站补全通道：dotenv 残留（如本机 .env 指向官方网关）会
+    # 让本用例误入编队自动补全分支（与 TestRunnerModelAutocomplete 同法）
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
     entry._apply_runner_model(settings)
     assert settings.models == ["openai/glm-5.3"]
     assert settings.single_model_mode is True
@@ -233,6 +237,8 @@ def test_flag_off_keeps_strict_single_model(monkeypatch):
         models=["openai/deepseek-v4-pro", "openai/qwen3.8-max"],
     )
     monkeypatch.setenv("MODEL", "glm-5.3")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
     entry._apply_runner_model(settings)
     assert settings.models == ["openai/glm-5.3"]
     assert settings.single_model_mode is True

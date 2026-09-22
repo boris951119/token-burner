@@ -2,7 +2,7 @@
   "models": [
     "openai/deepseek-v4-pro",
     "openai/deepseek-v4-flash",
-    "openai/glm-5.3"
+    "openai/qwen3.7-max"
   ],
   "platform_multi_model": true,
   "llm_max_retries": 3,
