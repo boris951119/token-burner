@@ -523,3 +523,39 @@ class TestKeep7wGuards:
         assert ok, (notes, report)
         assert any("扫描拦截" in n for n in notes)
         assert not any("RepoFixer" in n for n in notes)
+
+
+# ---- 夜间压测取证：旅程摘要必须见到逐字验收，而非技术栈规则头部盲切 ----
+
+class TestJourneyAcceptanceBrief:
+    STRUCTURED = (
+        "开发一个完整可运行的 Web 应用：Demo。\n演示应用。\n\n"
+        "技术栈硬性要求（优先级最高）：\n"
+        + "1. 后端必须创建真实 HTTP 服务器……\n" * 200
+        + "\n## 模块：notes 笔记\n依赖：无\n\n"
+        "### REQ-1.1 Create Note（验收标准）\n新建笔记。\n"
+        "  - 场景：create\n    WHEN: click \"Create\"\n"
+        "    THEN: see \"Note saved\" 提示\n\n"
+        "### REQ-1.2 No GWT Node（验收标准）\n" + "长描述" * 100 + "\n"
+    )
+
+    def test_structured_gets_verbatim_acceptance(self):
+        from app.arcbench_smoke import _journey_acceptance_brief
+        brief = _journey_acceptance_brief(self.STRUCTURED)
+        assert "Note saved" in brief
+        assert '### REQ-1.1' in brief
+        assert "【逐节点验收（原文逐字）】" in brief
+        assert len(brief) < 6500
+        assert "演示应用" in brief  # 应用简介头保留
+
+    def test_plain_text_falls_back_to_head(self):
+        from app.arcbench_smoke import _journey_acceptance_brief
+        plain = "做一个备忘录应用。" * 1000
+        assert _journey_acceptance_brief(plain) == plain[:4000]
+
+    def test_desc_only_node_survives(self):
+        from app.arcbench_smoke import _journey_acceptance_brief
+        brief = _journey_acceptance_brief(self.STRUCTURED)
+        assert "### REQ-1.2" in brief
+        # 描述截到 240 字符（=80 个三字段），不拖爆预算
+        assert brief.count("长描述") <= 81

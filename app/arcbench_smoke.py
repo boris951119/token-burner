@@ -1143,6 +1143,43 @@ def run_journey_script(script_path: Path, code_dir: Path) -> tuple[bool, str]:
     )
 
 
+def _journey_acceptance_brief(requirement: str, budget: int = 5000) -> str:
+    """旅程生成器的需求摘要：逐节点验收行，替代盲切 head 4000。
+
+    keep#3 夜间取证：渲染文本前 4000 字符＝技术栈规则 1-16 全文，
+    旅程断言从未见过任何逐字验收文案——「凭想象写定位器」在旅程
+    通道的翻版（自测通道 9/20 已修，见 :1154 注释同源事故）。
+    无 ### 结构的纯文本需求回落旧 head 切片。"""
+    if not requirement:
+        return ""
+    try:
+        from app.utils.selftest_gate import _split_atomic_nodes
+        nodes, _g = _split_atomic_nodes(requirement)
+    except Exception:
+        nodes = []
+    if not nodes:
+        return requirement[:4000]
+    head = requirement.split("技术栈硬性要求", 1)[0].strip()[:600]
+    chunks: list[str] = []
+    size = 0
+    for _nid, text in nodes:
+        keep = [ln for ln in text.splitlines()
+                if ln.startswith("### ")
+                or ln.strip().startswith(("GIVEN", "WHEN", "THEN", "AND", "BUT"))
+                or ln.strip().startswith("- 场景")]
+        if len(keep) <= 1:
+            body = [ln for ln in text.splitlines()
+                    if not ln.startswith(("##", "###", "依赖："))]
+            header = keep[0] if keep else f"### {_nid}"
+            keep = [header, "\n".join(body)[:240]]
+        chunk = "\n".join(keep)
+        if size + len(chunk) > budget:
+            break
+        chunks.append(chunk)
+        size += len(chunk)
+    return (head + "\n\n【逐节点验收（原文逐字）】\n" + "\n".join(chunks))
+
+
 def _journey_gate(
     code_dir: Path,
     project_dir: Path,
@@ -1162,12 +1199,13 @@ def _journey_gate(
         return True, "skip"
     app_module, routes = probe
     notes.append(f"[journey] {app_module} 共 {len(routes)} 条路由")
+    brief = _journey_acceptance_brief(requirement)
 
     def gen(user_extra: str = "") -> str:
         return _extract_body(llm(
             _JOURNEY_SYSTEM,
             _JOURNEY_USER.format(
-                requirement=requirement[:4000],
+                requirement=brief,
                 app_module=app_module,
                 routes="\n".join(routes[:80]),
             ) + user_extra,
