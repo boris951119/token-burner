@@ -19,19 +19,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import yaml
-
 _REQUIREMENT_NAMES = ("requirements.yaml", "requirements.yml")
 
 
 def load_requirement_tree(requirement_dir: str | Path) -> tuple[dict, Path]:
     """从目录解析需求树，返回 (tree, yaml_path)；找不到时抛 FileNotFoundError。"""
     base = Path(requirement_dir)
+    from app.acceptance_compile import load_yaml_robust
     for name in _REQUIREMENT_NAMES:
         path = base / name
         if path.is_file():
-            with open(path, encoding="utf-8") as fh:
-                return yaml.safe_load(fh), path
+            return load_yaml_robust(path), path
     raise FileNotFoundError(f"{base} 下找不到 requirements.yaml(.yml)")
 
 

@@ -43,9 +43,9 @@ class Scenario:
 
 def compile_scenarios(yaml_path: Path) -> list[Scenario]:
     """解析 requirements.yaml → 扁平场景条目清单（保持文档顺序）。"""
-    import yaml
+    from app.acceptance_compile import load_yaml_robust
 
-    data = yaml.safe_load(Path(yaml_path).read_text(encoding="utf-8"))
+    data = load_yaml_robust(Path(yaml_path))
     if not isinstance(data, dict):
         return []
     out: list[Scenario] = []
