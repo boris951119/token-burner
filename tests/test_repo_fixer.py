@@ -153,3 +153,75 @@ class TestRepoFixer:
         result = fixer.fix("add 应为加法")
         assert result.ok is True
         assert result.diff == ""  # 无 git，diff 报告为空但不影响修复
+
+
+# ---- 语法拒收：护栏必须挡住垃圾写，但不得把文件踢出修复线 ----
+
+BROKEN_CALC = "def add(a, b):\n    return a + b\n<<<<<<< HEAD\n"
+PLAN_HELPER = {"analysis": "双文件", "files": [
+    {"path": "calc.py", "change": "改和"},
+    {"path": "helper.py", "change": "新增常量"},
+]}
+
+
+@pytest.mark.usefixtures("_git_guard")
+class TestSyntaxRejection:
+    def test_rejected_file_is_not_written(self, repo):
+        """垃圾写不落盘：坏内容进不了磁盘，旧合法版本原样保留。"""
+        fixer = _fixer(FakeLLM(PLAN, [BROKEN_CALC]), repo, max_rounds=1)
+        result = fixer.fix("calc.add 返回了差", test_files=["test_calc.py"])
+        assert result.ok is False
+        assert (repo / "calc.py").read_text(encoding="utf-8") == BUGGY_CALC
+
+    def test_rejected_file_stays_in_repair_line(self, repo):
+        """keep 彩排取证：同一文件连拒 4 轮——旧实现把拒收文件从 changed
+        弹出，模型此后再没机会改它，且下一轮提示词里看到的是自己那份
+        非法草稿。现：打回磁盘版 + 点名拒收原因。"""
+        llm = FakeLLM(PLAN, [BROKEN_CALC],
+                      repatch=[{"path": "calc.py", "content": FIXED_CALC}])
+        result = _fixer(llm, repo, max_rounds=3).fix(
+            "calc.add 返回了差", test_files=["test_calc.py"])
+        assert result.ok is True
+        assert result.rounds == 2
+        assert (repo / "calc.py").read_text(encoding="utf-8").strip() \
+            == FIXED_CALC.strip()
+        repatch_prompt = next(u for _, u in llm.prompts if "已改文件" in u)
+        assert "系统拒收清单" in repatch_prompt
+        assert "invalid syntax" in repatch_prompt        # 带原因，不是空喊
+        assert "<<<<<<< HEAD" not in repatch_prompt      # 草稿未污染下一轮
+        assert "return a - b" in repatch_prompt          # 起点是磁盘现行版
+
+    def test_repatch_omitting_a_file_does_not_shrink_repair_set(self, repo):
+        """模型漏发某个已改文件时沿用上一版内容，修复集只增不减。"""
+        llm = FakeLLM(PLAN_HELPER, ["def add(a, b):\n    return a - b\n",
+                                    "ANSWER = 5\n"],
+                      repatch=[{"path": "calc.py", "content": FIXED_CALC}])
+        result = _fixer(llm, repo, max_rounds=3).fix(
+            "add 错误", test_files=["test_calc.py"])
+        assert result.ok is True
+        assert sorted(result.changed_files) == ["calc.py", "helper.py"]
+        assert (repo / "helper.py").read_text(encoding="utf-8").strip() == "ANSWER = 5"
+
+    def test_verify_ignores_stale_bytecode(self, repo):
+        """等长同秒覆写不得让验证跑在陈旧字节码上（假红 → 修复震荡）。
+
+        BUGGY/FIXED 恰好同长度，pyc 的「mtime 秒级 + 源大小」双重校验
+        双双命中时子进程仍导入旧代码——arcbench_smoke 早已为此清缓存，
+        repo_fixer 的验证通道漏了同源的一手（测试污染时真实复现过）。
+        """
+        import os
+        import py_compile
+
+        calc = repo / "calc.py"
+        stamp = 1_700_000_000                      # 钉死整秒，绕开 mtime 失效
+        calc.write_text(BUGGY_CALC, encoding="utf-8")
+        os.utime(calc, (stamp, stamp))
+        py_compile.compile(str(calc), doraise=True)
+        calc.write_text(FIXED_CALC, encoding="utf-8")
+        os.utime(calc, (stamp, stamp))             # 同秒等长：缓存自证有效
+
+        cache = next(repo.rglob("__pycache__"), None)
+        assert cache is not None, "前置失效：未生成 pyc"
+        passed, out = _fixer(FakeLLM(PLAN, [FIXED_CALC]), repo)._verify(
+            [sys.executable, "-m", "pytest", "-q"], ["test_calc.py"])
+        assert passed is True, out[-400:]

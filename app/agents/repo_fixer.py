@@ -16,7 +16,9 @@ verify(运行验证命令) → fix(失败带输出重出补丁,≤ max_rounds)�
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -102,7 +104,14 @@ class RepoFixer:
         last_sig: str | None = None
         for attempt in range(1, self.max_rounds + 1):
             result.rounds = attempt
-            self._apply(changed)
+            rejected = self._apply(changed)
+            # 被拒文件的草稿退回磁盘现行版：下一轮从**真实内容**出发重出，
+            # 而不是把这份非法草稿当"当前内容"继续放大。
+            for rel, _msg in rejected:
+                fp = self.repo / rel
+                changed[rel] = (
+                    fp.read_text(encoding="utf-8", errors="replace")
+                    [:_MAX_FILE_CHARS] if fp.exists() else "")
             passed, output = self._verify(self.test_cmd, test_files)
             result.test_output = output[:4000]
             if passed:
@@ -120,9 +129,23 @@ class RepoFixer:
                 result.diff = self._diff()
                 return result
             last_sig = sig
-            # 修复轮：带失败输出重出全部已改文件的完整新版
-            repatched = self._repatch(issue, changed, detail)
+            # 修复轮：带失败输出重出全部已改文件的完整新版。语法拒收的
+            # 文件必须点名告知模型——不说的话模型只知道"测试还红着"，
+            # 会照着同一份非法输出再撞一次（keep 彩排实证同一文件连拒 4 轮）。
+            failure = detail
+            if rejected:
+                failure = (
+                    detail
+                    + "\n\n## 系统拒收清单（上一版语法非法，未写入磁盘）\n"
+                    + "\n".join(f"- {rel}: {msg}" for rel, msg in rejected)
+                    + "\n上述文件磁盘上仍是修改前的旧版，必须整文件重发，"
+                      "且先自检 Python 语法（括号/缩进/引号闭合）再输出。")
+            repatched = self._repatch(issue, changed, failure)
             if repatched:
+                # 修复轮不得让文件集缩水：模型漏发的文件沿用上一版内容，
+                # 否则该文件被静默踢出修复范围（与语法拒收同类的失血口）。
+                for rel, content in changed.items():
+                    repatched.setdefault(rel, content)
                 changed = repatched
                 result.changed_files = list(changed)
         result.error = f"验证 {self.max_rounds} 轮未通过：{detail[:300]}"
@@ -210,37 +233,62 @@ class RepoFixer:
             return False, ""
         return True, resolved.relative_to(self.repo).as_posix()
 
-    def _apply(self, changed: dict[str, str]) -> None:
-        rejected: list[str] = []
-        for rel, content in list(changed.items()):
+    def _apply(self, changed: dict[str, str]) -> list[tuple[str, str]]:
+        """落盘本轮草稿，返回被拒清单 [(rel, 语法错误)]。
+
+        2026-09-20 取证：修复 LLM 曾把 .py 整文件写成 HTML 残渣
+        （'<!-- ... -->' 开头）——落盘前语法自证，垃圾写一律不入库，
+        对应文件保持磁盘上的旧合法内容。
+        拒收不等于退出修复线：内容留在 changed 里由 fix() 打回磁盘版
+        并在下一轮提示词点名（旧实现把拒收文件从 changed 弹出，等于
+        悄悄把它踢出修复范围，模型此后再没机会改这个文件）。
+        """
+        rejected: list[tuple[str, str]] = []
+        for rel, content in changed.items():
             target = self.repo / rel
-            # 2026-09-20 取证：修复 LLM 曾把 .py 整文件写成 HTML 残渣
-            # （'<!-- ... -->' 开头）——落盘前语法自证，拒收垃圾写并
-            # 踢出本轮 lineage（防止后续 repatch 继承坏内容放大传播）。
             if target.suffix == ".py":
                 try:
                     compile(content, str(target), "exec")
                 except SyntaxError as exc:
-                    print(f"[repo_fix] 拒收语法非法的修复内容 {rel}: {exc}")
-                    rejected.append(rel)
-                    changed.pop(rel)
+                    msg = f"invalid syntax: {exc.msg} (line {exc.lineno})"
+                    print(f"[repo_fix] 拒收语法非法的修复内容 {rel}: {exc}",
+                          flush=True)
+                    rejected.append((rel, msg))
                     continue
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
         if rejected:
-            # 留一条可 grep 的痕迹；对应文件保持磁盘上的旧合法内容
-            print(f"[repo_fix] 本轮拒收 {len(rejected)} 个文件: {rejected}")
+            print(f"[repo_fix] 本轮拒收 {len(rejected)} 个文件: "
+                  f"{[r for r, _ in rejected]}", flush=True)
+        return rejected
 
     def _verify(self, verify_cmd: list[str],
                 test_files: list[str] | None) -> tuple[bool, str]:
         cmd = list(verify_cmd)
         if test_files:
             cmd += list(test_files)
+        self._clear_pycache()
         proc = subprocess.run(cmd, cwd=self.repo, capture_output=True,
                               text=True, encoding="utf-8", errors="replace",
-                              timeout=self.test_timeout)
+                              timeout=self.test_timeout,
+                              env=dict(os.environ, PYTHONIOENCODING="utf-8",
+                                       PYTHONDONTWRITEBYTECODE="1"))
         output = (proc.stdout or "") + (proc.stderr or "")
         return proc.returncode == 0, output
+
+    def _clear_pycache(self) -> None:
+        """验证前清字节码缓存（与 arcbench_smoke._clear_pycache 同源）。
+
+        等长同秒覆写（`return a - b` → `return a + b` 恰好同长度）会命中
+        pyc 的 mtime 秒级 + 源大小双重校验，验证子进程导入陈旧模块——
+        修复循环对着旧代码判定成败：假红、震荡、非确定。测试污染实证
+        该缺陷曾让同一修复轮反复"失败"。
+        """
+        for cache in self.repo.rglob("__pycache__"):
+            try:
+                shutil.rmtree(cache, ignore_errors=True)
+            except Exception:
+                pass
 
     def _diff(self) -> str:
         try:

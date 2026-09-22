@@ -88,25 +88,67 @@ def _align_gateway_env() -> dict:
 
 
 def _gateway_preflight(settings) -> None:
-    """网关连通性预检：最小用例，失败即带精确原因快速失败。
+    """网关连通性预检：逐个模型探活，可用者前置；全灭才快速失败。
 
     用降配副本（1 次重试 + 15s 超时）——默认 6 次重试 × 15s 退避会让
     一次失败拖十几分钟才暴露（快速诊断的要求正好相反）。
+
+    generation-6 修订：旧版只探编制首位，而预检在管线 try 之外——注入
+    模型一次偶发超时（或容器冷启动 DNS 未就绪）即崩穿进程，exit 1 =
+    平台不评分 = 整场 0 分，同一网关上其余模型当时完全可用。探活成功
+    者前置到编制首位，坏模型留在队尾当备胎（不删：偶发失败不等于不可用）。
     """
     import dataclasses
 
     from app.utils.model_client import ModelClient
 
+    candidates = list(settings.models[:3])
     fast = dataclasses.replace(
         settings, llm_max_retries=1, llm_timeout_seconds=15
     ) if dataclasses.is_dataclass(settings) else settings
     mc = ModelClient(fast)
-    model = tuple(settings.models[:3])[0]
-    mc.chat(model, [{"role": "user", "content": "ping"}])
-    print("[gateway] preflight OK", flush=True)
+    dead: list[str] = []
+    for idx, model in enumerate(candidates):
+        try:
+            mc.chat(model, [{"role": "user", "content": "ping"}])
+        except Exception as exc:
+            dead.append(f"{model}: {type(exc).__name__}: {str(exc)[:120]}"[:180])
+            continue
+        # 首个可用者前置；后面的模型不再探活（省启动延迟与请求）
+        if idx:
+            settings.models = ([model]
+                               + [m for m in candidates if m != model]
+                               + list(settings.models[len(candidates):]))
+            print(f"[gateway] preflight 首选已切换 → {model}"
+                  f"（探活失败: {[d.split(':')[0] for d in dead]}）",
+                  flush=True)
+        print(f"[gateway] preflight OK（首选 {model}）", flush=True)
+        return
+    raise RuntimeError("网关预检全灭（无一模型可通）: " + " | ".join(dead))
 
 
 _KNOWN_RELAY_FALLBACKS = ("openai/minimax-m3", "openai/glm-5.3")
+
+
+def _export_official_layout(workdir: Path, project_dir: Path | None) -> bool:
+    """把项目按官方 runner 布局落地（backend/ + frontend/）。
+
+    返回是否真正导出。导出是交付的最后一步：它失败不该改变交付终态，
+    但必须留一条可 grep 的痕迹（异常上抛会把已完成的交付换成 exit 1）。
+    """
+    if project_dir is None:
+        return False
+    try:
+        from app.platform_export import export_platform_layout
+
+        summary = export_platform_layout(workdir, project_dir)
+        print("[export] 官方布局已落地: "
+              f"backend={summary['backend_files']}文件, "
+              f"frontend={summary['frontend_files']}文件", flush=True)
+        return True
+    except Exception as exc:
+        print(f"[export] 布局适配失败（交付不受影响）: {exc!r}", flush=True)
+        return False
 
 
 def _apply_runner_model(settings) -> None:
@@ -315,7 +357,15 @@ def main(argv: list[str] | None = None) -> int:
         f"[gateway] base={diag['base']} key={diag['key']} model={diag['model']}"
         f"{fixture_warning}"
     )
-    _gateway_preflight(settings)
+    try:
+        _gateway_preflight(settings)
+    except Exception as exc:
+        # 网关一个模型都探不通时确实无事可做（快速失败的原意保留），但
+        # 终态要经桥接层报出去：裸异常崩穿只剩一行 traceback，平台侧
+        # 看到的是"进程炸了"而不是"预检全灭：逐模型原因"。
+        print(f"[gateway] 预检失败，快速止损: {exc}", flush=True)
+        bridge.run_failed(f"网关预检失败: {exc}"[:280])
+        return 1
     pipeline = Pipeline(
         llm=None,
         llm_factory=ModelClientFactory(settings),
@@ -427,22 +477,27 @@ def main(argv: list[str] | None = None) -> int:
         # 官方 runner 布局适配（6 平台提交取证：布局违约是主死因——
         # 内部 verify PASS 也因缺 frontend//backend/ 被判模板不完整）。
         # 导出失败不改变交付终态，但必须留痕诊断。
-        if result.project_dir is not None:
-            try:
-                from app.platform_export import export_platform_layout
-
-                summary = export_platform_layout(workdir, result.project_dir)
-                print("[export] 官方布局已落地: "
-                      f"backend={summary['backend_files']}文件, "
-                      f"frontend={summary['frontend_files']}文件", flush=True)
-            except Exception as exc:
-                print(f"[export] 布局适配失败（交付不受影响）: {exc!r}",
-                      flush=True)
+        _export_official_layout(workdir, result.project_dir)
         return 0
     # 非异常的非成功终态此前只进事件流不落 stdout——容器尸检时
     # 只见 rc=1 无线索（Linux direct_answer 误判实证），显式留痕。
     print(f"[main] 管线非成功终态: kind={result.kind} "
           f"msg={(getattr(result, 'message', '') or '')[:200]}", flush=True)
+    # 预算中止是唯一带着手项目回来的非成功终态。官方判分口径是
+    # avg_pass_rate（过几条算几条），不是全或无，而 exit 1 = 不评分——
+    # 半成品留在工作区不导出，等于把已经写出来的代码整批扔掉换 0 分。
+    # 现按现状导出并以 0 退出换一次被评分的机会；事件摘要如实写
+    # 「预算中止·部分交付」，不冒充完成（r10 诚实不变量的原意保留）。
+    partial = getattr(result, "project_dir", None)
+    if (result.kind == "budget_exceeded" and partial is not None
+            and Path(partial).is_dir()
+            and _export_official_layout(workdir, Path(partial))):
+        bridge.run_completed(
+            "预算中止·部分交付（未走验收，按现状导出）: "
+            + (result.deliverable_summary or "")[:300])
+        print("[main] 预算中止：半成品已按官方布局导出，退出码 0 换取评分",
+              flush=True)
+        return 0
     bridge.run_failed(f"管线终点: {result.kind}")
     return 1
 

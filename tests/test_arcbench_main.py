@@ -105,6 +105,15 @@ def _patch_llm_paths(monkeypatch, result, verify=(True, "verify ok")):
     return captured
 
 
+def _events_text(out: Path) -> str:
+    """事件流解码成可断言文本（jsonl 里的中文是 \\u 转义，裸 in 断言必假）。"""
+    lines = (out / ".arc" / "runner-events.jsonl").read_text(
+        encoding="utf-8").splitlines()
+    return "\n".join(
+        json.dumps(json.loads(line), ensure_ascii=False)
+        for line in lines if line.strip())
+
+
 def _env(monkeypatch, out_dir, *, unset_arcbench_env=True):
     monkeypatch.setenv("OPENAI_API_KEY", "ak_test")
     monkeypatch.setenv("OPENAI_BASE_URL", "https://gw.test/v1")
@@ -375,6 +384,128 @@ class TestNonFatalFailuresStayNonFatal:
         printed = capsys.readouterr().out
         assert "验收器内部故障" in printed
         assert "PASS" in printed                       # 不判失败
-        events = (out / ".arc" / "runner-events.jsonl").read_text(
-            encoding="utf-8")
-        assert "completed" in events                   # 终态仍是已交付
+        assert "completed" in _events_text(out)         # 终态仍是已交付
+
+
+# ---- 网关预检：整场 0 分曾经的单点故障 ----
+
+class TestGatewayPreflight:
+    """旧实现只探编制首位且失败即崩穿（预检在管线 try 之外）：注入模型
+    一次偶发超时 = exit 1 = 不评分，而同网关其余模型当时完全可用。"""
+
+    class _MC:
+        pinged: list[str] = []
+
+        def __init__(self, settings):
+            pass
+
+        def chat(self, model, messages, **kw):
+            type(self).pinged.append(model)
+            if "dead" in model:
+                raise RuntimeError("Connection error.")
+            return "pong"
+
+    def _run(self, monkeypatch, models):
+        self._MC.pinged = []
+        monkeypatch.setattr("app.utils.model_client.ModelClient", self._MC)
+        s = Settings(models=list(models))
+        entry._gateway_preflight(s)
+        return s
+
+    def test_alive_model_is_promoted_to_head(self, monkeypatch):
+        s = self._run(monkeypatch, ["openai/dead-1", "openai/good-2",
+                                    "openai/good-3"])
+        assert s.models[0] == "openai/good-2"     # 管线主用已验证可用者
+        assert "openai/dead-1" in s.models        # 偶发失败≠不可用：留作备胎
+        assert self._MC.pinged == ["openai/dead-1", "openai/good-2"]  # 首位活即止
+
+    def test_healthy_formation_pings_once(self, monkeypatch):
+        s = self._run(monkeypatch, ["openai/good-1", "openai/good-2"])
+        assert self._MC.pinged == ["openai/good-1"]
+        assert s.models == ["openai/good-1", "openai/good-2"]   # 原序不动
+
+    def test_all_dead_raises_with_per_model_reasons(self, monkeypatch):
+        self._MC.pinged = []
+        monkeypatch.setattr("app.utils.model_client.ModelClient", self._MC)
+        with pytest.raises(RuntimeError) as ei:
+            entry._gateway_preflight(
+                Settings(models=["openai/dead-a", "openai/dead-b"]))
+        msg = str(ei.value)
+        assert "全灭" in msg and "dead-a" in msg and "Connection error" in msg
+
+    def test_preflight_failure_reports_clean_terminal(
+            self, monkeypatch, tmp_path, req_dir):
+        """全灭仍快速失败，但终态经桥接层报出：裸崩只剩一行 traceback。"""
+        out = tmp_path / "wsP"
+        _env(monkeypatch, out)
+        _patch_llm_paths(monkeypatch, _team_result(tmp_path / "dp"))
+
+        def boom(settings):
+            raise RuntimeError("网关预检全灭（无一模型可通）: openai/dead-a")
+
+        monkeypatch.setattr(entry, "_gateway_preflight", boom)
+        assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 1
+        assert "预检全灭" in _events_text(out)
+
+
+# ---- 预算中止的手半成品：不导出 = 已经写出来的代码换 0 分 ----
+
+class TestBudgetPartialDelivery:
+    def _partial(self, tmp_path, name="partial"):
+        proj = tmp_path / name
+        (proj / "code").mkdir(parents=True)
+        (proj / "code" / "app.py").write_text("print(1)\n", encoding="utf-8")
+        return proj
+
+    def test_budget_exceeded_exports_and_scores(self, monkeypatch, tmp_path,
+                                                req_dir, capsys):
+        from app.pipeline import PipelineResult
+
+        out = tmp_path / "wsB"
+        _env(monkeypatch, out)
+        proj = self._partial(tmp_path)
+        _patch_llm_paths(monkeypatch, PipelineResult(
+            kind="budget_exceeded", project_dir=proj,
+            deliverable_summary="预算中止：已完成 3/5 模块"))
+        called = []
+        monkeypatch.setattr(
+            "app.platform_export.export_platform_layout",
+            lambda workdir, pd: (called.append(str(pd))
+                                 or {"backend_files": 3, "frontend_files": 0}))
+        rc = entry.main([str(req_dir), "-o", str(out), "--mode", "auto"])
+        assert rc == 0                                   # 换取被评分的机会
+        assert called == [str(proj)]
+        printed = capsys.readouterr().out
+        assert "退出码 0 换取评分" in printed
+        assert "半成品已按官方布局导出" in printed
+        assert "未走验收" in _events_text(out)            # 摘要不冒充完成
+
+    def test_export_failure_still_returns_1(self, monkeypatch, tmp_path,
+                                            req_dir):
+        from app.pipeline import PipelineResult
+
+        out = tmp_path / "wsB2"
+        _env(monkeypatch, out)
+        _patch_llm_paths(monkeypatch, PipelineResult(
+            kind="budget_exceeded", project_dir=self._partial(tmp_path, "p2")))
+
+        def boom(workdir, pd):
+            raise RuntimeError("布局导出炸了")
+
+        monkeypatch.setattr("app.platform_export.export_platform_layout", boom)
+        assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 1
+
+    def test_declined_without_project_never_exports(
+            self, monkeypatch, tmp_path, req_dir):
+        """没产物就没得交付：不误导平台，仍按失败终态收口。"""
+        from app.pipeline import PipelineResult
+
+        out = tmp_path / "wsB3"
+        _env(monkeypatch, out)
+        _patch_llm_paths(monkeypatch, PipelineResult(kind="declined"))
+        called = []
+        monkeypatch.setattr(
+            "app.platform_export.export_platform_layout",
+            lambda w, p: called.append(p) or {})
+        assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 1
+        assert called == []
