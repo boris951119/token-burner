@@ -1,0 +1,29 @@
+# 换行符策略（2026-09-22 Windows→macOS 迁移后统一）：入库与检出均为 LF
+* text=auto eol=lf
+
+# 二进制不动
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.db binary
+*.sqlite binary
+*.exe binary
+*.dll binary
+*.dylib binary
+*.so binary
+*.pyc binary
+*.ttf binary
+*.woff binary
+*.woff2 binary
+*.mp3 binary
+*.mp4 binary
+*.docx binary
+*.xlsx binary
+*.pptx binary
+
+# 构建产物/依赖目录不入库，保险起见
+node_modules/** -text
