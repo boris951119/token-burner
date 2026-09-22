@@ -469,3 +469,39 @@ class TestInertControlEvidence:
         labs = ["Wide Mode", "More Options"]
         r = judge_checklists(self._ck_for(labs), _url_for(body))
         assert r["failed"] == 0, r["failures"]
+
+    def test_script_on_another_page_does_not_vouch(self):
+        """接线证据按页算：子页那段脚本替不了入口页的哑按钮——评测是在找到
+        控件的这一页点下去的，跨页合并等于给「首页铺占位按钮 + 子页放一个
+        脚本」的诱饵变体开门。"""
+        srv = _serve({
+            "/": ('<html><body><a href="/board">B</a>'
+                  '<button type="button">Save Draft</button>'
+                  + _FILLER + "</body></html>"),
+            "/board": ('<html><body><script src="/a.js"></script>'
+                       "<p>Board contents</p></body></html>"),
+        })
+        url = f"http://127.0.0.1:{srv.server_address[1]}"
+        try:
+            r = judge_checklists(self._ck_for(["Save Draft"]), url)
+            assert r["failed"] == 1, r["failures"]
+            assert "占位控件" in r["failures"][0]
+        finally:
+            srv.shutdown()
+
+    def test_wired_on_any_page_is_still_green(self):
+        """同一条文案只要在任一页真接了线即判绿：按页算只收紧「别处脚本替
+        本页担保」，不多造幻红。"""
+        srv = _serve({
+            "/": ('<html><body><a href="/board">B</a>'
+                  '<button type="button">Save Draft</button>'
+                  + _FILLER + "</body></html>"),
+            "/board": ('<html><body><form action="/save" method="post">'
+                       "<button>Save Draft</button></form></body></html>"),
+        })
+        url = f"http://127.0.0.1:{srv.server_address[1]}"
+        try:
+            r = judge_checklists(self._ck_for(["Save Draft"]), url)
+            assert r["failed"] == 0, r["failures"]
+        finally:
+            srv.shutdown()

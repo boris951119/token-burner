@@ -22,11 +22,14 @@
   ('button'|'link', {name})，这类断言没有文本兜底；认不出控件语义的一律
   不判红（宁漏不幻），同因超出 8 条时归并成一条计数；
 - 同通道的接线证据（9/23 判分红叶取证）：按钮类控件还须拿得出「点了会有
-  反应」的静态证据（页面带 <script> / 落在 <form> 内 / 自带处理器属性），
-  三者皆无即按占位按钮判红——那份交付首页整站零脚本、把十条需求文案铺成
-  <button type="button">，本地全绿而官方 29/31 例卡在点击超时。占位按钮与
-  「文案当控件」两种红的修法不同（前者补抄文案只会再造一个诱饵），故分开
-  点名。summary/option/勾选框不受此约束：它们的反应是浏览器原生行为。
+  反应」的静态证据（**该控件所在页**带 <script> / 落在 <form> 内 / 自带处理
+  器属性），三者皆无即按占位按钮判红——那份交付首页整站零脚本、把十条需求
+  文案铺成 <button type="button">，本地全绿而官方 29/31 例卡在点击超时。
+  脚本证据按页算（9/23 复盘）：跨页合并会让子页一段无关脚本替入口页的哑
+  按钮担保，而评测是在找到控件的那一页点下去——同一条文案只要在任一页真
+  接线即判绿，故不会因此多判红。占位按钮与「文案当控件」两种红的修法不同
+  （前者补抄文案只会再造一个诱饵），故分开点名。summary/option/勾选框不受
+  此约束：它们的反应是浏览器原生行为。
 - 第三条通道兜客户端渲染（9/23 三组对照取证）：文案虽不在可见文本里、
   但确实出现在页内脚本正文 = 浏览器渲染得出来 → 该条记射程外（不判红不
   判绿，报告里点名条数）。只在页内源码里也不存在才判红，故 keep#2 那类
@@ -224,8 +227,12 @@ def _wired(pairs: dict, has_js: bool, in_form: bool) -> bool:
     return any(_HANDLER_ATTR.match(k) for k in pairs)
 
 
-def _interactive_corpus(html: str, require_wiring: bool = True) -> str:
+def _interactive_corpus(html, require_wiring: bool = True) -> str:
     """页面上所有可点/可选控件的正文文字与可访问名，归一成待匹配语料。
+
+    html 可以是多页原文的序列：接线证据逐页各算一次再取并集——同一条文案只
+    要有一页真接了线即判绿（不会因此多判红），但别的页面那段脚本替不了这一
+    页的哑按钮（评测就在找到控件的那一页点下去）。
 
     只认确定的语义（button/a/summary/option/legend、显式交互 role、
     button 类 input 的 value/aria-label、勾选类控件的 label），认不出的
@@ -238,6 +245,10 @@ def _interactive_corpus(html: str, require_wiring: bool = True) -> str:
     顶过按钮标签但没过接线证据 = 占位按钮（抄文案修不好，必须点名真接线），
     压根不是按钮 = 文案当控件（照旧口径）。
     """
+    if isinstance(html, (list, tuple)):
+        return _norm(" ".join(
+            c for c in (_interactive_corpus(p, require_wiring) for p in html)
+            if c))
     # require_wiring=False 时把整页当「带脚本」：_wired 退化成只认标签名，
     # 用来把「占位按钮」与「文案当控件」两种红分开（修法不同，指令不能混）。
     has_js = bool(_JS_TAG.search(html)) or not require_wiring
@@ -302,6 +313,8 @@ class _Crawl:
     # 文案在源码里却不可见 = 造假，逐条判红（keep#2）；源码里根本没有
     # = 结构缺失，可归并成一条根因（run6）。
     raw: str = ""
+    # 逐页原文（与 raw 同一份内容，只是不合并）：接线证据按页算用
+    pages: list[str] = field(default_factory=list)
     shell: bool = False                      # 入口页是否 JS 挂载壳
     html_pages: int = 0                      # 真正返回 HTML 文档的页面数
     links: int = 0                           # 站内链接总数（去重后）
@@ -356,6 +369,7 @@ def _crawl_pages(base_url: str, max_pages: int,
     c.attrs = "\n".join(attrs)
     c.scripts = "\n".join(scripts)
     c.raw = "\n".join(raws)
+    c.pages = raws
     return c
 
 
@@ -469,8 +483,9 @@ def judge_checklists(checklists: list[NodeChecklist], base_url: str,
         if e in script_norm:
             continue            # 客户端渲染：静态判分射程外
         if not ctrl_corpus:
-            ctrl_corpus = _interactive_corpus(crawl.raw)
-            bare_corpus = _interactive_corpus(crawl.raw, require_wiring=False)
+            ctrl_corpus = _interactive_corpus(crawl.pages)
+            bare_corpus = _interactive_corpus(crawl.pages,
+                                              require_wiring=False)
         click_seen += 1
         if e in ctrl_corpus:
             continue
