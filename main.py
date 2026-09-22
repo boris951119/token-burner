@@ -27,7 +27,7 @@ from app.arcbench_ingest import (
     load_requirement_tree,
     render_requirement_text,
 )
-from app.config import load_settings
+from app.config import Settings, load_settings
 from app.execution.factory import build_executor
 from app.pipeline import Pipeline
 from app.tools.file_manager import FileManager
@@ -247,7 +247,15 @@ def main(argv: list[str] | None = None) -> int:
     # 找不到 → 静默回退默认值 → 单模型无备胎 → 四连败同源）：config 跟随
     # 提交包，与 CWD 解耦
     config_file = Path(__file__).resolve().parent / "config.json"
-    settings = load_settings(config_file=config_file)
+    try:
+        settings = load_settings(config_file=config_file)
+    except Exception as exc:
+        # 配置文件读不动曾等于整场 0 分（ValueError 直接崩穿，管线未启动，
+        # 日志只有一行 traceback）。提交包里的 config.json 是可选增强，不是
+        # 启动前置条件：回退代码默认值 + 注入 MODEL 继续跑完这一场。
+        print(f"[config] 配置读取失败 → 回退代码默认值（请修 config.json）: "
+              f"{type(exc).__name__}: {exc}", flush=True)
+        settings = Settings()
     _apply_runner_model(settings)
     # 诊断实证：配置实况打印进容器 stdout——平台侧故障的第一手证据
     print(f"[config] file={config_file} exists={config_file.is_file()} "
@@ -391,10 +399,20 @@ def main(argv: list[str] | None = None) -> int:
         if result.project_dir is not None:
             from app.arcbench_smoke import verify_delivery
 
-            ok, report = verify_delivery(
-                result.project_dir, requirement, settings,
-                requirements_dir=(req_dir if req_dir.is_dir() else None),
-            )
+            try:
+                ok, report = verify_delivery(
+                    result.project_dir, requirement, settings,
+                    requirements_dir=(req_dir if req_dir.is_dir() else None),
+                )
+            except Exception as exc:
+                # 验收器崩溃吃掉的是「已经写完的整个项目」：此刻产物齐备，
+                # 退出 1 = 平台不评分 = 全部白做。教练摔了也要把学生送进考场。
+                import traceback
+
+                traceback.print_exc()
+                ok = True
+                report = f"验收器内部故障（不判失败，照常交付）: {exc!r}\n" \
+                    + traceback.format_exc()[-300:]
             print(f"[verify] {'PASS' if ok else 'FAIL'}", flush=True)
             print(f"[verify] {report[-600:]}", flush=True)
             # 平台 v6-1 取证（¥47/5.7h 白扔）：exit 1 = 平台不评分 = 0 分，

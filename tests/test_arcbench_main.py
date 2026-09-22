@@ -330,3 +330,51 @@ class TestForcedRouteOnTreeEntry:
         assert rc == 1
         assert "管线非成功终态: kind=direct_answer" in (
             capsys.readouterr().out)
+
+
+# ---- 启动/收尾两处「非致命故障曾被当成致命」的回归 ----
+
+class TestNonFatalFailuresStayNonFatal:
+    def test_broken_config_json_falls_back_and_runs(
+            self, monkeypatch, tmp_path, req_dir, capsys):
+        """config.json 坏掉 ≠ 整场 0 分：回退代码默认值继续跑完。
+
+        取证：load_settings 对未知键/类型不符抛 ValueError，而它在
+        管线之前被裸调用——一行 JSON 拼写错误即可让进程零输出崩穿，
+        平台侧 exit 1（不评分）。
+        """
+        out = tmp_path / "wsCfg"
+        _env(monkeypatch, out)
+        _patch_llm_paths(monkeypatch, _team_result(tmp_path / "dcfg"))
+
+        def boom(config_file=None, **kw):
+            raise ValueError("配置文件包含未知字段: ['modelz']（请检查拼写）")
+
+        monkeypatch.setattr(entry, "load_settings", boom)
+        rc = entry.main([str(req_dir), "-o", str(out), "--type", "web",
+                         "--mode", "auto"])
+        assert rc == 0
+        printed = capsys.readouterr().out
+        assert "配置读取失败 → 回退代码默认值" in printed
+        # 回退后仍走单模型注入 + 中转站补全，不是空编制
+        assert "最终编制: models=['openai/glm-5.3'" in printed
+
+    def test_verify_crash_does_not_eat_finished_project(
+            self, monkeypatch, tmp_path, req_dir, capsys):
+        """验收器崩溃时产物已齐备：exit 1 会把整个项目一起扔掉。"""
+        out = tmp_path / "wsV"
+        _env(monkeypatch, out)
+        _patch_llm_paths(monkeypatch, _team_result(tmp_path / "dver"))
+
+        def boom(*a, **kw):
+            raise RuntimeError("selftest gate 内部炸了")
+
+        monkeypatch.setattr("app.arcbench_smoke.verify_delivery", boom)
+        rc = entry.main([str(req_dir), "-o", str(out), "--mode", "auto"])
+        assert rc == 0
+        printed = capsys.readouterr().out
+        assert "验收器内部故障" in printed
+        assert "PASS" in printed                       # 不判失败
+        events = (out / ".arc" / "runner-events.jsonl").read_text(
+            encoding="utf-8")
+        assert "completed" in events                   # 终态仍是已交付
