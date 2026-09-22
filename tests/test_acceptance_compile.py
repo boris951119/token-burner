@@ -182,3 +182,64 @@ def test_render_ux_checklist_channel_attribution(tmp_path):
     assert '"Title"' in line and "动作后须出现" in line
     # 无事实节点不出行，控制 token
     assert "REQ-9.1" in s  # 登录节点有控件与可见种子
+
+
+# ---- 中文题面引号通道（9/23 取证）-------------------------------------
+# 官方题面里有整份中文需求（界面文案一律用 “” 标注）。只认 ASCII 引号时
+# 该题编译出 2 条控件事实：写码段的 UX 契约近乎空、平台侧唯一判分闸零信号
+# ——恰是"UI 文案必须逐字可见"最要吃准的题面。requirement_anchors 早已按
+# “”‘’ 取值，此处补同一口径。夹具用通用词，不含任何题面专名。
+
+REQ_YAML_CJK = """
+id: ROOT
+type: FOLDER
+children:
+  - id: REQ-1
+    name: 账号
+    type: FOLDER
+    children:
+      - id: REQ-1.1
+        name: 登录
+        type: ATOMIC
+        description: >
+          Seed data: 用户 “张三” 与站点 “示例博客”。
+          首页显示登录入口。
+        scenarios:
+          - name: 登录
+            steps:
+              - keyword: GIVEN
+                content: 打开应用首页
+              - keyword: WHEN
+                content: 点击 “登录” 按钮并输入 “张三”，系统提示 “用户名不存在，请核对”
+              - keyword: THEN
+                content: 页面出现 “欢迎回来” 提示
+"""
+
+
+def test_cjk_quoted_labels_reach_controls(tmp_path):
+    ck = {c.req_id: c for c in compile_checklists(_write(tmp_path, REQ_YAML_CJK))}["REQ-1.1"]
+    assert "登录" in ck.control_labels
+    assert "张三" in ck.control_labels
+    assert ck.home_visible is True, "首页提示应识别中文'首页'"
+
+
+def test_cjk_seed_names_reach_seed_channel(tmp_path):
+    ck = {c.req_id: c for c in compile_checklists(_write(tmp_path, REQ_YAML_CJK))}["REQ-1.1"]
+    assert "示例博客" in ck.seed_entities
+
+
+def test_cjk_sentence_like_quotes_are_not_control_labels(tmp_path):
+    """中文无空格 → 12 词上限恒不生效；含句读的引号串是提示语不是控件，
+    按"必须静态可见"判分即幻影失败。行为通道（THEN）不受此限。"""
+    ck = {c.req_id: c for c in compile_checklists(_write(tmp_path, REQ_YAML_CJK))}["REQ-1.1"]
+    assert "用户名不存在，请核对" not in ck.control_labels
+    assert "欢迎回来" in ck.behavior_expectations
+
+
+def test_cjk_and_ascii_quote_channels_are_parity(tmp_path):
+    """同一份中文题面把 “” 换成 ASCII 引号，控件清单必须逐字相同。"""
+    cjk = compile_checklists(_write(tmp_path, REQ_YAML_CJK))
+    ascii_yaml = REQ_YAML_CJK.replace("“", '"').replace("”", '"')
+    ref = compile_checklists(_write(tmp_path, ascii_yaml))
+    assert [c.control_labels for c in cjk] == [c.control_labels for c in ref]
+    assert [c.seed_entities for c in cjk] == [c.seed_entities for c in ref]

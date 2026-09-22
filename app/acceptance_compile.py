@@ -28,6 +28,15 @@ from pathlib import Path
 
 _QUOTED_D = re.compile(r'"([^"\n]{1,80})"')
 _QUOTED_S = re.compile(r"'([^'\n]{1,80})'")
+# 中文题面的引号通道（9/23 取证）：官方题面存在整份中文需求，界面文案一律用
+# “” 标注（单题实测 149 个唯一串）。只认 ASCII 引号时该题只编译出 2 条控件
+# 事实——UI 保真契约与平台侧唯一判分闸双双空转。requirement_anchors 早已按
+# “”‘’ 取值，这里是同一口径补齐。
+_QUOTED_CJK = re.compile(r"[“「『]([^”」』\n]{1,80})[”」』]")
+# 中文没有空格，_clean_quote 的 12 词上限对 CJK 恒不生效；含句读的多半是
+# 提示语/校验文案（"密码需包含字母和数字，且长度不小于8位"），不是控件标签
+# ——按控件判分即幻影失败。行为断言通道（THEN）不受此限。
+_CJK_MSG = re.compile(r"[，。；！？,;!?]")
 _MD_IMG = re.compile(r"!\[[^\]]*\]\([^)]*\)")
 _SEED_LINE = re.compile(r"seed\s*data\s*:", re.I)
 _FILE_RESIDUE = re.compile(
@@ -67,21 +76,25 @@ def _clean_quote(s: str) -> str | None:
     return s
 
 
-def _quotes_in(text: str, *, skip_seed_clause: bool = False) -> list[str]:
-    """抽一段文本里的引号文案（双/单引号），剔图片与文件名。"""
+def _quotes_in(text: str, *, skip_seed_clause: bool = False,
+               for_control: bool = False) -> list[str]:
+    """抽一段文本里的引号文案（双/单/中文引号），剔图片与文件名。
+    for_control：控件标签通道额外剔掉含句读的中文串（多半是提示语，
+    按"必须出现在页面上"判分即幻影失败）；行为断言通道保留原文。"""
     if not text:
         return []
     body = _MD_IMG.sub("", text)
     out: list[str] = []
-    for m in _QUOTED_D.finditer(body):
-        q = _clean_quote(m.group(1))
-        if q:
-            out.append(q)
+    for pat in (_QUOTED_D, _QUOTED_CJK):
+        for m in pat.finditer(body):
+            q = _clean_quote(m.group(1))
+            if q and not (for_control and _CJK_MSG.search(q)) and q not in out:
+                out.append(q)
     # 单引号通道：仅在无跳过需求时补（WHEN/THEN 主体），seed 通道自行去重
     if not skip_seed_clause:
         for m in _QUOTED_S.finditer(body):
             q = _clean_quote(m.group(1))
-            if q and q not in out:
+            if q and not (for_control and _CJK_MSG.search(q)) and q not in out:
                 out.append(q)
     return out
 
@@ -94,10 +107,11 @@ def _seed_entities_of(description: str) -> list[str]:
         cut = rest.find("\n")
         if cut >= 0:
             rest = rest[:cut]
-        for q in _QUOTED_D.finditer(_MD_IMG.sub("", rest)):
-            n = _clean_quote(q.group(1))
-            if n and n not in out:
-                out.append(n)
+        for pat in (_QUOTED_D, _QUOTED_CJK):
+            for q in pat.finditer(_MD_IMG.sub("", rest)):
+                n = _clean_quote(q.group(1))
+                if n and n not in out:
+                    out.append(n)
     return out
 
 
@@ -196,7 +210,7 @@ def _facts(req_id: str, name: str, desc: str, scenarios: list[dict],
                 if _HOME_HINT.search(content) or _ENTRY_HINT.search(content):
                     home_visible = True
                 if kw == "WHEN":
-                    for q in _quotes_in(content):
+                    for q in _quotes_in(content, for_control=True):
                         if q not in controls:
                             controls.append(q)
             elif kw == "THEN":
