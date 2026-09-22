@@ -76,8 +76,9 @@ class TestCompare:
         assert report["kpi"]["triage_rate_ge_60pct"] is False
         assert report["kpi"]["misjudge_rate_lt_5pct"] is True
 
-    def test_main_mock_run_exits_zero(self):
-        assert abe.main(["--mock"]) == 0
+    def test_main_mock_run_exits_zero(self, tmp_path):
+        # 缺省 --out 会真往 logs/ab_reports/ 落一份归档：测试不得污染工作区
+        assert abe.main(["--mock", "--out", str(tmp_path / "r.json")]) == 0
 
 
 class TestExternalCaseSet:
