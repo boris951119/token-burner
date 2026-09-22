@@ -29,6 +29,17 @@ from app.utils.parse import parse_json
 DEFAULT_TEST_CMD = [sys.executable, "-m", "pytest", "-q"]
 _MAX_TREE_ENTRIES = 400
 _MAX_FILE_CHARS = 60_000
+# 截断判据：修复协议要求「最小必要修改」，新版却掉到现版一半以下即视为
+# 模型输出被截断（阈值取得宽，正常修复不至于腰斩；小文件不套用）。
+_SHRINK_RATIO = 0.5
+_SHRINK_MIN_CHARS = 1200
+
+
+def _read_text(p: Path) -> str:
+    try:
+        return p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
 
 
 @dataclass
@@ -129,14 +140,14 @@ class RepoFixer:
                 result.diff = self._diff()
                 return result
             last_sig = sig
-            # 修复轮：带失败输出重出全部已改文件的完整新版。语法拒收的
-            # 文件必须点名告知模型——不说的话模型只知道"测试还红着"，
-            # 会照着同一份非法输出再撞一次（keep 彩排实证同一文件连拒 4 轮）。
+            # 修复轮：带失败输出逐文件重出完整新版。被拒的文件必须点名
+            # 告知模型——不说的话模型只知道"测试还红着"，会照着同一份非法
+            # 输出再撞一次（keep 彩排实证同一文件连拒 4 轮）。
             failure = detail
             if rejected:
                 failure = (
                     detail
-                    + "\n\n## 系统拒收清单（上一版语法非法，未写入磁盘）\n"
+                    + "\n\n## 系统拒收清单（上一版已被拒，未写入磁盘）\n"
                     + "\n".join(f"- {rel}: {msg}" for rel, msg in rejected)
                     + "\n上述文件磁盘上仍是修改前的旧版，必须整文件重发，"
                       "且先自检 Python 语法（括号/缩进/引号闭合）再输出。")
@@ -183,7 +194,7 @@ class RepoFixer:
         )
         out = self._chat(
             system,
-            f"## Issue\n{issue}\n\n## 修改目标\n{change}\n\n"
+            f"## Issue\n{issue}\n\n## 目标文件\n{path}\n\n## 修改目标\n{change}\n\n"
             f"{current_section}\n\n请输出该文件的完整新版内容。",
         )
         content = out.strip()
@@ -194,30 +205,23 @@ class RepoFixer:
 
     def _repatch(self, issue: str, changed: dict[str, str],
                  failure: str) -> dict[str, str] | None:
-        """修复轮:带失败输出,重出全部已改文件。"""
-        system = (
-            "你是资深工程师。上一版修改未通过仓库测试。"
-            "根据失败输出重新给出所有已改文件的完整新版内容。"
-            "只输出 JSON(不要围栏):"
-            '{"files": [{"path": "相对路径", "content": "完整新版内容"}]}'
-        )
-        files_section = "\n".join(
-            f"### {p}\n当前内容:\n{(c or '')[:_MAX_FILE_CHARS]}"
-            for p, c in changed.items())
-        obj, _ = parse_json(
-            self._chat(system,
-                       f"## Issue\n{issue}\n\n## 已改文件\n{files_section}\n\n"
-                       f"## 测试失败输出\n{failure}"),
-            location="repo_fix.repatch",
-        )
-        if not isinstance(obj, dict):
-            return None
+        """修复轮：逐文件重出（9/23 keep#3 取证改的这条）。
+
+        旧协议把**全部已改文件**塞进一个 JSON 响应——输出上限按整份响应
+        计，文件一多必然截断；截断的 JSON 又被 parse_json 的第 3 级容错
+        救回「半份文件」，写盘即语法非法，同一文件连拒数轮零收敛（实测
+        'invalid syntax (line 138)' 与 "'(' was never closed (line 116)"
+        接连出现）。逐文件走纯文本协议后：单份输出小一个量级，且一个文件
+        截断不再连带毁掉同批其他文件。"""
+        ask = (
+            "上一版未通过仓库测试。按下面的失败输出与拒收清单修正该文件，"
+            "与本次修复无关的部分逐字保持不动，输出该文件的完整新版内容。\n\n"
+            f"## 测试失败输出\n{failure}")
         out: dict[str, str] = {}
-        for f in obj.get("files", []):
-            path = str(f.get("path", "")).strip()
-            ok_path, resolved = self._safe_path(path)
-            if ok_path and f.get("content"):
-                out[resolved] = str(f["content"])
+        for rel, current in changed.items():
+            content = self._patch_file(issue, rel, ask, current or "")
+            if content:
+                out[rel] = content
         return out or None
 
     # ---- 应用 / 验证 / 工具 ----
@@ -234,7 +238,7 @@ class RepoFixer:
         return True, resolved.relative_to(self.repo).as_posix()
 
     def _apply(self, changed: dict[str, str]) -> list[tuple[str, str]]:
-        """落盘本轮草稿，返回被拒清单 [(rel, 语法错误)]。
+        """落盘本轮草稿，返回被拒清单 [(rel, 拒收原因)]。
 
         2026-09-20 取证：修复 LLM 曾把 .py 整文件写成 HTML 残渣
         （'<!-- ... -->' 开头）——落盘前语法自证，垃圾写一律不入库，
@@ -255,6 +259,23 @@ class RepoFixer:
                           flush=True)
                     rejected.append((rel, msg))
                     continue
+            old = _read_text(target)
+            # 语法合法但内容大幅缩水 = 模型输出被截断（尾部整段函数/路由
+            # 没了却能通过 compile）。这类静默丢失比语法错误更贵：应用照样
+            # 起服，测试永久红且失败输出与真因无关。拒收并点名原因。
+            if (len(old) >= _SHRINK_MIN_CHARS
+                    and len(content) < len(old) * _SHRINK_RATIO):
+                pct = len(content) * 100 // len(old)
+                why = (f"新版只有现版的 {pct}%（现版 {len(old)} 字符）"
+                       "——疑似输出被截断，整文件重发，禁止省略任何段落")
+                if len(old) > _MAX_FILE_CHARS:
+                    why += (f"；注意现版超过整文件重发上限 "
+                            f"{_MAX_FILE_CHARS} 字符，发给你的只是前段，"
+                            "请保持未改部分原样")
+                print(f"[repo_fix] 拒收疑似截断的修复内容 {rel}: {why}",
+                      flush=True)
+                rejected.append((rel, why))
+                continue
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")
         if rejected:
