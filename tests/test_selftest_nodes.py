@@ -200,11 +200,17 @@ class TestGenSystemLocatorPolicy:
             assert r in sg._GEN_SYSTEM, r
 
     def test_fill_channel_matches_official_helpers(self):
-        """官方 fillField 无 getByText 通道：输入框必须 label/placeholder 可达。"""
+        """官方 fillField 四级通道逐级 .or()，且没有 getByText 兜底。
+
+        两头都要钉死：只认 label 会比官方更严（placeholder-only 输入框
+        官方能填，我们判红就是白烧一轮修复）；放开 getByText 则比官方更
+        松（假绿，评测现场才红）。"""
         i, j = (sg._GEN_SYSTEM.index(s) for s in ("4b. 填输入框", "4c."))
         seg = sg._GEN_SYSTEM[i:j]
         for ch in ("getByLabel", "getByPlaceholder", "'textbox'", "'searchbox'"):
             assert ch in seg, ch
+        assert ".or()" in seg
+        assert "getByText 定位输入框" in seg
 
     def test_prompt_carries_no_official_task_names(self):
         """合规红线：随包提示词不得含官方专名/原文文案。"""
