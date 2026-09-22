@@ -130,7 +130,8 @@ def _gateway_preflight(settings) -> None:
 _KNOWN_RELAY_FALLBACKS = ("openai/minimax-m3", "openai/glm-5.3")
 
 
-def _export_official_layout(workdir: Path, project_dir: Path | None) -> bool:
+def _export_official_layout(workdir: Path, project_dir: Path | None,
+                            note: str = "") -> bool:
     """把项目按官方 runner 布局落地（backend/ + frontend/）。
 
     返回是否真正导出。导出是交付的最后一步：它失败不该改变交付终态，
@@ -142,7 +143,8 @@ def _export_official_layout(workdir: Path, project_dir: Path | None) -> bool:
         from app.platform_export import export_platform_layout
 
         summary = export_platform_layout(workdir, project_dir)
-        print("[export] 官方布局已落地: "
+        print("[export] 官方布局已落地"
+              f"{'（' + note + '）' if note else ''}: "
               f"backend={summary['backend_files']}文件, "
               f"frontend={summary['frontend_files']}文件, "
               f"入口={summary.get('entry') or 'author'}", flush=True)
@@ -448,6 +450,12 @@ def main(argv: list[str] | None = None) -> int:
         # 交付两段式验收（r2/r4 演练取证：逐模块门禁覆盖不了组装级缺陷；
         # 基础冒烟覆盖不了旅程级缺陷——评测方是 Playwright 走用户旅程）
         if result.project_dir is not None:
+            # 抢先导出：验收段可以跑几个小时，而官方侧的超时/OOM/预算截断
+            # 都是 SIGKILL——那时末尾这次导出根本不会执行，已经写完的代码
+            # 等于没写（输出目录里只有生成中间态）。先落一份可运行产物，
+            # 验收后按最终态覆盖（导出幂等：先清后写）。
+            _export_official_layout(workdir, result.project_dir,
+                                    note="抢先交付（验收前）")
             from app.arcbench_smoke import verify_delivery
 
             try:

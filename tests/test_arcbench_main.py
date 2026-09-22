@@ -509,3 +509,27 @@ class TestBudgetPartialDelivery:
             lambda w, p: called.append(p) or {})
         assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 1
         assert called == []
+
+
+def test_export_precedes_verify_so_a_kill_still_ships(monkeypatch, tmp_path,
+                                                      req_dir):
+    """抢先导出（9/23 结构漏洞）：验收段可以跑几个小时，而官方侧的超时/
+    OOM/预算截断是 SIGKILL——Python 末尾那次导出根本不会执行，输出目录里
+    只剩生成中间态，写完的代码等于没写。导出幂等，先落一份再按最终态覆盖。
+    """
+    out = tmp_path / "wsE"
+    _env(monkeypatch, out)
+    order: list[str] = []
+    _patch_llm_paths(monkeypatch, _team_result(tmp_path / "deliveryE"))
+    monkeypatch.setattr(
+        "app.arcbench_smoke.verify_delivery",
+        lambda *a, **k: (order.append("verify") or (True, "verify ok")))
+    monkeypatch.setattr(
+        "app.platform_export.export_platform_layout",
+        lambda w, p: (order.append("export")
+                      or {"backend_files": 1, "frontend_files": 1}))
+    rc = entry.main(
+        [str(req_dir), "-o", str(out), "--type", "web", "--mode", "auto"])
+    assert rc == 0
+    assert order == ["export", "verify", "export"], \
+        "验收前必须已经落一份可运行产物，验收后再按最终态覆盖"
