@@ -50,6 +50,26 @@ _TRANSIENT_MARKERS: tuple[str, ...] = (
 _EMPTY_CONTENT_MAX_TOKENS_CEILING = 24000
 
 
+def _is_timeout(exc: BaseException) -> bool:
+    """超时形态判定（内建 TimeoutError + 各家 SDK 的超时异常类）。
+
+    shape-keep 彩排取证（9/23 整跑夭折）：真实网关超时抛的是
+    litellm.Timeout，其 MRO 为 Timeout→APITimeoutError→APIConnectionError
+    →OpenAIError→Exception，**不含内建 TimeoutError**（那是 OSError 分支）。
+    于是旧判定 isinstance(exc, TimeoutError) 对生产路径上的超时永不命中，
+    墙钟快上抛只在自造的 TimeoutError 上生效——同腿照样吃满
+    (1+llm_max_retries)×llm_timeout_seconds，3 模型链 4×120s×3≈24 分钟
+    空烧后整跑 rc=1、零交付。
+
+    只按**类名**匹配（沿 MRO 找 "timeout"），不看消息文本：429/连接重置
+    这类错误的消息里常带 "timeout" 字样，但它们没实打实耗掉一整段等待，
+    同腿退避重试仍然划算，不该被拖进换腿快通道。
+    """
+    if isinstance(exc, TimeoutError):
+        return True
+    return any("timeout" in c.__name__.lower() for c in type(exc).__mro__)
+
+
 def _is_transient(exc: Exception) -> bool:
     """判断异常是否为瞬态（可退避重试）。"""
     if isinstance(exc, TimeoutError):
@@ -256,7 +276,9 @@ class ModelClient:
                 # keep7v 取证：墙钟超时已实打实耗掉 limit 秒，同腿重试
                 # 只会再耗一次（网关挂连接 ×(1+重试)×20min 可烧穿整条
                 # 链）。换腿才是正确重试——立即上抛交给上层模型备胎链。
-                if isinstance(exc, TimeoutError):
+                # shape-keep 彩排修正：判定口径从「仅内建 TimeoutError」
+                # 放宽到各家 SDK 的超时类，真实网关超时同走此快通道。
+                if _is_timeout(exc):
                     raise RuntimeError(
                         f"{error_prefix}（{model}）: {exc}") from exc
                 if not _is_transient(exc):

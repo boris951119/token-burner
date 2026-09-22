@@ -293,6 +293,99 @@ class TestWallClockDefense:
         assert _is_transient(TimeoutError("墙钟 600s timed out"))
 
 
+# ---------------------------------------------------------------------------
+# shape-keep 彩排取证（9/23）：真实网关超时从未命中「换腿」快通道
+# ---------------------------------------------------------------------------
+
+
+class GatewayTimeout(Exception):
+    """形态仿真：litellm.Timeout 的 MRO **不含**内建 TimeoutError。
+
+    真身链条 Timeout→APITimeoutError→APIConnectionError→OpenAIError→
+    Exception：openai 异常树挂在 Exception 下，与内建 TimeoutError
+    （OSError 分支）素无瓜葛——所以 isinstance(exc, TimeoutError) 只在
+    自造墙钟异常上成立，生产路径上的超时一律走「瞬态 → 同腿退避重试」。
+    """
+
+
+class AlwaysGatewayTimeout:
+    def __init__(self):
+        self.calls = 0
+
+    def __call__(self, **kwargs):
+        self.calls += 1
+        raise GatewayTimeout(
+            "litellm.Timeout: APITimeoutError - Request timed out.")
+
+
+class TestTimeoutSwitchesLeg:
+    """超时＝这条腿已经把这段时间实打实烧完，同腿再烧一次不会更快。"""
+
+    def test_gateway_timeout_escalates_without_same_leg_retry(self, gpt_key):
+        """彩排实害：讨论阶段一条腿吃满 (1+3)×120s，3 模型链 24 分钟空烧
+        后整跑 rc=1、零交付。修后一次超时即上抛，交上层模型备胎链。"""
+        boom = AlwaysGatewayTimeout()
+        recorder = SleepRecorder()
+        client = _client(
+            completion=boom, sleep=recorder,
+            llm_max_retries=3, retry_backoff_base=0.01,
+        )
+        with pytest.raises(RuntimeError) as ei:
+            client.chat("gpt-4o", _MSG)
+        assert boom.calls == 1, "超时不得同腿重试"
+        assert recorder.delays == [], "超时不得同腿退避"
+        assert "已重试" not in str(ei.value)
+
+    def test_wall_clock_timeout_still_switches_leg(self, gpt_key):
+        """内建 TimeoutError（墙钟）走同一判定，旧行为不回退。"""
+        from app.utils.model_client import _is_timeout
+
+        assert _is_timeout(TimeoutError("墙钟上限 600s"))
+
+    def test_real_litellm_timeout_shape(self):
+        """钉住真实 SDK 形态：类名含 Timeout 且不是内建 TimeoutError。"""
+        pytest.importorskip("litellm")
+        from litellm.exceptions import Timeout as LiteLLMTimeout
+
+        from app.utils.model_client import _is_timeout
+
+        exc = LiteLLMTimeout(
+            message="Request timed out.", model="gpt-4o", llm_provider="openai")
+        assert not isinstance(exc, TimeoutError)  # 旧判定为何失灵
+        assert _is_timeout(exc)
+
+    def test_message_mentioning_timeout_keeps_same_leg_retry(self):
+        """只按类名匹配，不误伤「消息里带 timeout 字样」的可同腿重试错误
+        （429 响应体常含该字样，换腿反而丢掉唯一健康的模型）。"""
+        from app.utils.model_client import _is_timeout, _is_transient
+
+        exc = RuntimeError("429 rate limit: retry-after timeout bucket")
+        assert not _is_timeout(exc)
+        assert _is_transient(exc)
+
+    def test_gateway_timeout_recovers_on_second_leg(self, gpt_key):
+        """端到端：一条腿超时后编排层换腿仍能拿到评审——备胎链接力见
+        test_discussion_fallback.py（评审路径彩排当场夭折）。"""
+        calls = []
+
+        def completion(**kwargs):
+            calls.append(kwargs["model"])
+            if len(calls) == 1:
+                raise GatewayTimeout("litellm.Timeout: Request timed out.")
+            return _resp("ok")
+
+        client = _client(
+            completion=completion, sleep=SleepRecorder(),
+            llm_max_retries=3, retry_backoff_base=0.01,
+            models=["gpt-4o", "gpt-4o-mini"],
+        )
+        with pytest.raises(RuntimeError):
+            client.chat("gpt-4o", _MSG)   # ModelClient 不换腿，交上层
+        resp = client.chat("gpt-4o-mini", _MSG)
+        assert resp.content == "ok"
+        assert calls == ["gpt-4o", "gpt-4o-mini"]
+
+
 class ContentlessThenGood:
     """r7b 取证：网关偶发返回 message.content 缺失的响应（评审模型）。"""
 
