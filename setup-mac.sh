@@ -17,8 +17,11 @@ echo "[2/5] 建 venv 并装依赖"
 .venv/bin/pip install -q --upgrade pip
 .venv/bin/pip install -q -r requirements.txt
 
-echo "[3/5] Playwright Chromium"
-.venv/bin/python -m playwright install chromium
+echo "[3/5] Playwright（评分链路走 node 侧 npx，非 pip playwright 包）"
+# 国内网络建议：npm config set registry https://registry.npmmirror.com
+# 并导出 PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright
+(cd scripts/official_grade && npm install --no-fund --no-audit \
+  && npx playwright install chromium)
 
 echo "[4/5] 配置自检"
 [ -f .env ] || echo "  !! .env 缺失——从中转机拷贝后再跑生成/评分"
