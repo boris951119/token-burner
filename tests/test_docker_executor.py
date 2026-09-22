@@ -400,7 +400,7 @@ class TestDockerLive:
             "    with open('/attack.txt', 'w') as f:\n"
             "        f.write('x')\n"
             "    print('WRITE_OK')\n"
-            "except PermissionError:\n"
+            "except OSError:  # EROFS(30, Colima/内核) 或 EACCES(13→PermissionError)\n"
             "    print('WRITE_BLOCKED')\n"
         )
         result = executor.run(code, "", timeout=60, module="m")
