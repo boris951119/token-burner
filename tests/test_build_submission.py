@@ -130,3 +130,97 @@ def test_official_task_material_in_body_is_flagged():
         zf.writestr("app/notes.md", "抄自 https://github.com/code-philia/x")
     with zipfile.ZipFile(io.BytesIO(buf.getvalue())) as zf:
         assert any("官方素材" in m for m in bs._content_leaks(zf))
+
+
+# ---- 解释器天花板：包里跑的容器只有 python:3.11-slim ---------------------
+# 开发机是 3.12、容器是 3.11。产品代码里出现 3.12 才有的语法或标准库符号，
+# 导入期即崩——那是整跑 exit 1（不评分），下游任何验收闸都救不回来。
+# 9/23 实测口径：ast 的 feature_version 能挡 PEP 695（type 语句/泛型参数
+# 列表），但挡不住 PEP 701 的 f-string 放宽；新增符号因此走 AST 属性/导入
+# 判定——按文本判会把提示词里的禁令本身误当代码（第一版就是这么炸的）。
+
+_FROM_312 = {                       # from <mod> import <name>
+    "itertools": {"batched"},
+    "datetime": {"UTC"},
+    "typing": {"override"},
+}
+_ATTR_312 = {                       # <mod>.<attr>
+    "itertools": {"batched"},
+    "datetime": {"UTC"},
+    "sys": {"monitoring"},
+    "typing": {"override"},
+    "pathlib": {"Path"},
+}
+_PATH_NAMES = {"Path", "PurePath", "pathlib"}
+
+
+def _py312_hits(src: str) -> list[str]:
+    """只认代码结构：字符串与注释里的同名词不算（题面提示词自带禁令）。"""
+    import ast
+
+    hits: list[str] = []
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return hits                     # 语法段由 feature_version 检查负责
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            mod = (node.module or "").split(".")[0]
+            for a in node.names:
+                if a.name in _FROM_312.get(mod, set()):
+                    hits.append(f"from {mod} import {a.name}")
+        elif isinstance(node, ast.Attribute):
+            base = node.value
+            while isinstance(base, ast.Attribute):
+                base = base.value
+            if isinstance(base, ast.Call):
+                base = base.func
+            if not isinstance(base, ast.Name):
+                continue
+            if base.id in _ATTR_312 and node.attr in _ATTR_312[base.id]:
+                hits.append(f"{base.id}.{node.attr}")
+            elif node.attr == "walk" and base.id in _PATH_NAMES:
+                hits.append(f"{base.id}.walk")
+    return hits
+
+
+def test_py311_guard_itself_detects():
+    """守卫不得是安慰剂：真写法必须命中，散文与 innocuous 同名属性不得命中。"""
+    assert _py312_hits("from itertools import batched\n")
+    assert _py312_hits("now = datetime.UTC.now()\n")
+    assert _py312_hits("for root, ds, fs in Path('.').walk():\n    pass\n")
+    assert _py312_hits("from datetime import UTC\n")
+    # os.walk 与 pathlib 无关；题面里的禁令是字符串，不是代码
+    assert not _py312_hits("for r in os.walk('.'):\n    pass\n")
+    assert not _py312_hits(
+        "RULE = '禁止 itertools.batched、datetime.UTC、Path.walk（3.12 起）'\n")
+    # 语法腿同样要真的在挡（9/23 实测 feature_version 只挡 PEP 695）
+    import ast
+
+    with pytest.raises(SyntaxError):
+        ast.parse("type X = int\n", feature_version=(3, 11))
+    with pytest.raises(SyntaxError):
+        ast.parse("def f[T](x: T) -> T:\n    return x\n",
+                  feature_version=(3, 11))
+
+
+def test_shipped_product_code_parses_and_runs_on_py311():
+    import ast
+
+    root = Path(__file__).resolve().parents[1]
+    files = [root / "main.py",
+             *[p for p in sorted((root / "app").rglob("*.py"))
+               if "__pycache__" not in p.parts]]
+    assert len(files) > 40, "扫描集不得为空：路径变了要跟着改"
+    bad: list[str] = []
+    for py in files:
+        rel = str(py.relative_to(root))
+        src = py.read_text(encoding="utf-8", errors="replace")
+        try:
+            ast.parse(src, filename=rel, feature_version=(3, 11))
+        except SyntaxError as exc:
+            bad.append(f"{rel}: 3.11 无法解析（{exc.msg}）")
+            continue
+        bad += [f"{rel}: 3.12 专属符号 {h}" for h in _py312_hits(src)]
+    assert not bad, "官方容器解释器是 3.11，崩在导入期=整跑不评分：\n" \
+        + "\n".join(bad)
