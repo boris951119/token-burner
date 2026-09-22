@@ -119,6 +119,7 @@ def test_fixture_tail_facts_survive_truncation(tmp_path):
         'await expect(page.getByRole("combobox")).toBeVisible();\n'
         'const role = "button"; const seed = "arrival@hub.com";\n'
         'expect(text).toBe("Arrival Time");\n'
+        'expect(zh).toBe("本周无排班");\n'
     )
     body = 'export const HEAD = "Login";\n' + ("// pad\n" * 1400) + tail
     (tests_dir / "helpers.ts").write_text(body, encoding="utf-8")
@@ -127,6 +128,7 @@ def test_fixture_tail_facts_survive_truncation(tmp_path):
     assert "【夹具截断尾部关键串" in hint
     cont = hint.split("【夹具截断尾部关键串", 1)[1]
     assert "Passport number" in cont and "Arrival Time" in cont
+    assert "本周无排班" in cont  # 纯 CJK 标签无大小写/空格线索，须按字符区间保留
     assert "arrival@hub.com" in cont
     assert "combobox" not in cont and "button" not in cont
     assert "Login" in hint  # head 段原样保留

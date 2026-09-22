@@ -283,7 +283,8 @@ _FIXTURE_QUOTED_RE = re.compile(r"[\"'`]([^\"'`\n]{3,80})[\"'`]")
 def _fixture_tail_facts(head: str, tail: str) -> str:
     """截断尾段的逐字事实串 → 契约续块（不含则整体丢弃）。
 
-    保留判据＝可见文案形态：含大写 / 含空格 / 含 @（邮箱类种子）；
+    保留判据＝可见文案形态：含大写 / 含空格 / 含 @（邮箱类种子）/
+    含 CJK（中文题面的标签与提示语）；
     剔除 ARIA role、CSS/路径、模板插值、箭头函数等测试机制代码串。"""
     head_strings = set(_FIXTURE_QUOTED_RE.findall(head))
     kept: list[str] = []
@@ -292,7 +293,9 @@ def _fixture_tail_facts(head: str, tail: str) -> str:
         s = m.group(1)
         if s in head_strings or s in seen:
             continue
-        if not any(c.isupper() for c in s) and " " not in s and "@" not in s:
+        has_cjk = any("\u4e00" <= c <= "\u9fff" for c in s)
+        if (not any(c.isupper() for c in s) and " " not in s
+                and "@" not in s and not has_cjk):
             continue
         if "${" in s or "=>" in s or s.startswith(("http", "./", "../", "#", "/")):
             continue
