@@ -190,3 +190,115 @@ class TestAssessmentResult:
         llm = FakeRouterLLM([bad, bad, bad, bad])
         result = make_router(llm).route("x")
         assert result.fallback is True
+
+
+class FlakyRouterLLM:
+    """按剧本逐次应答：字符串＝返回内容，异常实例＝抛出。
+
+    shape-keep 彩排（9/23）取证用：真实网关故障形态是「某几次调用抛错」，
+    纯文本剧本的桩覆盖不到这条支路。
+    """
+
+    def __init__(self, plan: list):
+        self.plan = list(plan)
+        self.calls: list[tuple[str, list]] = []
+
+    def chat(self, model, messages, json_mode=False):
+        self.calls.append((model, messages))
+        if not self.plan:
+            item = eval_json()
+        else:
+            item = self.plan.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return LLMResponse(model=model, content=item,
+                           input_tokens=10, output_tokens=5)
+
+
+GATEWAY_DOWN = RuntimeError("评审模型 openai/deepseek-v4-pro 调用失败: Timeout")
+
+
+class TestCallFailureDegrades:
+    """评估/复核环的「一条腿故障不谋杀整跑」（批次#21，与 #18/#19/#20 同族）。"""
+
+    def test_gateway_error_degrades_to_conservative_coding(self):
+        # 全部尝试都抛：走既有硬回退（保守编程 + 交用户确认），而不是直穿中止
+        llm = FlakyRouterLLM([GATEWAY_DOWN] * 4)
+        result = make_router(llm).route("任意需求")
+        assert result.fallback is True
+        assert result.route == Route.TEAM_FLOW
+        assert result.task_type == "编程"
+        assert "评估调用失败" in result.reason
+        assert len(llm.calls) == 4, "首次 + 3 次严格重试都应尝试过"
+
+    def test_gateway_hiccup_recovers_within_retries(self):
+        # 腿抖一下即恢复 → 不算降级（fallback=False，正常按分数路由）
+        llm = FlakyRouterLLM([GATEWAY_DOWN, eval_json(score=2, task_type="基础")])
+        result = make_router(llm).route("任意需求")
+        assert result.fallback is False
+        assert result.route == Route.DIRECT_OUTPUT
+        assert len(llm.calls) == 2
+
+    def test_reason_reflects_last_failure_cause(self):
+        # 先抛后返回坏文本：最终拿不到评估的成因是解析，措辞不得甩锅网关
+        llm = FlakyRouterLLM([GATEWAY_DOWN, "坏的", "依旧坏的", "彻底坏的"])
+        result = make_router(llm).route("任意需求")
+        assert result.fallback is True
+        assert "评估输出解析失败" in result.reason
+        assert "网关" not in result.reason
+
+    def test_config_error_never_degrades(self):
+        # 缺密钥不是「腿抖」：降级＝拿整场预算烧出垃圾交付，必须当场失败
+        from app.utils.model_client import MissingApiKeyError
+        llm = FlakyRouterLLM(
+            [MissingApiKeyError("模型「gpt-4o」需要环境变量 OPENAI_API_KEY")] * 4)
+        with pytest.raises(MissingApiKeyError):
+            make_router(llm).route("任意需求")
+        assert len(llm.calls) == 1
+
+    def test_budget_exhausted_never_degrades(self):
+        from app.utils.budget import BudgetExceededError
+        llm = FlakyRouterLLM([BudgetExceededError("总闸")] * 4)
+        with pytest.raises(BudgetExceededError):
+            make_router(llm).route("任意需求")
+        assert len(llm.calls) == 1, "总闸必须直穿，降级重试＝绕过中止继续烧"
+
+    def test_cancel_error_never_degrades(self):
+        from app.utils.budget import TaskCancelledError
+        llm = FlakyRouterLLM([TaskCancelledError("取消")] * 4)
+        with pytest.raises(TaskCancelledError):
+            make_router(llm).route("任意需求")
+        assert len(llm.calls) == 1
+
+    def test_cancel_error_not_swallowed_by_fast_triage(self):
+        # 快判的「静默降级 System-2」兜底只该管调用失败，不该吞掉取消旗标
+        from app.config import Settings
+        from app.utils.budget import TaskCancelledError
+        llm = FlakyRouterLLM([TaskCancelledError("取消"), eval_json(score=2)])
+        router = make_router(
+            llm, settings=Settings(fast_triage_enabled=True))
+        with pytest.raises(TaskCancelledError):
+            router.route("你好")
+        assert llm.calls[0][0] == router.settings.fast_triage_model
+        assert len(llm.calls) == 1, "取消不得被转成「升级 System-2 继续跑」"
+
+    def test_recheck_call_failure_keeps_original_judgement(self):
+        # 复核环：调用抛错＝拿不到复核结论 → 维持原判（模型已给过结论）
+        llm = FlakyRouterLLM([
+            eval_json(score=2, task_type="基础", reason="看着像文本活"),
+            GATEWAY_DOWN,
+        ])
+        result = make_router(llm).route("帮我写一个脚本运行 data.py 并输出结果")
+        assert result.rechecked is True
+        assert result.task_type == "基础"
+        assert "复核调用失败" in result.reason
+
+    def test_recheck_parse_failure_wording(self):
+        # 同为维持原判，成因措辞要把「调不通」和「听不懂」分开
+        llm = FlakyRouterLLM([
+            eval_json(score=2, task_type="基础", reason="看着像文本活"),
+            "这不是JSON",
+        ])
+        result = make_router(llm).route("帮我写一个脚本运行 data.py 并输出结果")
+        assert "复核输出解析失败" in result.reason
+

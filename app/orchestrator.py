@@ -40,6 +40,7 @@ from app.tools.prompt_templates import (
     TASK_ASSESSMENT_USER,
 )
 from app.utils.budget import BudgetExceededError, TaskCancelledError
+from app.utils.model_client import _is_timeout, _is_transient
 from app.utils.parse import parse_json
 from app.utils.similarity import LoopDetector
 from app.utils.untrusted import sanitize_untrusted
@@ -164,6 +165,8 @@ class TaskRouter:
         self.main_model = main_model
         self.settings = settings
         self._triage = FastTriage(llm, settings)
+        # 降级理由如实措辞用（_assess 记录最近一次调用失败）
+        self._assess_error: str | None = None
 
     def route(self, requirement: str) -> RoutingResult:
         # M9-2：System-1 快判前置（fast_triage_enabled 开启时）；
@@ -176,12 +179,15 @@ class TaskRouter:
 
         if assessment is None:
             # 15.3 硬回退：保守默认视作编程任务 + 提示用户手动确认
+            # （两种拿不到评估的成因分开措辞：解析失败 vs 模型根本不可达）
+            cause = ("评估调用失败（网关/模型不可达）" if self._assess_error
+                     else "评估输出解析失败")
             return RoutingResult(
                 route=Route.TEAM_FLOW,
                 task_type="编程",
                 difficulty_score=0,
                 difficulty_level="未知",
-                reason="评估输出解析失败，按保守默认视作编程任务",
+                reason=f"{cause}，按保守默认视作编程任务",
                 fallback=True,
                 needs_user_confirm=True,
             )
@@ -218,6 +224,8 @@ class TaskRouter:
             return None
         try:
             triage = self._triage.classify(requirement)
+        except (BudgetExceededError, TaskCancelledError):
+            raise  # 总闸/取消不是「快判失败」，静默降级 System-2 = 拖延中止
         except (RuntimeError, ValueError):
             # LLM 调用失败（超时/限流/密钥缺失/模型未登记）→ 静默降级
             # System-2；编程类错误不捕获，照常暴露
@@ -285,6 +293,25 @@ class TaskRouter:
     # 评估调用（含 15.3 重试与硬回退）
     # ------------------------------------------------------------------
 
+    def _call_json(self, model: str, messages: list[dict]):
+        """json_mode 单腿调用 → (响应, 失败原因)，瞬态故障时响应为 None。
+
+        shape-keep 彩排（9/23）：一条腿的网关超时直穿 pipeline.run = 整跑
+        零交付。评估/复核环节本就设计了「拿不到可用结论 → 降级」的硬回退，
+        网关瞬态故障同属这一类，走同一条路。
+        只吞瞬态：缺密钥/模型未登记这类配置错误降级＝拿 40 分钟烧出一堆
+        垃圾交付，不如当场失败（/api/route 的 503 契约同样依赖这条区分）。
+        预算/取消例外：必须直穿，降级续跑等于绕过中止继续烧。
+        """
+        try:
+            return self.llm.chat(model, messages, json_mode=True), ""
+        except (BudgetExceededError, TaskCancelledError):
+            raise
+        except RuntimeError as exc:
+            if not (_is_transient(exc) or _is_timeout(exc)):
+                raise
+            return None, f"{type(exc).__name__}: {exc}"[:200]
+
     def _assess(self, requirement: str) -> dict | None:
         # M7-6：需求文本是不可信输入，注入提示词前包裹数据边界
         wrapped = sanitize_untrusted(requirement)
@@ -301,9 +328,16 @@ class TaskRouter:
         ]
 
         # 首次尝试 + 最多 max_parse_retries 次严格重试（15.3）
+        self._assess_error = None
         attempts = [messages] + [strict_messages] * self.settings.max_parse_retries
         for i, msgs in enumerate(attempts):
-            response = self.llm.chat(self.main_model, msgs, json_mode=True)
+            response, error = self._call_json(self.main_model, msgs)
+            if response is None:
+                self._assess_error = error
+                continue
+            # 降级理由只反映「最后一次失败的真实成因」：本轮拿到了响应，
+            # 之前那次网关故障就不再是兜底措辞的依据。
+            self._assess_error = None
             value, _detail = parse_json(
                 response.content, location="difficulty_assessment"
             )
@@ -330,17 +364,20 @@ class TaskRouter:
                 ),
             },
         ]
-        response = self.llm.chat(self.main_model, messages, json_mode=True)
-        value, _detail = parse_json(response.content, location="recheck_assessment")
+        response, _error = self._call_json(self.main_model, messages)
+        value = (None if response is None
+                 else parse_json(response.content, location="recheck_assessment")[0])
         if value is not None and self._valid(value):
             return value
         # 复核失败：维持原判定（大模型已给过结论，程序不越权改写）
+        # 调用失败与解析失败同路——彩排取证：一条腿超时曾谋杀整跑
         return {
             "task_type": original_type,
             "difficulty_score": 0,
             "difficulty_level": "未知",
             "estimated_files": 0,
-            "reason": "复核输出解析失败，维持原判定",
+            "reason": ("复核调用失败，维持原判定" if response is None
+                       else "复核输出解析失败，维持原判定"),
         }
 
     @staticmethod
