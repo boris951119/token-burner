@@ -214,3 +214,69 @@ def test_relative_project_dir_still_launches_absolute(tmp_path, monkeypatch,
     sg.run_selftests(Path("proj"), None)
     assert Path(captured["argv"][1]).is_absolute(), captured["argv"]
 
+
+def test_out_of_scope_judging_skips_without_burning_repair(tmp_path,
+                                                          monkeypatch):
+    """平台侧唯一的闸：判分语料为空且入口页是 JS 挂载壳时，逐条事实判红
+    全是幻影失败——修复环围着修不好的东西每轮烧 1800s 验证 + 真金 token，
+    还可能把能跑的应用改坏。正确结论是"射程外跳过"：零信号软失败、
+    原因进报告、一步修复都不发起。"""
+    import app.arcbench_smoke as sm
+    import app.utils.acceptance_judge as aj
+
+    _stub_server(monkeypatch, tmp_path)
+    monkeypatch.setenv("ARCBENCH_SELFTEST", "on")
+    monkeypatch.setattr(sg, "node_unavailable_reason", lambda: NO_NODE)
+    monkeypatch.setattr(
+        aj, "judge_requirements",
+        lambda rd, url: {"passed": 0, "failed": 0, "total": 5, "failures": [],
+                         "skipped": "入口页为 JS 挂载壳：静态判分射程外"})
+
+    def no_repair(*a, **k):
+        raise AssertionError("射程外跳过不得触发修复环")
+
+    monkeypatch.setattr(sm, "auto_repair", no_repair)
+    ok, report = sg.selftest_gate(tmp_path, "需求", settings=None,
+                                  requirements_dir=tmp_path / "reqs")
+    assert ok is False and "修复环" not in report
+    assert "JS 挂载壳" in report, "跳过原因必须见于报告"
+
+
+def test_static_blank_home_is_one_directed_failure(tmp_path, monkeypatch):
+    """同源语料为空但无 JS 挂载点（静态空壳/入口不可达）：这是真死因，
+    记一条根因失败并照常进修复环——而不是把 N 条逐字事实摊成 N 条幻影。"""
+    import app.arcbench_smoke as sm
+
+    _stub_server(monkeypatch, tmp_path)   # 假起服：端口上其实无人监听
+    monkeypatch.setenv("ARCBENCH_SELFTEST", "on")
+    monkeypatch.setattr(sg, "node_unavailable_reason", lambda: NO_NODE)
+    reqs = tmp_path / "reqs"
+    reqs.mkdir()
+    (reqs / "requirements.yaml").write_text(
+        "id: ROOT\ntype: FOLDER\nchildren:\n"
+        "  - id: REQ-2\ntype: FOLDER\n    children:\n"
+        "      - id: REQ-2.1\n        type: ATOMIC\n"
+        "        name: Listing\n        description: >\n"
+        "          Seed data: note \"Sprint goals\". The home page shows it.\n"
+        "        scenarios:\n          - name: s\n            steps:\n"
+        "              - keyword: GIVEN\n"
+        "                content: the app is open on the home page\n"
+        "              - keyword: WHEN\n"
+        "                content: 'press \"Take a note\"'\n"
+        "              - keyword: THEN\n"
+        "                content: the \"Notes list\" heading appears\n",
+        encoding="utf-8")
+    seen = {}
+
+    def fake_repair(project_dir, settings, **kw):
+        seen["issue"] = kw.get("extra_issue") or ""
+        return False, "修复未收敛"
+
+    monkeypatch.setattr(sm, "auto_repair", fake_repair)
+    ok, report = sg.selftest_gate(tmp_path, "需求", settings=None,
+                                  requirements_dir=reqs)
+    assert ok is False
+    issue = seen.get("issue", "")
+    assert "无可见文本" in issue, issue
+    assert "编译清单" not in issue, f"不得再摊幻影失败：\n{issue}"
+

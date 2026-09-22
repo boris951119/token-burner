@@ -9,7 +9,10 @@
 - 只判 home_visible 节点的 seed_entities（可见文案通道）与 control_labels
   （文本/placeholder/aria-label/value/alt/title 任一属性通道）；
 - 失败串以 REQ id 开头（grade_repair_loop 的 re.match(r"(REQ-[\\d.]+)")
-  直接可抓），进修复环即为定向指令。
+  直接可抓），进修复环即为定向指令；
+- 语料近乎为空时不逐条判红（否则一个根因摊成 N 条幻影失败）：入口页含
+  JS 挂载点 → skipped 射程外（客户端渲染，静态判分看不见），否则记一条
+  「首页无可见文本」根因失败。
 通用性（9/22 判据）：规则不含任何题目词——任何 web 应用 × 任何
 GWT 需求树都同样可判。
 """
@@ -31,6 +34,16 @@ _ATTRVAL = re.compile(
 _SCRIPT = re.compile(r"<(script|style)[\s\S]*?</\1>", re.I)
 _TAG = re.compile(r"<[^>]+>")
 _WS = re.compile(r"\s+")
+# 判分语料下限（字符，文本与属性两侧都低于才算空）：低于此值说明入口
+# 可达页根本没有渲染出内容，此时逐条事实判红只会把一个根因摊成 N 条修不
+# 好的幻影失败。取值刻意保守——真应用首页（导航 + 种子名 + 表单标签）
+# 稳定数百字符，只有空壳/5xx/拒连才会掉到几十以下。
+_THIN_CORPUS = 40
+# 客户端渲染外壳的标志：文案由 JS 注水进挂载点，静态抓取的语料必然为空
+# ——那是判分器射程外，不是应用的错（官方评测跑真浏览器，看得见）。
+_JS_MOUNT = re.compile(
+    r"""<(?:div|main|body|noscript)[^>]*\bid=["']"""
+    r"""(?:app|root|next|nuxt|app-root|react-root|vue-root)["']""", re.I)
 
 
 def _norm(s: str) -> str:
@@ -44,13 +57,15 @@ def _fetch(url: str, timeout: float) -> str:
 
 
 def _crawl_pages(base_url: str, max_pages: int,
-                 timeout: float) -> tuple[str, str]:
-    """入口 BFS 一跳：返回（全页可见文本语料, 属性值语料）。"""
+                 timeout: float) -> tuple[str, str, bool]:
+    """入口 BFS 一跳：返回（全页可见文本语料, 属性值语料, 入口页是否
+    JS 挂载壳）。"""
     base = base_url.rstrip("/")
     queue: list[str] = ["/"]
     seen: set[str] = set()
     texts: list[str] = []
     attrs: list[str] = []
+    shell = False
     while queue and len(seen) <= max_pages:
         path = queue.pop(0)
         if path in seen:
@@ -60,6 +75,8 @@ def _crawl_pages(base_url: str, max_pages: int,
             body = _fetch(base + path, timeout)
         except Exception:
             continue
+        if path == "/":
+            shell = bool(_JS_MOUNT.search(body))
         attrs += _ATTRVAL.findall(body)
         texts.append(_norm(_html.unescape(
             _TAG.sub(" ", _SCRIPT.sub(" ", body)))))
@@ -67,7 +84,7 @@ def _crawl_pages(base_url: str, max_pages: int,
             if (href.startswith("/") and not href.startswith("//")
                     and not _ASSET.search(href) and href not in seen):
                 queue.append(href.split("?")[0].split("#")[0])
-    return "\n".join(texts), "\n".join(attrs)
+    return "\n".join(texts), "\n".join(attrs), shell
 
 
 def _iter_facts(checklists: Iterable[NodeChecklist]):
@@ -88,9 +105,27 @@ def judge_checklists(checklists: list[NodeChecklist], base_url: str,
     facts = list(_iter_facts(checklists))
     if not facts:
         return {"passed": 0, "failed": 0, "total": 0, "failures": []}
-    text_blob, attr_blob = _crawl_pages(base_url, max_pages, timeout)
+    text_blob, attr_blob, shell = _crawl_pages(base_url, max_pages, timeout)
     text_norm = _norm(text_blob)
     attr_norm = _norm(attr_blob)
+    if len(text_norm) < _THIN_CORPUS and len(attr_norm) < _THIN_CORPUS:
+        # 官方交付容器无 node → Playwright 段 SKIP，本判分器是唯一质量闸。
+        # 语料近乎为空时"事实全部缺席"是判分器失明的假象，不是 N 个缺陷：
+        # 客户端渲染外壳记射程外跳过（幻影失败会让修复环围着修不好的东西
+        # 烧掉整轮），静态空壳/入口 5xx 记一条根因（首页落空是真死因）。
+        if shell:
+            return {"passed": 0, "failed": 0, "total": len(facts),
+                    "failures": [],
+                    "skipped": f"入口页为 JS 挂载壳（可见文本 {len(text_norm)}"
+                               " 字符）：文案由客户端渲染，静态判分射程外"}
+        return {"passed": 0, "failed": 1, "total": 1,
+                "failures": [
+                    f"入口可达页面几乎无可见文本（{len(text_norm)} 字符，"
+                    f"判分语料为空）：首页 / 必须 200 且渲染真实内容与可点"
+                    f"导航链接——空白页/纯文字壳/入口 5xx 会让全部用例在导航"
+                    f"一步连环落空（本轮 {len(facts)} 条逐字事实未判，"
+                    f"先修首页）"],
+                "note": "判分语料为空：逐条事实判红已归并为一条根因"}
     failures: list[str] = []
     for req_id, kind, ent in facts:
         e = _norm(ent)

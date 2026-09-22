@@ -21,8 +21,9 @@ PAGES = {
 
 class _H(BaseHTTPRequestHandler):
     def do_GET(s):  # noqa: N805
-        body = PAGES.get(s.path, "").encode()
-        s.send_response(200)
+        body = s.server.pages.get(s.path, "").encode()
+        code = s.server.codes.get(s.path, 200)
+        s.send_response(code)
         s.send_header("Content-Type", "text/html; charset=utf-8")
         s.end_headers()
         s.wfile.write(body)
@@ -31,10 +32,17 @@ class _H(BaseHTTPRequestHandler):
         pass
 
 
+def _serve(pages: dict, codes: dict | None = None):
+    srv = HTTPServer(("127.0.0.1", 0), _H)
+    srv.pages = pages
+    srv.codes = codes or {}
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
 @pytest.fixture(scope="module")
 def base_url():
-    srv = HTTPServer(("127.0.0.1", 0), _H)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    srv = _serve(PAGES)
     yield f"http://127.0.0.1:{srv.server_address[1]}"
     srv.shutdown()
 
@@ -71,9 +79,11 @@ def test_non_home_nodes_skipped(base_url):
 
 def test_dead_server_degrades_all_fail_not_crash():
     ck = [_ck(seed_entities=["X"], control_labels=["Y"])]
-    # 端口 1 必然拒连：判分器不得抛异常，全部记红
+    # 端口 1 必然拒连：判分器不得抛异常，且必须记红
     r = judge_checklists(ck, "http://127.0.0.1:1", timeout=1.0)
-    assert r["failed"] == 2 and len(r["failures"]) == 2
+    assert r["failed"] == 1 and len(r["failures"]) == 1
+    # 语料为空时不摊成 N 条幻影失败：一个根因一句话，修复环才有的可修
+    assert "无可见文本" in r["failures"][0]
 
 
 def test_requirements_e2e(base_url, tmp_path):
@@ -94,3 +104,56 @@ def test_requirements_e2e(base_url, tmp_path):
 
     r = judge_requirements(tmp_path, base_url)
     assert r["total"] >= 2 and r["failed"] == 0, r["failures"]
+
+
+# ---- 判分语料近乎为空：平台侧唯一的闸不得摊派幻影失败 ----
+# 官方交付容器无 node → Playwright 段整体 SKIP，编译清单判分是唯一的
+# 质量闸。此时若入口页抓不到可见文本，逐条事实记红 = N 条修不好的幻影
+# 失败直灌修复环（每轮 1800s 验证 + 真金 token），而根因只有一条。
+
+SPA = {"/": ('<!doctype html><html><body><div id="root"></div>'
+             '<script>ReactDOM.render(x, document.getElementById("root"))'
+             '</script></body></html>')}
+
+
+def test_client_rendered_shell_is_skipped_not_phantom_red():
+    srv = _serve(SPA)
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+    ck = [_ck(seed_entities=["Sprint goals", "Welcome"],
+              control_labels=["Take a note"])]
+    r = judge_checklists(ck, url)
+    srv.shutdown()
+    assert r["failures"] == [] and r["failed"] == 0
+    assert "客户端渲染" in r["skipped"], r
+
+
+BLANK = {"/": "<html><body><!-- 空壳 --></body></html>"}
+
+
+def test_blank_home_page_fails_once_with_root_cause():
+    srv = _serve(BLANK)
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+    ck = [_ck(seed_entities=["Sprint goals", "Welcome"],
+              control_labels=["Take a note"])]
+    r = judge_checklists(ck, url)
+    srv.shutdown()
+    assert r["failed"] == 1 and len(r["failures"]) == 1
+    assert "无可见文本" in r["failures"][0]
+
+
+def test_500_home_page_fails_once_not_per_fact():
+    # 9 条事实若逐条判红 = 9 条幻影失败；空语料必须先归因成一条
+    srv = _serve({"/": ""}, codes={"/": 500})
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+    ck = [_ck(seed_entities=[f"entity {i}" for i in range(9)])]
+    r = judge_checklists(ck, url)
+    srv.shutdown()
+    assert r["failed"] == 1 and r["passed"] == 0
+
+
+def test_rich_page_is_unaffected_by_thin_guard(base_url):
+    # 门槛只吃空壳：正常首页（PAGES 语料 > 阈值）照旧逐条判
+    ck = [_ck(seed_entities=["Sprint goals", "Ghost"])]
+    r = judge_checklists(ck, base_url)
+    assert r["passed"] == 1 and r["failed"] == 1
+    assert r["failures"][0].startswith("REQ-2.1 ")

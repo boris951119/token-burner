@@ -416,6 +416,7 @@ def run_selftests(project_dir: Path, specs_dir: Path,
         # 编译清单判分（零 LLM、秒级）：需求逐字事实 × 活服。失败串以
         # REQ id 开头，与自测失败同清单进修复环即为定向指令。
         csum: dict = {"passed": 0, "failures": []}
+        notes_c = ""
         if requirements_dir:
             try:
                 from app.utils.acceptance_judge import judge_requirements
@@ -424,8 +425,13 @@ def run_selftests(project_dir: Path, specs_dir: Path,
             except Exception as exc:
                 notes_c = f"[compiled] 判分异常降级 {exc!r}"[:120]
                 csum = {"passed": 0, "failures": [], "note": notes_c}
+            notes_c = notes_c or str(
+                csum.get("skipped") or csum.get("note") or "")
         cfail = list(csum.get("failures") or [])
         cpassed = int(csum.get("passed") or 0)
+        # 判分器的降级原因必须见于报告：否则「0/0 零信号」与「JS 壳射程外
+        # 跳过」两种截然不同的结论在日志里长得一模一样。
+        jnote = f"\n[compiled] {notes_c}" if notes_c else ""
         specs = None
         if specs_dir is not None and Path(specs_dir).is_dir():
             specs = list(Path(specs_dir).glob("*.spec.ts"))
@@ -435,12 +441,13 @@ def run_selftests(project_dir: Path, specs_dir: Path,
             # 起服死亡两大死因从来不需要 node。旧实现在此处抛错把整闸
             # （连同这些 node-free 检查）一起报废。
             return (cpassed, len(cfail), list(cfail),
-                    "[playwright] SKIP（无可用 specs：环境无 node 或生成失败）")
+                    "[playwright] SKIP（无可用 specs：环境无 node 或生成失败）"
+                    + jnote)
         if not specs:
             # 目录在、spec 全被 lint 剔除 = 零信号，不得被编译判分掩盖
             return (cpassed, 1 + len(cfail),
                     ["自测 specs 零收集（lint 全数剔除）"] + cfail,
-                    "[playwright] SKIP（specs 目录空）")
+                    "[playwright] SKIP（specs 目录空）" + jnote)
         report = project_dir / "selftest-report.json"
         env = dict(os.environ,
                    TARGET_URL=f"http://127.0.0.1:{port}",
@@ -494,7 +501,7 @@ def run_selftests(project_dir: Path, specs_dir: Path,
             failures = ["自测 specs 零收集（坏 spec 连坐？）"]
             failed = 1
         return (passed + cpassed, failed + len(cfail),
-                failures + cfail, (pt.stdout or "")[-1500:])
+                failures + cfail, (pt.stdout or "")[-1500:] + jnote)
     finally:
         # Windows：terminate 不杀孙进程（Flask reload/子线程句柄），锁死
         # 模板目录——taskkill /T 连树击杀，兜底 terminate/kill
@@ -543,6 +550,10 @@ def selftest_gate(project_dir: Path, requirement: str, settings,
         project_dir, specs_dir, requirements_dir=requirements_dir)
     notes: list[str] = []
     notes.append(f"[selftest] 首轮 {passed}/{passed + failed}")
+    if tail:
+        # 判分器的降级/跳过原因随身携带：「零信号」与「JS 壳射程外」在
+        # 计数上长得一样，结论却相反（前者该修，后者不该修）。
+        notes.append(tail[:400])
     if passed + failed == 0:
         # 真空真值漏洞（2026-09-20 取证）：坏 spec 连坐收集失败 → 0/0
         # 曾被判 PASS——零信号=零证据=FAIL
