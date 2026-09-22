@@ -23,6 +23,39 @@ from pathlib import Path
 
 GRADE_DIR = Path(__file__).resolve().parents[2] / "scripts" / "official_grade"
 
+# None=未探测；""=可用；其余=不可用原因（进程内缓存，探测只花一次）
+_node_probe: str | None = None
+
+
+def node_unavailable_reason() -> str:
+    """node 侧依赖前置探测。
+
+    取证（2026-09-23 Linux 全真演练）：交付容器无 npx 时，本闸先生成
+    specs（真金白银的 LLM 调用）再在 lint 处抛 FileNotFoundError，
+    被上层 except 降级——钱花了、specs 全废、行为验收静默缺席。
+    探测必须前置到生成之前，缺 node 就一分钱不花地跳过。
+    """
+    global _node_probe
+    if _node_probe is not None:
+        return _node_probe
+    npx = shutil.which("npx") or shutil.which("npx.cmd")
+    if not npx:
+        _node_probe = "环境无 npx（node 未安装）"
+        return _node_probe
+    try:
+        r = subprocess.run([npx, "playwright", "--version"],
+                           cwd=str(GRADE_DIR), capture_output=True,
+                           text=True, encoding="utf-8", errors="replace",
+                           timeout=120)
+        if r.returncode == 0:
+            _node_probe = ""
+        else:
+            _node_probe = ("playwright CLI 不可用: "
+                           + ((r.stderr or "") or (r.stdout or "")).strip()[:120])
+    except Exception as exc:
+        _node_probe = f"playwright 探测失败 {exc!r}"[:160]
+    return _node_probe
+
 _GEN_SYSTEM = (
     "你是资深测试工程师。根据需求文档编写 Playwright 验收测试。"
     "规则：\n"
@@ -268,6 +301,12 @@ def lint_specs(specs_dir: Path, project_dir: Path | None = None) -> int:
     诊断现场）。教训（2026-09-20 首版误伤）：整目录 --list 的正常输出
     会列出全部文件路径，按文件名正则剔除=把好文件全倒掉。"""
     npx = shutil.which("npx") or shutil.which("npx.cmd") or "npx"
+    if not shutil.which("npx") and not shutil.which("npx.cmd"):
+        # 无 node 时 lint 无从判起：宁可全留（跑不了自然由闸头探测拦下），
+        # 也不能把好 spec 当坏 spec 删掉
+        print(f"[selftest] lint SKIP: {node_unavailable_reason()}，specs 全保留",
+              flush=True)
+        return len(list(specs_dir.glob("*.spec.ts")))
     env = dict(os.environ, PLAYWRIGHT_TEST_DIR=str(specs_dir))
     _ensure_node_modules_link(specs_dir)
     rejected = specs_dir.parent / "selftest_rejected"
@@ -433,6 +472,12 @@ def selftest_gate(project_dir: Path, requirement: str, settings,
     if os.environ.get("ARCBENCH_SELFTEST", "").lower() in {"off", "0", "no"}:
         return False, "自测闸关闭（ARCBENCH_SELFTEST=off）"
     project_dir = Path(project_dir)
+    reason = node_unavailable_reason()
+    if reason:
+        # 生成前先判环境：缺 node 时 specs 写了也跑不了，一分钱不花
+        print(f"[selftest] SKIP: {reason}（行为验收退化为 HTTP 冒烟+旅程闸）",
+              flush=True)
+        return False, f"自测闸跳过：{reason}"
     _beat(project_dir, "自测闸-生成")
     specs_dir = ensure_selftests(project_dir, requirement, settings)
     if specs_dir is None:
