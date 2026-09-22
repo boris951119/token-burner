@@ -10,7 +10,6 @@
   （文本/placeholder/aria-label/value/alt/title 任一属性通道）；
 - 失败串以 REQ id 开头（grade_repair_loop 的 re.match(r"(REQ-[\\d.]+)")
   直接可抓），进修复环即为定向指令。
-
 通用性（9/22 判据）：规则不含任何题目词——任何 web 应用 × 任何
 GWT 需求树都同样可判。
 """
@@ -85,7 +84,7 @@ def judge_checklists(checklists: list[NodeChecklist], base_url: str,
                      max_pages: int = 17,
                      timeout: float = 6.0) -> dict:
     """判分运行中的应用。返回 {passed, failed, total, failures}，
-    failures 条目形如 `REQ-2.2 编译清单[控件文案] "Take a note" ...`。"""
+    failures 条目形如 `REQ-2.2 编译清单[控件文案] "某按钮名" ...`。"""
     facts = list(_iter_facts(checklists))
     if not facts:
         return {"passed": 0, "failed": 0, "total": 0, "failures": []}

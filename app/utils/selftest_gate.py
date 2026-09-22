@@ -341,8 +341,8 @@ def selftest_gate(project_dir: Path, requirement: str, settings,
         + "\n\n页面真实快照（前 3 个失败用例，Playwright 实测 DOM）：\n"
         + "\n---\n".join(snapshots)
         + "\n\n修复要求：让失败场景按需求语义真实通过——补交互行为/"
-        "修正导航与表单/对齐可见文案；需求原文的逐字文案（如 Search、"
-        "Take a note、Note trashed）必须精确出现在对应控件上；"
+        "修正导航与表单/对齐可见文案；需求原文引号内的逐字文案（按钮/"
+        "占位符/标签/种子名等）必须精确出现在对应控件上；"
         "禁止修改 tests/selftest/ 与 tests/ 目录；禁止删路由；"
         "最小化修改。"
     )
