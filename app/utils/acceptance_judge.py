@@ -28,6 +28,7 @@ from __future__ import annotations
 import html as _html
 import re
 import urllib.request
+from dataclasses import dataclass, field
 from typing import Iterable
 
 from app.acceptance_compile import NodeChecklist
@@ -130,6 +131,15 @@ _JS_MOUNT = re.compile(
 # 外（不判红也不判绿）；文案在页面源码里根本不存在仍然判红（keep#2 那类
 # 「换语言/塞隐藏位」的造假恰好属于这一类，不受本次放宽影响）。
 _SCRIPT_BODY = re.compile(r"<script[^>]*>([\s\S]*?)</script>", re.I)
+# 「整墙缺席」归并（9/23 run6 Linux 真形取证）：那份交付后端 0 个
+# render_template、29 条路由全是 /api/*，首页只是个 784 字节的静态壳——
+# 判分器据此对 70 条事实判红 69 条。每条都"真"，但它们同因（页面路由不
+# 存在），而修复环只吃前 20 条：模型拿到 20 个互不相干的文案串，最经济的
+# 满足方式就是把它们抄进首页某处——keep#2 那次 display:none 造假正是这条
+# 路径走出来的。整墙缺席时改判一条结构性根因，指令才指向能修的地方。
+# 门槛按比例+绝对量双重收：只漏几条标签的正常应用仍走逐条精确指令。
+_WALL_RATIO = 0.7
+_WALL_MIN = 10
 
 
 def _norm(s: str) -> str:
@@ -142,17 +152,39 @@ def _fetch(url: str, timeout: float) -> str:
         return resp.read().decode("utf-8", errors="replace")
 
 
+def _is_html(src: str) -> bool:
+    head = src[:2048].lstrip().lower()
+    return head.startswith(("<!doctype html", "<html")) or "<body" in head
+
+
+@dataclass
+class _Crawl:
+    """一次入口 BFS 的全部观察量（判分口径与报告都从这里取）。"""
+    text: str = ""
+    attrs: str = ""
+    scripts: str = ""
+    # 原始源码通道（隐藏块与注释都在里面）。只用来分两种「没判绿」：
+    # 文案在源码里却不可见 = 造假，逐条判红（keep#2）；源码里根本没有
+    # = 结构缺失，可归并成一条根因（run6）。
+    raw: str = ""
+    shell: bool = False                      # 入口页是否 JS 挂载壳
+    html_pages: int = 0                      # 真正返回 HTML 文档的页面数
+    links: int = 0                           # 站内链接总数（去重后）
+    dead_links: list[str] = field(default_factory=list)  # 打不开/不是页面
+
+
 def _crawl_pages(base_url: str, max_pages: int,
-                 timeout: float) -> tuple[str, str, bool, str]:
-    """入口 BFS 一跳：返回（全页可见文本语料, 属性值语料, 入口页是否
-    JS 挂载壳, 页内脚本正文语料）。"""
+                 timeout: float) -> _Crawl:
+    """入口 BFS 一跳：抓首页与首页链出的站内页面，累计三条语料通道，
+    并把「导航是否真的通向页面」作为独立观测量带出来。"""
     base = base_url.rstrip("/")
+    c = _Crawl()
     queue: list[str] = ["/"]
     seen: set[str] = set()
     texts: list[str] = []
     attrs: list[str] = []
     scripts: list[str] = []
-    shell = False
+    raws: list[str] = []
     while queue and len(seen) <= max_pages:
         path = queue.pop(0)
         if path in seen:
@@ -161,9 +193,18 @@ def _crawl_pages(base_url: str, max_pages: int,
         try:
             body = _fetch(base + path, timeout)
         except Exception:
+            if path != "/":
+                c.dead_links.append(path)
             continue
+        if not _is_html(body):
+            # 链过去是 JSON/下载件：对按可见文案断言的评测等于没有这个页面
+            if path != "/":
+                c.dead_links.append(path)
+            continue
+        c.html_pages += 1
+        raws.append(_html.unescape(body))
         if path == "/":
-            shell = bool(_JS_MOUNT.search(body))
+            c.shell = bool(_JS_MOUNT.search(body))
         # 文本与属性两通道都只认「渲染得出来」的内容：编译 Playwright spec
         # 用 isVisible() 断言，本判分器必须同口径，否则隐藏 div 塞文案即可
         # 骗过平台唯一那道闸。
@@ -174,8 +215,13 @@ def _crawl_pages(base_url: str, max_pages: int,
         for href in _HREF.findall(body):
             if (href.startswith("/") and not href.startswith("//")
                     and not _ASSET.search(href) and href not in seen):
+                c.links += 1
                 queue.append(href.split("?")[0].split("#")[0])
-    return ("\n".join(texts), "\n".join(attrs), shell, "\n".join(scripts))
+    c.text = "\n".join(texts)
+    c.attrs = "\n".join(attrs)
+    c.scripts = "\n".join(scripts)
+    c.raw = "\n".join(raws)
+    return c
 
 
 def _iter_facts(checklists: Iterable[NodeChecklist]):
@@ -196,17 +242,16 @@ def judge_checklists(checklists: list[NodeChecklist], base_url: str,
     facts = list(_iter_facts(checklists))
     if not facts:
         return {"passed": 0, "failed": 0, "total": 0, "failures": []}
-    text_blob, attr_blob, shell, script_blob = _crawl_pages(
-        base_url, max_pages, timeout)
-    text_norm = _norm(text_blob)
-    attr_norm = _norm(attr_blob)
-    script_norm = _norm(script_blob)
+    crawl = _crawl_pages(base_url, max_pages, timeout)
+    text_norm = _norm(crawl.text)
+    attr_norm = _norm(crawl.attrs)
+    script_norm = _norm(crawl.scripts)
     if len(text_norm) < _THIN_CORPUS and len(attr_norm) < _THIN_CORPUS:
         # 官方交付容器无 node → Playwright 段 SKIP，本判分器是唯一质量闸。
         # 语料近乎为空时"事实全部缺席"是判分器失明的假象，不是 N 个缺陷：
         # 客户端渲染外壳记射程外跳过（幻影失败会让修复环围着修不好的东西
         # 烧掉整轮），静态空壳/入口 5xx 记一条根因（首页落空是真死因）。
-        if shell:
+        if crawl.shell:
             return {"passed": 0, "failed": 0, "total": len(facts),
                     "failures": [],
                     "skipped": f"入口页为 JS 挂载壳（可见文本 {len(text_norm)}"
@@ -221,27 +266,65 @@ def judge_checklists(checklists: list[NodeChecklist], base_url: str,
                 "note": "判分语料为空：逐条事实判红已归并为一条根因"}
     failures: list[str] = []
     client_side: list[str] = []
+    found = 0                                     # 真实命中数（不得由减法倒推）
+    absent: list[tuple[str, str, str]] = []   # 源码里查无此文 = 结构缺失候选
+    raw_norm = _norm(crawl.raw)
     for req_id, kind, ent in facts:
         e = _norm(ent)
-        if (e and (e in text_norm or e in attr_norm)):
+        if not e:
             continue
-        if e and e in script_norm:
+        if e in text_norm or e in attr_norm:
+            found += 1
+            continue
+        if e in script_norm:
             # 文案只存在于页内脚本正文：客户端渲染，浏览器出得来像素，
             # 静态判分出不来——射程外，不判红也不判绿（判红即幻影失败，
             # 修复环会围着一条修不好的指令烧掉整轮）。
             client_side.append(f'{req_id} 编译清单[{kind}] "{ent}"')
-            continue
-        failures.append(
-            f'{req_id} 编译清单[{kind}] "{ent}" 未出现在入口可达页面')
+        elif e in raw_norm:
+            # 源码里有、页面上没有 = 塞在隐藏块/注释里（keep#2 的造假口径）。
+            # 这类绝不进归并：把它折成一条结构性根因等于给造假开脱。
+            failures.append(
+                f'{req_id} 编译清单[{kind}] "{ent}" 只存在于页面的不可见位置'
+                f'（隐藏元素/HTML 注释/属性）：评测按渲染后的可见性断言，'
+                f'必须让它就出现在对应控件上，删掉这种隐藏副本')
+        else:
+            absent.append((req_id, kind, ent))
     total = len(facts)
-    out = {"passed": total - len(failures) - len(client_side),
+    walled = (len(absent) >= _WALL_MIN and len(absent) >= _WALL_RATIO * total
+              and crawl.html_pages <= 1)
+    if walled:
+        # 整墙查无此文 + 入口之外没有第二个页面 = 界面根本没实现，
+        # 一条结构性根因胜过 20 条互不相干的抄写指令（修复环只吃前 20 条）
+        where = (f"首页站内链接 {crawl.links} 条，打不开或不是页面的 "
+                 f"{len(crawl.dead_links)} 条（{', '.join(crawl.dead_links[:5])}）"
+                 if crawl.links else
+                 "首页没有任何指向内部页面的链接")
+        examples = "、".join(f'"{e}"' for _, _, e in absent[:3])
+        failures.insert(0, (
+            f"{len(absent)}/{total} 条逐字需求文案在页面源码里根本不存在，且"
+            f"入口之外渲染不出第二个页面（HTML 页面 {crawl.html_pages} 个，"
+            f"{where}）：这是**界面未实现**（只有 /api/* 的 JSON 不算），不是"
+            f"文案拼错。每个模块都要有一条返回 HTML 文档的路由（含真实控件与"
+            f"种子数据），首页用链接指过去——评测先导航再断言可见文案，路由不"
+            f"在则全部用例第一步即落空。缺口的样例：{examples} …"))
+    else:
+        failures += [f'{r} 编译清单[{k}] "{e}" 未出现在入口可达页面'
+                     for r, k, e in absent]
+    out = {"passed": found,
            "failed": len(failures), "total": total, "failures": failures,
            "client_side": len(client_side)}
+    notes: list[str] = []
+    if walled:
+        notes.append(f"{len(absent)} 条「源码里查无此文」的同因事实已归并为一条"
+                     f"结构性根因（HTML 页面 {crawl.html_pages} 个）；塞在不可见"
+                     f"位置的文案不受此归并影响")
     if client_side:
-        out["note"] = (
-            f"{len(client_side)} 条逐字事实仅见于页内脚本正文"
-            f"（{'; '.join(client_side[:3])}…）：客户端渲染，静态判分射程外，"
-            f"未判红也未判绿")
+        notes.append(f"{len(client_side)} 条逐字事实仅见于页内脚本正文"
+                     f"（{'; '.join(client_side[:3])}…）：客户端渲染，静态判分"
+                     f"射程外，未判红也未判绿")
+    if notes:
+        out["note"] = "；".join(notes)
     return out
 
 

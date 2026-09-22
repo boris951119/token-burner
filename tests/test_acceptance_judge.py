@@ -260,3 +260,56 @@ def test_fetch_driven_copy_stays_red_as_known_limit():
     r = judge_checklists([_ck(seed_entities=["My Shelf"])], url)
     srv.shutdown()
     assert r["failed"] == 1 and r.get("client_side") == 0
+
+
+# ---- 整墙查无此文 → 一条结构性根因（run6 Linux 真交付取证）--------------
+# 那次的产物活着、/api/health 绿，但入口之外没有任何 HTML 页面：70 条
+# 逐字事实里只有 1 条在场。逐条判红 = 修复环拿到 20 条互不相干的抄写
+# 指令，而真死因只有一句话（界面未实现）。归并必须同时满足「查无此文
+# 占多数」与「入口之外渲染不出第二个页面」，否则会掩盖局部缺口。
+
+SHELL_ONLY = {
+    "/": ('<html><body><h1>Reading Desk</h1>'
+          '<p>This page shows your shelves and the books inside them.'
+          '</p><a href="/api/notes">notes api</a></body></html>'),
+    "/api/notes": '{"ok": true, "items": []}',
+}
+
+
+def test_api_only_shell_merges_into_one_structural_root_cause():
+    srv = _serve(SHELL_ONLY)
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+    ck = [_ck(seed_entities=[f"shelf label {i}" for i in range(12)])]
+    r = judge_checklists(ck, url)
+    srv.shutdown()
+    assert r["failed"] == 1 and r["passed"] == 0 and r["total"] == 12, r
+    f0 = r["failures"][0]
+    assert "12/12" in f0 and "界面未实现" in f0
+    # 归并指令必须自带定位证据：几个 HTML 页、链到哪、哪些链打不开
+    assert "HTML 页面 1 个" in f0 and "站内链接 1 条" in f0
+    assert "/api/notes" in f0
+    assert "归并" in r["note"] and "不可见位置" in r["note"]
+
+
+HIDDEN12 = {"/": (
+    '<html><body><h1>Reading Desk</h1>'
+    '<p>This page shows your shelves and the books inside them, all in one '
+    'place for daily reading.</p>'
+    '<div style="display:none">'
+    + "".join(f"<span>anchor phrase {i}</span>" for i in range(12))
+    + "</div></body></html>")}
+
+
+def test_hidden_stuffing_is_never_merged_away():
+    """raw 源码通道回归：12 条文案全塞在 display:none 里时，「查无此文」的
+    归并规则若把源码误当空，就会给这堵假墙发一条「界面未实现」——那正是
+    keep#2 造想要的免罪符。每条都得单独判红并点名隐藏位置。"""
+    srv = _serve(HIDDEN12)
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+    ck = [_ck(seed_entities=[f"anchor phrase {i}" for i in range(12)])]
+    r = judge_checklists(ck, url)
+    srv.shutdown()
+    assert r["failed"] == 12 and r["passed"] == 0, r
+    assert all("不可见位置" in f for f in r["failures"]), r["failures"][0]
+    assert not any("界面未实现" in f for f in r["failures"])
+    assert "note" not in r
