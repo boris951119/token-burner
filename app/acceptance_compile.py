@@ -451,8 +451,7 @@ def render_ux_checklist(checklists: list[NodeChecklist],
         "（按钮=<button>、输入提示=placeholder、动作后反馈=真实渲染的"
         "提示区文本），禁止同义改写；也禁止把文案塞进隐藏位置——"
         "display:none / hidden 元素、HTML 注释、<template> 都算未实现"
-        "（keep#2 实证：交付把英文文案堆进一个 display:none 的 div 里，"
-        "界面实际全是另一种语言的文案，评测按渲染后可见性断言即全红）。\n"
+        "（评测按渲染后的可见性断言，藏在页面源码里的文案一分不得）。\n"
         + "\n".join(lines))
 
 
