@@ -38,6 +38,7 @@ from app.tools.prompt_templates import (
     TASK_ASSESSMENT_SYSTEM,
     TASK_ASSESSMENT_USER,
 )
+from app.utils.budget import BudgetExceededError, TaskCancelledError
 from app.utils.parse import parse_json
 from app.utils.similarity import LoopDetector
 from app.utils.untrusted import sanitize_untrusted
@@ -730,7 +731,7 @@ class DiscussionEngine:
         self, requirement: str, proposal: str, model: str, role: str, focus: str
     ) -> str:
         """副 LLM 评审（8.2 JSON；15.3 解析失败降级为原文归纳）。"""
-        response = self.llm.chat(
+        response = self._relay(
             model,
             [
                 {"role": "system", "content": REVIEW_PROPOSAL_SYSTEM.format(role=role, focus=focus)},
@@ -748,22 +749,39 @@ class DiscussionEngine:
         # 15.3 降级：主 LLM 依原始文本归纳，不强求结构化打分
         return response.content
 
-    def _chat(self, model: str, messages: list[dict]) -> str:
-        # keep1 取证：32 需求规模下讨论单次推理可超墙钟（glm-5.3
-        # 600s×3 重试全灭），且讨论路径此前没有模型级备胎——按
-        # dev_loop._chat_resilient 同款，主模型失败后依
-        # settings.models 逐备胎，全败才上抛。
+    def _relay(self, model: str, messages: list[dict], json_mode: bool = False):
+        """模型级备胎接力（dev_loop._chat_resilient 同款语义）。
+
+        keep1 取证：32 需求规模下讨论单次推理可超墙钟（glm-5.3
+        600s×3 重试全灭），而讨论路径没有模型级备胎；shape-keep 彩排
+        （9/23）补上漏网的最后一处——副 LLM 评审 _get_review 仍是裸
+        chat，测试模型一条腿的网关超时即整跑夭折（讨论阶段 rc=1、
+        165k token 空烧、零交付）。评审与提案同属讨论必需步骤，一条腿
+        废了换腿续跑才是正确姿势，全败才上抛。
+        """
         try:
-            return self.llm.chat(model, messages).content
+            return self._call(model, messages, json_mode)
+        except (BudgetExceededError, TaskCancelledError):
+            raise  # 总闸/取消：换模型续烧＝把「立即中止」改成「多烧两腿」
         except RuntimeError:
-            fallbacks = [m for m in (self.settings.models or [])
-                         if m != model]
-            for fb in fallbacks:
+            for fb in [m for m in (self.settings.models or []) if m != model]:
                 try:
-                    return self.llm.chat(fb, messages).content
+                    return self._call(fb, messages, json_mode)
+                except (BudgetExceededError, TaskCancelledError):
+                    raise
                 except RuntimeError:
                     continue
             raise
+
+    def _call(self, model: str, messages: list[dict], json_mode: bool):
+        """单腿调用：json_mode 只在真需要时传——保持 _chat 既有调用形状，
+        注入的假 LLM 不必兼容多余关键字。"""
+        if json_mode:
+            return self.llm.chat(model, messages, json_mode=True)
+        return self.llm.chat(model, messages)
+
+    def _chat(self, model: str, messages: list[dict]) -> str:
+        return self._relay(model, messages).content
 
     def _persist_discussion(self, pid: str | None, outcome: DiscussionOutcome) -> None:
         """讨论结果落盘（6.3：spec.md + sessions/discussion_summary.md）。
