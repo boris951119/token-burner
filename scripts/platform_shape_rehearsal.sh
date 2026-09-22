@@ -67,6 +67,11 @@ KEY_LINE=$(grep -E '^OPENAI_(API_KEY|KEY)=' "$ROOT/.env" | head -1 || true)
 BASE_LINE=$(grep -E '^OPENAI_(API_BASE|BASE_URL)=' "$ROOT/.env" | head -1 || true)
 MODEL_LINE=$(grep -E '^MODEL=' "$ROOT/.env" | head -1 || true)
 [ -n "$KEY_LINE" ] || { echo ".env 里没有网关 key" >&2; exit 1; }
+# MODEL 缺失必须现在停：容器里 MODEL 为空时 _apply_runner_model 直接 return，
+# 编制退化成包内默认四模型（gpt-4o/claude/…，本机全无 key）——预检全灭看着
+# 像网关故障，实际是演练自己少配了一行（9/23 首次演练即栽在这，白起一次镜像）。
+[ -n "${MODEL_LINE#MODEL=}" ] || { echo ".env 里没有 MODEL=（演练形态要求单模型注入）" >&2; exit 1; }
+[ -n "$BASE_LINE" ] || { echo ".env 里没有 OPENAI_API_BASE/OPENAI_BASE_URL" >&2; exit 1; }
 ENV_FILE="$WORK/.shape.env"
 { echo "$KEY_LINE"; echo "$BASE_LINE"
   echo "MODEL=${MODEL_LINE#MODEL=}"; echo "PYTHONUNBUFFERED=1"
