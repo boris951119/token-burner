@@ -278,7 +278,8 @@ def _visible_text(html: str) -> str:
     txt = re.sub(r"(?is)<script\\b.*?</script>", " ", html)
     txt = re.sub(r"(?is)<style\\b.*?</style>", " ", txt)
     txt = re.sub(r"(?is)<textarea\\b[^>]*>.*?</textarea>", " ", txt)
-    txt = re.sub(r"(?is)<[^>]+(?:hidden|display\\s*:\\s*none)[^>]*>.*?</[^>]+>", " ", txt)
+    txt = re.sub(r"(?is)<(\\w+)[^>]*(?:hidden|visibility\\s*:\\s*hidden|display\\s*:\\s*none)[^>]*>.*?</\\1\\s*>", " ", txt)
+    txt = re.sub(r"(?is)<template\\b[^>]*>.*?</template>", " ", txt)
     txt = re.sub(r"(?s)<[^>]+>", " ", txt)
     return txt
 
@@ -561,7 +562,8 @@ def _visible_text(html: str) -> str:
     txt = re.sub(r"(?is)<script\\b.*?</script>", " ", html)
     txt = re.sub(r"(?is)<style\\b.*?</style>", " ", txt)
     txt = re.sub(r"(?is)<textarea\\b[^>]*>.*?</textarea>", " ", txt)
-    txt = re.sub(r"(?is)<[^>]+(?:hidden|display\\s*:\\s*none)[^>]*>.*?</[^>]+>", " ", txt)
+    txt = re.sub(r"(?is)<(\\w+)[^>]*(?:hidden|visibility\\s*:\\s*hidden|display\\s*:\\s*none)[^>]*>.*?</\\1\\s*>", " ", txt)
+    txt = re.sub(r"(?is)<template\\b[^>]*>.*?</template>", " ", txt)
     txt = re.sub(r"(?s)<[^>]+>", " ", txt)
     return txt
 
@@ -663,8 +665,10 @@ def _anchor_coverage_section(code_dir: Path, requirement: str) -> str:
     cov = compute_coverage(pages, anchors)
     lines = ["", "## 锚点覆盖探针（机械校验）"]
     for a in cov["missing"][:14]:
-        lines.append(f"- 需求锚点 {a!r} 未出现在任何页面响应中——"
-                     "请在对应页面原文补齐该文案/区块")
+        lines.append(f"- 需求锚点 {a!r} 未出现在任何页面的可见文本中——"
+                     "请在对应页面按需求原文补齐该文案/区块（可见元素；"
+                     "塞进 display:none/hidden 元素、HTML 注释或 title "
+                     "属性都不算补齐，评测按渲染后可见性断言）")
     for a, hits in sorted(cov["where"].items())[:8]:
         lines.append(f"- 需求锚点 {a!r} 已出现在: {', '.join(hits[:2])}")
     return "\n".join(lines) + "\n\n"

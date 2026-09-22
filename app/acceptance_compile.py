@@ -16,8 +16,9 @@
 - 节点 GIVEN/WHEN 文案含 "home page"（或中文"首页"）→ 该节点事实
   在入口页静态可见，可编译成断言；否则标记导航后置，只入清单不判分
   （静态断言不可见实体=误红，会把修复环引向编造）。
-- 引号串三通道：Seed data: 子句→种子实体；WHEN 引号→可操作控件；
-  THEN 引号→期望文案。图片路径/文件名残渣一律剔除。
+- 引号串四通道（"…" / '…' / “…” / `…`，反引号只收像界面文案的串）：
+  Seed data: 子句→种子实体；WHEN 引号→可操作控件；THEN 引号→期望文案。
+  图片路径/代码围栏/文件名残渣一律剔除。
 """
 from __future__ import annotations
 
@@ -33,6 +34,33 @@ _QUOTED_S = re.compile(r"'([^'\n]{1,80})'")
 # 事实——UI 保真契约与平台侧唯一判分闸双双空转。requirement_anchors 早已按
 # “”‘’ 取值，这里是同一口径补齐。
 _QUOTED_CJK = re.compile(r"[“「『]([^”」』\n]{1,80})[”」』]")
+# Markdown 反引号通道（9/23 取证）：官方 bookstack 题面的界面文案全部写成
+# `Shelves` / `Save Book` 式内联代码，前三条引号通道一条不认 → 34 节点编译
+# 出 0 条事实：UX 契约与平台判分闸双双零输入。反引号同时被用来标代码符号，
+# 故只收"像人话"的串（见 _ui_like）。
+_QUOTED_BT = re.compile(r"`([^`\n]{1,80})`")
+_MD_FENCE = re.compile(r"```[\s\S]*?```")
+# 代码特征字符：带这些的多是端点/模板/表达式（/api/books、{note_id}、a==b），
+# 不会作为界面文案出现在页面上
+_BT_CODE = re.compile(r"""[(){}<>=|\\/%#$\[\]]|::|->""")
+# 全小写单词/蛇形/路径：标识符与字段名（created_at、remember），非界面文案
+_BT_IDENT = re.compile(r"^[a-z][A-Za-z0-9_.\-/]*$")
+# 全大写的技术缩写：形似按钮文案（ADD TO CART）但不会出现在页面上
+_BT_STOP = {
+    "JSON", "HTML", "CSS", "YAML", "SQL", "XML", "NULL", "TRUE", "FALSE",
+    "GET", "POST", "PUT", "PATCH", "API", "URL", "URI", "HTTP", "HTTPS",
+    "CSV", "PDF", "PNG", "JPG", "SVG", "JWT", "ORM", "SPA", "SDK", "TODO",
+}
+
+
+def _ui_like(s: str) -> bool:
+    """反引号串是否像界面文案（宁缺不滥：判错的代价是一条修不好的幻影失败）。"""
+    if _BT_CODE.search(s) or _BT_IDENT.match(s):
+        return False
+    if s.strip() in _BT_STOP or s.strip().upper() in _BT_STOP:
+        return False
+    # 有大写字母或中文字符才像文案；纯小写单词一律视为标识符
+    return bool(re.search(r"[A-Z\u4e00-\u9fff]", s))
 # 中文没有空格，_clean_quote 的 12 词上限对 CJK 恒不生效；含句读的多半是
 # 提示语/校验文案（"密码需包含字母和数字，且长度不小于8位"），不是控件标签
 # ——按控件判分即幻影失败。行为断言通道（THEN）不受此限。
@@ -78,17 +106,21 @@ def _clean_quote(s: str) -> str | None:
 
 def _quotes_in(text: str, *, skip_seed_clause: bool = False,
                for_control: bool = False) -> list[str]:
-    """抽一段文本里的引号文案（双/单/中文引号），剔图片与文件名。
+    """抽一段文本里的引号文案（双/单/中文/反引号），剔图片、代码围栏与文件名。
     for_control：控件标签通道额外剔掉含句读的中文串（多半是提示语，
     按"必须出现在页面上"判分即幻影失败）；行为断言通道保留原文。"""
     if not text:
         return []
-    body = _MD_IMG.sub("", text)
+    body = _MD_FENCE.sub(" ", _MD_IMG.sub("", text))
     out: list[str] = []
-    for pat in (_QUOTED_D, _QUOTED_CJK):
+    for pat, bt in ((_QUOTED_D, False), (_QUOTED_CJK, False), (_QUOTED_BT, True)):
         for m in pat.finditer(body):
             q = _clean_quote(m.group(1))
-            if q and not (for_control and _CJK_MSG.search(q)) and q not in out:
+            if not q or (bt and not _ui_like(q)):
+                continue
+            if for_control and _CJK_MSG.search(q):
+                continue
+            if q not in out:
                 out.append(q)
     # 单引号通道：仅在无跳过需求时补（WHEN/THEN 主体），seed 通道自行去重
     if not skip_seed_clause:
@@ -107,10 +139,11 @@ def _seed_entities_of(description: str) -> list[str]:
         cut = rest.find("\n")
         if cut >= 0:
             rest = rest[:cut]
-        for pat in (_QUOTED_D, _QUOTED_CJK):
+        for pat, bt in ((_QUOTED_D, False), (_QUOTED_CJK, False),
+                        (_QUOTED_BT, True)):
             for q in pat.finditer(_MD_IMG.sub("", rest)):
                 n = _clean_quote(q.group(1))
-                if n and n not in out:
+                if n and not (bt and not _ui_like(n)) and n not in out:
                     out.append(n)
     return out
 
@@ -407,9 +440,12 @@ def render_ux_checklist(checklists: list[NodeChecklist],
         return ""
     return (
         "\n\n【验收节点逐字清单（机械抽取自需求 GWT 结构，逐条满足）】\n"
-        "控件/提示/种子文案必须逐字作为对应语义的可见元素实现"
+        "控件/提示/种子文案必须逐字作为对应语义的**可见**元素实现"
         "（按钮=<button>、输入提示=placeholder、动作后反馈=真实渲染的"
-        "提示区文本），禁止同义改写、禁止只在源码字符串里出现而不可见。\n"
+        "提示区文本），禁止同义改写；也禁止把文案塞进隐藏位置——"
+        "display:none / hidden 元素、HTML 注释、<template> 都算未实现"
+        "（keep#2 实证：交付把英文文案堆进一个 display:none 的 div 里，"
+        "界面实际全是另一种语言的文案，评测按渲染后可见性断言即全红）。\n"
         + "\n".join(lines))
 
 

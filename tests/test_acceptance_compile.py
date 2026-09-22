@@ -243,3 +243,63 @@ def test_cjk_and_ascii_quote_channels_are_parity(tmp_path):
     ref = compile_checklists(_write(tmp_path, ascii_yaml))
     assert [c.control_labels for c in cjk] == [c.control_labels for c in ref]
     assert [c.seed_entities for c in cjk] == [c.seed_entities for c in ref]
+
+
+# ---- Markdown 反引号通道（9/23 取证）-----------------------------------
+# 官方语料里有整份题面把界面文案写成 `Shelves` 式内联代码：三条引号通道
+# 一条不认，34 个节点编译出 0 条事实——UX 契约与平台判分闸双双零输入。
+# 反引号同时被用来标代码符号，所以只收「像界面文案」的串。
+
+REQ_YAML_BT = """
+id: ROOT
+type: FOLDER
+children:
+  - id: REQ-1
+    name: Shelves
+    type: FOLDER
+    children:
+      - id: REQ-1.1
+        name: Shelf List
+        type: ATOMIC
+        description: 'Seed data: shelf `Reading list` and book `Deep Work`.
+          The home page lists every shelf.'
+        scenarios:
+          - name: open
+            steps:
+              - keyword: GIVEN
+                content: 'the app is open on the home page'
+              - keyword: WHEN
+                content: 'click `Shelves` then `New Shelf`; ignore `created_at`
+                  and `/api/books` and `JSON` and ```press "Deprecated save"```'
+              - keyword: THEN
+                content: 'the form shows `Save Shelf`'
+"""
+
+
+def _bt_ck(tmp_path):
+    return {c.req_id: c for c in compile_checklists(_write(tmp_path, REQ_YAML_BT))}["REQ-1.1"]
+
+
+def test_backtick_labels_reach_all_three_channels(tmp_path):
+    ck = _bt_ck(tmp_path)
+    assert "Shelves" in ck.control_labels and "New Shelf" in ck.control_labels
+    assert "Save Shelf" in ck.behavior_expectations
+    assert "Reading list" in ck.seed_entities and "Deep Work" in ck.seed_entities
+
+
+def test_backtick_code_tokens_are_not_labels(tmp_path):
+    """标识符/端点路径/技术缩写/代码围栏内的引号都不算界面文案：
+    按可见文案判分即幻影失败，还会把修复环引向编造。"""
+    ck = _bt_ck(tmp_path)
+    for junk in ("created_at", "/api/books", "JSON", "Deprecated save"):
+        assert junk not in ck.control_labels, junk
+    assert "Deprecated save" not in ck.behavior_expectations
+
+
+def test_ux_checklist_forbids_invisible_placement(tmp_path):
+    """注入契约必须写清「隐藏位置不算实现」——keep#2 那份交付正是把英文
+    文案塞进 display:none 的 div 里骗过文本在场检查的。"""
+    from app.acceptance_compile import render_ux_checklist
+
+    s = render_ux_checklist(compile_checklists(_write(tmp_path)))
+    assert "display:none" in s and "注释" in s and "可见" in s

@@ -157,3 +157,46 @@ def test_rich_page_is_unaffected_by_thin_guard(base_url):
     r = judge_checklists(ck, base_url)
     assert r["passed"] == 1 and r["failed"] == 1
     assert r["failures"][0].startswith("REQ-2.1 ")
+
+
+# ---- 不可见文案不算可见（9/23 keep 交付实证）---------------------------
+# 那份交付的首页只渲染中文导航，英文文案全塞在一个
+# <div class='hidden-anchors' style='display:none'> 里。旧判分器只剥
+# <script>，于是隐藏块照样进语料 → 本地 8 条事实判绿、官方按可见性断言
+# 全红。判分器必须与编译 spec 的 isVisible() 同口径，否则这道闸可以被
+# 一行 CSS 骗过，而且等于把生成端往「塞隐藏文案」的方向惯。
+
+STUFFED = {"/": (
+    '<html><body><h1>我的笔记</h1>'
+    '<p>全部笔记 提醒事项 归档笔记 回收站 置顶笔记 普通笔记 侧边栏导航</p>'
+    '<div class="hidden-anchors" style="display:none">'
+    '<ul><li>Reminders</li><li>Trash</li></ul>Pinned note tail</div>'
+    '<div hidden><span>Archive</span>hidden-tail</div>'
+    '<template>Pin note</template><!-- Search Settings -->'
+    '<input type="hidden" value="Title">'
+    '<input type="search" placeholder="Take a note">'
+    '<span class="sr-only">Create Note</span>'
+    '</body></html>')}
+
+
+def test_invisible_stuffing_is_not_visible_text():
+    srv = _serve(STUFFED)
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+    ck = [_ck(seed_entities=["Reminders", "Trash", "Archive", "Pin note",
+                             "Search Settings", "Title",
+                             "hidden-tail", "Pinned note tail"],
+              control_labels=["Take a note", "Create Note"])]
+    r = judge_checklists(ck, url)
+    srv.shutdown()
+    assert r["failed"] == 8, r["failures"]
+    # 两条必须放行：placeholder 是渲染出来的（属性通道），sr-only 在
+    # Playwright 口径里算可见（1px 裁剪仍有盒子）——误剔会把好应用判红
+    assert r["passed"] == 2, r["failures"]
+
+
+def test_visible_form_controls_survive_stripping(base_url):
+    # 回归：自闭合 void 标签（<input>）在剔除遍历里必须原样保留，
+    # 否则 placeholder 通道整体失明、真应用被判幻影失败
+    ck = [_ck(control_labels=["Take a note"])]
+    r = judge_checklists(ck, base_url)
+    assert r["passed"] == 1 and r["failed"] == 0

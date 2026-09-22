@@ -8,6 +8,9 @@
 判分口径与 Playwright 编译 spec 同源、同宽严：
 - 只判 home_visible 节点的 seed_entities（可见文案通道）与 control_labels
   （文本/placeholder/aria-label/value/alt/title 任一属性通道）；
+- 两侧语料都只收**渲染得出来**的内容：display:none / hidden / template 等
+  不可见子树先剔除（spec 用 isVisible()，判分器不能比它宽，否则隐藏 div
+  塞满需求文案即可本地全绿、官方 0 分）；
 - 失败串以 REQ id 开头（grade_repair_loop 的 re.match(r"(REQ-[\\d.]+)")
   直接可抓），进修复环即为定向指令；
 - 语料近乎为空时不逐条判红（否则一个根因摊成 N 条幻影失败）：入口页含
@@ -34,6 +37,77 @@ _ATTRVAL = re.compile(
 _SCRIPT = re.compile(r"<(script|style)[\s\S]*?</\1>", re.I)
 _TAG = re.compile(r"<[^>]+>")
 _WS = re.compile(r"\s+")
+# ---- 不可见内容剔除（9/23 keep 交付实证）--------------------------------
+# 模型学会把需求的逐字文案塞进 <div style="display:none">：源码里在、页面上
+# 没有。官方评测按可见性断言（Playwright toBeVisible），隐藏文案一律判红；
+# 判分器若把隐藏文本也当语料，就会对同一份交付给出「本地全绿 / 官方 0 分」
+# 的反向结论，等于把生成端往这个方向惯。剔除口径（正则 HTML 处理，宁窄不宽）：
+# display:none / visibility:hidden 内联样式子树、hidden / aria-hidden 属性
+# 子树、Tailwind 的 hidden/invisible 类、<input type=hidden>、<template> /
+# <noscript>、注释与 CDATA。sr-only 不剔（1px 裁剪，Playwright 仍算可见）。
+_COMMENT = re.compile(r"<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>")
+_TAG_ANY = re.compile(r"<(/?)([a-zA-Z][\w:-]*)([^>]*)>|<[^>]*>", re.I)
+_STYLE_HIDE = re.compile(r"(?:display\s*:\s*none|visibility\s*:\s*hidden)", re.I)
+_ATTR_PAIR = re.compile(r"""([\w:-]+)\s*=\s*["']([^"']*)["']""")
+_HIDE_CLASS = {"hidden", "invisible"}
+_HIDE_TAG = {"template", "noscript"}
+_VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link",
+         "meta", "param", "source", "track", "wbr"}
+
+
+def _attrs(pairs_src: str) -> dict:
+    return {k.lower(): v for k, v in _ATTR_PAIR.findall(pairs_src or "")}
+
+
+def _is_hidden(name: str, pairs: dict, raw: str = "") -> bool:
+    if name in _HIDE_TAG:
+        return True
+    if _STYLE_HIDE.search(pairs.get("style", "")):
+        return True
+    for key in ("hidden", "aria-hidden"):
+        val = pairs.get(key)
+        if val is not None and val.strip().lower() in ("", "true", key):
+            return True
+        if val is None and re.search(
+                rf"(?<![\w:-]){key}(?![\w-])(?!\s*=)", raw or "", re.I):
+            return True                        # 裸布尔属性 <div hidden>
+    if name == "input" and pairs.get("type", "").strip().lower() == "hidden":
+        return True
+    cls = pairs.get("class", "").lower().replace("|", " ").split()
+    return bool(set(cls) & _HIDE_CLASS)
+
+
+def _strip_invisible(src: str) -> str:
+    """只剔「渲染不出像素」的元素子树，其余原文保留（文本/属性两通道共用）。"""
+    src = _COMMENT.sub(" ", src)
+    out: list[str] = []
+    stack: list[bool] = []
+    hide = 0
+    pos = 0
+    for m in _TAG_ANY.finditer(src):
+        if hide == 0:
+            out.append(src[pos:m.start()])
+        pos = m.end()
+        name = (m.group(2) or "").lower()
+        if not name:                             # doctype 等
+            continue
+        if m.group(1) == "/":                    # 闭标签
+            if stack and stack.pop():
+                hide = max(0, hide - 1)
+            continue
+        hidden = _is_hidden(name, _attrs(m.group(3)), m.group(3))
+        if name in _VOID:                        # 自闭合：无子树，只看自身
+            if hide == 0:
+                out.append(" " if hidden else m.group(0))
+            continue
+        stack.append(hidden)
+        if hidden:
+            hide += 1
+        else:
+            out.append(m.group(0))
+    if hide == 0:
+        out.append(src[pos:])
+    return " ".join(out)
 # 判分语料下限（字符，文本与属性两侧都低于才算空）：低于此值说明入口
 # 可达页根本没有渲染出内容，此时逐条事实判红只会把一个根因摊成 N 条修不
 # 好的幻影失败。取值刻意保守——真应用首页（导航 + 种子名 + 表单标签）
@@ -77,9 +151,12 @@ def _crawl_pages(base_url: str, max_pages: int,
             continue
         if path == "/":
             shell = bool(_JS_MOUNT.search(body))
-        attrs += _ATTRVAL.findall(body)
-        texts.append(_norm(_html.unescape(
-            _TAG.sub(" ", _SCRIPT.sub(" ", body)))))
+        # 文本与属性两通道都只认「渲染得出来」的内容：编译 Playwright spec
+        # 用 isVisible() 断言，本判分器必须同口径，否则隐藏 div 塞文案即可
+        # 骗过平台唯一那道闸。
+        rendered = _strip_invisible(_SCRIPT.sub(" ", body))
+        attrs += _ATTRVAL.findall(rendered)
+        texts.append(_norm(_html.unescape(_TAG.sub(" ", rendered))))
         for href in _HREF.findall(body):
             if (href.startswith("/") and not href.startswith("//")
                     and not _ASSET.search(href) and href not in seen):
