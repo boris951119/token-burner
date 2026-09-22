@@ -190,20 +190,38 @@ def _is_html(src: str) -> bool:
     return head.startswith(("<!doctype html", "<html")) or "<body" in head
 
 
-def _is_json(src: str) -> bool:
-    """数据源通道的入场券：解析得出来的 JSON 文档。
+def _json_corpus(src: str) -> str:
+    """JSON → 可逐字比对的语料（所有字符串值与键名，解开 \\uXXXX 转义）。
 
-    严格解析而非「以 { 开头」，是为了让这一通道吃不下 HTML/模板/半截流——
-    「把需求文案倒进一个没人调的响应里」正是 keep#2 造假想借的另一扇门，
-    能过 json.loads 的载荷至少还是一个真的接口返回值。"""
+    两道关一并在这里：①入场券——严格解析，拿不出 JSON 的载荷（HTML/模板/
+    半截流）一律不吃，「造一个没人调的响应倒满需求文案」正是 keep#2 造假
+    想借的另一扇门，能过 json.loads 的至少是一个真的接口返回值；②转义——
+    不能拿原始字节流当语料，Flask 3 的 jsonify 默认 ensure_ascii=True，中文
+    文案在响应里是「\\u6d88\\u606f」这样的转义序列，与需求原文逐字比对必然
+    对不上，中文题面会整批假红退回批次#16 之前的样子。两关都不过则返回空串
+    （空串在调用方就等于「这不是数据源载荷」）。"""
     head = src[:2048].lstrip()
     if not head.startswith(("{", "[")):
-        return False
+        return ""
     try:
-        json.loads(src)
+        obj = json.loads(src)
     except Exception:
-        return False
-    return True
+        return ""
+    out: list[str] = []
+
+    def walk(x):
+        if isinstance(x, str):
+            out.append(x)
+        elif isinstance(x, dict):
+            for k, v in x.items():
+                out.append(k if isinstance(k, str) else str(k))
+                walk(v)
+        elif isinstance(x, (list, tuple)):
+            for v in x:
+                walk(v)
+
+    walk(obj)
+    return " ".join(out)
 
 
 # ---- 可点击控件通道（9/23 取证）----------------------------------------
@@ -398,8 +416,9 @@ def _crawl_pages(base_url: str, max_pages: int,
             if path != "/":
                 c.dead_links.append(path)
                 tried.add(path)
-                if _is_json(body):
-                    jsons.append(_html.unescape(body))
+                corpus = _json_corpus(body)
+                if corpus:
+                    jsons.append(corpus)
                     api_paths.append(path)
             continue
         c.html_pages += 1
@@ -456,8 +475,9 @@ def _api_sources(base: str, scripts: str, skip: set[str],
             body = _fetch(base + path, min(timeout, _API_TIMEOUT))
         except Exception:
             continue
-        if _is_json(body):
-            bodies.append(_html.unescape(body))
+        corpus = _json_corpus(body)
+        if corpus:
+            bodies.append(corpus)
     return bodies, paths
 
 

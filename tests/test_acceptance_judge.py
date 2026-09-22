@@ -308,6 +308,27 @@ def test_absent_with_working_links_gets_no_link_hint():
     assert "站内链接" not in r["failures"][0]
 
 
+def test_escaped_unicode_from_json_api_is_not_lost():
+    """Flask 3 的 jsonify 默认 ensure_ascii=True：中文文案在接口响应里是
+    \\uXXXX 转义序列。数据源通道必须先解转义再逐字比对，否则中文题面整批
+    假红（转义解不开的通道等于没有通道）。"""
+    zh = ("这里是阅读台的说明文字，书架与其中的每一条笔记都会列在下面，"
+          "支持按标签筛选、按时间排序，以及把常用书架固定在侧边栏。")
+    pages = {
+        "/": (f'<html><body><h1>阅读台</h1><p>{zh}</p>'
+              '<main id="a"></main>'
+              '<script>fetch("/api/state").then(r => r.json()).then(d => {'
+              'document.getElementById("a").innerHTML = d.title;});'
+              '</script></body></html>'),
+        "/api/state": '{"title": "\\u4e66\\u67b6\\u7ba1\\u7406"}',
+    }
+    srv = _serve(pages)
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+    r = judge_checklists([_ck(seed_entities=["书架管理"])], url)
+    srv.shutdown()
+    assert r["failed"] == 0 and r["client_side"] == 1, r
+
+
 def test_api_dump_without_rendering_code_stays_red():
     """反作弊：接口里堆满需求文案，页面脚本却没有一句写 DOM 的动作——数据
     到不了屏幕，这一路不收（keep#2 造假门换的是 JSON 马甲而已）。"""
