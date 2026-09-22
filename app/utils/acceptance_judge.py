@@ -21,6 +21,12 @@
   勾选框的 label/button 类 input 的 value）——评测点控件走 getByRole
   ('button'|'link', {name})，这类断言没有文本兜底；认不出控件语义的一律
   不判红（宁漏不幻），同因超出 8 条时归并成一条计数；
+- 同通道的接线证据（9/23 判分红叶取证）：按钮类控件还须拿得出「点了会有
+  反应」的静态证据（页面带 <script> / 落在 <form> 内 / 自带处理器属性），
+  三者皆无即按占位按钮判红——那份交付首页整站零脚本、把十条需求文案铺成
+  <button type="button">，本地全绿而官方 29/31 例卡在点击超时。占位按钮与
+  「文案当控件」两种红的修法不同（前者补抄文案只会再造一个诱饵），故分开
+  点名。summary/option/勾选框不受此约束：它们的反应是浏览器原生行为。
 - 第三条通道兜客户端渲染（9/23 三组对照取证）：文案虽不在可见文本里、
   但确实出现在页内脚本正文 = 浏览器渲染得出来 → 该条记射程外（不判红不
   判绿，报告里点名条数）。只在页内源码里也不存在才判红，故 keep#2 那类
@@ -191,9 +197,34 @@ _BTN_INPUT = {"submit", "button", "image", "reset"}
 _CHOICE_INPUT = {"checkbox", "radio"}
 # 开标签后取多长当元素正文：模板里闭标签常缺，不设上限会吞掉整页
 _WIN = 600
+# ---- 接线证据（9/23 keep 判分红叶现场取证）------------------------------
+# 那份交付首页 2724 字节、整站零 <script>，把需求的十条动作文案铺成一片
+# <button type="button">（连 "Click Archived" 这种题面句子片段都被做成按钮
+# 名）。可点通道按标签名把它们全判绿，官方评测 29/31 例却卡死在 click/hover
+# 超时——点了不会动的按钮，在评测眼里与正文文字同一价值。故「顶着按钮标签」
+# 不等于「是可点控件」：按钮必须拿得出接线证据。证据三条宽口径（宁漏不幻，
+# 幻红会让修复环围着一条修不好的指令烧掉整轮）：① 页面带任何 <script>
+# （内联或 src，监听 statically 无从证伪）；② 落在 <form> 内（button 的
+# 隐式 type=submit，服务端渲染表单是最常见正常形）；③ 自带处理器属性。
+# summary/option/勾选框不在此列——它们的反应是浏览器原生行为，本就不需接线。
+_JS_TAG = re.compile(r"<script[\s>]", re.I)
+_HANDLER_ATTR = re.compile(
+    r"^(?:on[\w:-]+|x-on:[\w:-]+|v-on:[\w:-]+|@[\w:-]+|ng-[\w:-]*click"
+    r"|ng-submit|wire:[\w:-]+|hx-(?:get|post|put|patch|delete|target|swap)"
+    r"|formaction|formmethod)$", re.I)
+# 点击必须「有下文」的角色：没有接线证据时，评测点下去就是 60 秒超时
+_NEEDS_WIRING_ROLES = {"button", "menuitem", "menuitemradio",
+                       "menuitemcheckbox", "tab", "switch"}
 
 
-def _interactive_corpus(html: str) -> str:
+def _wired(pairs: dict, has_js: bool, in_form: bool) -> bool:
+    """按钮类控件能否对点击作出反应（静态可判的那部分）。"""
+    if has_js or in_form or pairs.get("form"):
+        return True
+    return any(_HANDLER_ATTR.match(k) for k in pairs)
+
+
+def _interactive_corpus(html: str, require_wiring: bool = True) -> str:
     """页面上所有可点/可选控件的正文文字与可访问名，归一成待匹配语料。
 
     只认确定的语义（button/a/summary/option/legend、显式交互 role、
@@ -201,27 +232,43 @@ def _interactive_corpus(html: str) -> str:
     一律不算控件：宁可漏判这条红，也不造幻影红——幻红会让修复环围着一
     条修不好的指令烧掉整轮。label 单独处理，因为 <label>文字</label>
     只有包住（或 for 指向）勾选框时才是可点通道，纯装饰性 label 不是。
+    按钮类还要过 _wired 的接线证据：无脚本页面上的裸 <button> 点了不会
+    有任何反应，算它作控件就是给判分红叶开假绿通道。
+    require_wiring=False 退回「只认标签名」的旧口径，只用来分两种红：
+    顶过按钮标签但没过接线证据 = 占位按钮（抄文案修不好，必须点名真接线），
+    压根不是按钮 = 文案当控件（照旧口径）。
     """
+    # require_wiring=False 时把整页当「带脚本」：_wired 退化成只认标签名，
+    # 用来把「占位按钮」与「文案当控件」两种红分开（修法不同，指令不能混）。
+    has_js = bool(_JS_TAG.search(html)) or not require_wiring
     src = _SCRIPT.sub(" ", html)
-    tags: list[tuple[str, dict, str, str]] = []
+    tags: list[tuple[str, dict, str, str, bool]] = []
+    form_depth = 0
     for m in _TAG_ANY.finditer(src):
         if m.group(1):
-            continue                          # 闭标签
+            if (m.group(2) or "").lower() == "form" and form_depth:
+                form_depth -= 1
+            continue                          # 其余闭标签
         tag = (m.group(2) or "").lower()
+        if tag == "form":
+            form_depth += 1
         raw_inner = src[m.end():m.end() + _WIN]
         stop = re.search(rf"</{re.escape(tag)}[\s>]", raw_inner, re.I)
         if stop:
             raw_inner = raw_inner[:stop.start()]
         tags.append((tag, _attrs_loose(m.group(3)),
-                     _norm(_TAG.sub(" ", raw_inner)), raw_inner))
-    choice_ids = {p.get("id", "").strip() for t, p, _, _ in tags
+                     _norm(_TAG.sub(" ", raw_inner)), raw_inner,
+                     form_depth > 0))
+    choice_ids = {p.get("id", "").strip() for t, p, _, _, _ in tags
                   if t == "input"
                   and p.get("type", "").strip().lower() in _CHOICE_INPUT}
     out: list[str] = []
-    for tag, pairs, inner, raw_inner in tags:
+    for tag, pairs, inner, raw_inner, in_form in tags:
         role = pairs.get("role", "").strip().lower()
         if tag == "input":
             itype = pairs.get("type", "").strip().lower()
+            if itype in _BTN_INPUT and not _wired(pairs, has_js, in_form):
+                continue                     # 表单外的 input[type=submit] 同样点不动
             if itype in _BTN_INPUT or itype in _CHOICE_INPUT:
                 out += [pairs.get("value", ""), pairs.get("aria-label", ""),
                         pairs.get("title", "")]
@@ -235,6 +282,11 @@ def _interactive_corpus(html: str) -> str:
                 out.append(inner)              # 该 label 即勾选框的可点名
             continue
         if tag in _CTRL_TAGS or role in _CTRL_ROLES:
+            is_btn = (tag == "button" or role in _NEEDS_WIRING_ROLES)
+            if not is_btn and tag == "a" and not pairs.get("href"):
+                is_btn = True      # 没有 href 的 <a> 不是 link，点了不导航
+            if is_btn and not _wired(pairs, has_js, in_form):
+                continue
             out += [inner, pairs.get("aria-label", ""), pairs.get("title", "")]
     return _norm(" ".join(c for c in out if c))
 
@@ -404,10 +456,11 @@ def judge_checklists(checklists: list[NodeChecklist], base_url: str,
         failures += [f'{r} 编译清单[{k}] "{e}" 未出现在入口可达页面'
                      for r, k, e in absent]
     # ---- 可点击通道（append 在最尾：不得挤掉上面任何一条指令）----------
-    # 「文案在页面上」但只是正文/标题 —— 需求承诺的是「点击 X」，评测按
-    # getByRole('button'/'link', {name}) 硬定位。主通道判绿掩盖的就是这一类，
-    # keep 两连败的死因，故必须在同一道零 LLM 闸里补判。
+    # 两种「不像控件」的红分开判：文案只是正文/标题，或顶着按钮标签却点了
+    # 不会动（9/23 判分红叶取证）。需求承诺的是「点击 X」，评测按
+    # getByRole('button'/'link', {name}) 硬定位、点完断言变化，两类都拿分。
     ctrl_corpus = ""
+    bare_corpus = ""                            # 只认标签名的旧口径（分两种红用）
     click_seen = click_bad = 0
     for req_id, lab in _iter_click_facts(checklists):
         e = _norm(lab)
@@ -417,20 +470,37 @@ def judge_checklists(checklists: list[NodeChecklist], base_url: str,
             continue            # 客户端渲染：静态判分射程外
         if not ctrl_corpus:
             ctrl_corpus = _interactive_corpus(crawl.raw)
+            bare_corpus = _interactive_corpus(crawl.raw, require_wiring=False)
         click_seen += 1
         if e in ctrl_corpus:
             continue
         click_bad += 1
         if click_bad <= _CLICK_FAIL_MAX:
-            failures.append(
-                f'{req_id} 编译清单[可点击控件] "{lab}" 在页面上只是文本，'
-                f'不是可点击元素：需求写的是点击它，评测按 getByRole'
-                f'("button"/"link", {{name}}) 定位且这类断言没有文本兜底'
-                f'——把它做成 <button> 或 <a href>，文案逐字放进元素内部')
+            if e in bare_corpus:
+                # 顶着按钮标签、却点了不会动：这条红必须点名「真接线」，
+                # 否则修复环收到「做成 <button>」的指令，最省事的满足方式
+                # 就是再往首页抄一批哑按钮（keep r1 的诱饵页正是这条路径）。
+                failures.append(
+                    f'{req_id} 编译清单[占位控件] "{lab}" 顶着 <button>/<a> '
+                    f'标签但点了不会动：它既不在 <form> 内、也没有 onclick/'
+                    f'hx-post/x-on:click 这类处理器（<a> 则连 href 都没有），'
+                    f'所在页面更没有一段 <script>。评测点击后断言的是变化，'
+                    f'这种控件与正文文字等价（本轮判分红叶即此类：一律 60 秒'
+                    f'点击超时）——要么真接线（表单提交，或页内 JS 监听并真的'
+                    f'改变可见状态），要么删掉占位、把控件放到真正处理它的页面'
+                    f'上；再往首页抄一遍文案不算修好')
+            else:
+                failures.append(
+                    f'{req_id} 编译清单[可点击控件] "{lab}" 在页面上只是文本，'
+                    f'不是可点击元素：需求写的是点击它，评测按 getByRole'
+                    f'("button"/"link", {{name}}) 定位且这类断言没有文本兜底'
+                    f'——把它做成 <button> 或 <a href>，文案逐字放进元素内部，'
+                    f'并保证点下去真的有反应')
     if click_bad > _CLICK_FAIL_MAX:
         failures.append(
             f'另有 {click_bad - _CLICK_FAIL_MAX} 条「点击 X」类控件同样只是'
-            f'文本（同类缺陷，逐条指令已达上限）：按上一条的口径一次改完')
+            f'文本或点了不会动（同类缺陷，逐条指令已达上限）：按上一条的'
+            f'口径一次改完')
     out = {"passed": found,
            "failed": len(failures), "total": total, "failures": failures,
            "client_side": len(client_side)}

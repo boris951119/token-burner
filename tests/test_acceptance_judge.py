@@ -349,14 +349,17 @@ class TestClickControlChannel:
     def test_real_button_is_green(self):
         r = judge_checklists(
             [_ck(control_labels=["Take a note"], click_controls=["Take a note"])],
-            _url_for('<button>Take a note</button>'))
+            _url_for('<form action="/notes" method="post">'
+                     '<button>Take a note</button></form>'))
         assert r["failed"] == 0, r["failures"]
         assert "1/1" in r.get("note", "")
 
     def test_every_official_channel_counts(self):
         """button / a[href] / role=menuitem / 勾选框的 label / submit 值——
-        都是评测认的可点通道，漏认一条就是一条幻红。"""
-        body = ('<button>Alpha</button><a href="/x">Beta</a>'
+        都是评测认的可点通道，漏认一条就是一条幻红。页面带脚本（真应用里
+        按钮靠它接线），把接线证据这一维交给 TestInertControlEvidence。"""
+        body = ('<script src="/static/app.js"></script>'
+                '<button>Alpha</button><a href="/x">Beta</a>'
                 '<span role="menuitem">Gamma</span>'
                 '<label for="c1">Delta</label><input id="c1" type="checkbox">'
                 '<label>Epsilon<input type="radio" name="r"></label>'
@@ -399,3 +402,70 @@ class TestClickControlChannel:
         role_fails = [f for f in r["failures"] if "可点击控件" in f]
         assert len(role_fails) == 8
         assert any("另有 4 条" in f for f in r["failures"])
+
+
+# ---- 接线证据（9/23 判分红叶现场取证）----------------------------------
+# 那份被判 1/32 的交付：首页整站零 <script>，把需求的动作文案铺成一片
+# <button type="button">（其中一个就叫 "Click Archived"）。可点通道按标签名
+# 全判绿，官方 29/31 例却一律卡在 click/hover 60 秒超时——本地假绿、官方
+# 真红的通道，必须在这道零 LLM 闸里关掉。规则只认「点了会不会有反应」的
+# 静态证据，不含任何题目词。
+
+class TestInertControlEvidence:
+    def _ck_for(self, labs):
+        return [_ck(control_labels=labs, click_controls=labs)]
+
+    def test_scriptless_bare_button_is_red(self):
+        r = judge_checklists(self._ck_for(["Save Draft"]),
+                             _url_for('<button type="button">Save Draft</button>'))
+        assert r["failed"] == 1, r["failures"]
+        assert r["failures"][0].startswith("REQ-2.1 ")
+        assert "占位控件" in r["failures"][0]
+        # 指令不得写成「做成 <button>」：那正是再造一个诱饵的满足方式
+        assert "真接线" in r["failures"][0]
+
+    def test_form_membership_is_evidence(self):
+        """服务端渲染表单是最常见正常形：<button> 的 type=submit 是隐式的，
+        不得误判（误判即幻红，修复环会围着它烧掉整轮）。"""
+        r = judge_checklists(
+            self._ck_for(["Save Draft"]),
+            _url_for('<form action="/save" method="post">'
+                     '<button type="button">Save Draft</button>'
+                     '<input type="submit" value="Publish"></form>'))
+        assert r["failed"] == 0, r["failures"]
+
+    def test_page_script_is_evidence(self):
+        """页面带脚本（含外链）时静态无从证伪监听，一律照旧计入。"""
+        r = judge_checklists(
+            self._ck_for(["Save Draft", "Publish"]),
+            _url_for('<script src="/static/app.js"></script>'
+                     '<button>Save Draft</button>'
+                     '<span role="button">Publish</span>'))
+        assert r["failed"] == 0, r["failures"]
+
+    def test_handler_attribute_is_evidence(self):
+        r = judge_checklists(
+            self._ck_for(["Alpha", "Beta", "Gamma", "Delta"]),
+            _url_for('<button onclick="go()">Alpha</button>'
+                     '<button hx-post="/x">Beta</button>'
+                     '<button x-on:click="open=true">Gamma</button>'
+                     '<button form="f1">Delta</button>'))
+        assert r["failed"] == 0, r["failures"]
+
+    def test_anchor_without_href_is_not_a_control(self):
+        """<a> 没有 href 就没有 link 语义（点了不导航），带 href 才是通道。"""
+        labs = ["Open Board", "Share Link"]
+        r = judge_checklists(
+            self._ck_for(labs),
+            _url_for(f'<a>{labs[0]}</a><a href="/b">{labs[1]}</a>'))
+        assert r["failed"] == 1, r["failures"]
+        assert labs[0] in r["failures"][0] and "占位控件" in r["failures"][0]
+
+    def test_native_toggles_need_no_wiring(self):
+        """勾选框/summary 的开合是浏览器原生行为，不在接线要求内。"""
+        body = ('<label>Wide Mode<input type="checkbox"></label>'
+                '<details><summary>More Options</summary><p>hidden text'
+                + "y" * 40 + '</p></details>')
+        labs = ["Wide Mode", "More Options"]
+        r = judge_checklists(self._ck_for(labs), _url_for(body))
+        assert r["failed"] == 0, r["failures"]
