@@ -43,6 +43,13 @@ def _atomic_nodes(node: dict) -> list[dict]:
     return out
 
 
+def _root_atomics(tree: dict) -> list[dict]:
+    """树根挂的顶层 ATOMIC——官方题面（stackoverflow/prestashop/ctrip）
+    把 REQ-0「打开首页」类入口验收放在根级而非 FOLDER 下；旧渲染只走
+    FOLDER 分支，这类需求在需求文本/摘要/节点重试/UX 清单四通道全体失踪。"""
+    return [c for c in tree.get("children") or [] if c.get("type") == "ATOMIC"]
+
+
 def _render_scenario(atomic: dict) -> str:
     lines: list[str] = []
     for scenario in atomic.get("scenarios") or []:
@@ -72,6 +79,15 @@ def render_folder_summary(tree: dict, *, web_port: int = 3301) -> str:
         if child.get("type") == "FOLDER"
     ]
     atomic_total = 0
+    root_atomics = _root_atomics(tree)
+    if root_atomics:
+        atomic_total += len(root_atomics)
+        lines.append("")
+        lines.append(
+            f"## 全局入口验收（根级需求，{len(root_atomics)} 条，不单设模块）"
+        )
+        for atomic in root_atomics:
+            lines.append(f"- {atomic.get('id', '')} {atomic.get('name', '')}")
     for folder in folders:
         atomics = _atomic_nodes(folder)
         atomic_total += len(atomics)
@@ -179,6 +195,25 @@ def render_requirement_text(
         if child.get("type") == "FOLDER"
     ]
     atomic_total = 0
+    root_atomics = _root_atomics(tree)
+    if root_atomics:
+        atomic_total += len(root_atomics)
+        lines.append("")
+        lines.append(
+            "## 全局入口验收（根级需求，不单设模块——"
+            "由承担 Web 界面与组装职责的模块认领对应页面与端点）"
+        )
+        for atomic in root_atomics:
+            lines.append("")
+            lines.append(
+                f"### {atomic.get('id', '')} {atomic.get('name', '')}（验收标准）"
+            )
+            desc = (atomic.get("description") or "").strip()
+            if desc:
+                lines.append(desc)
+            rendered = _render_scenario(atomic)
+            if rendered:
+                lines.append(rendered)
     for folder in folders:
         atomics = _atomic_nodes(folder)
         atomic_total += len(atomics)

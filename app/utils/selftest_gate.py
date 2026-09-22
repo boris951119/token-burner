@@ -76,8 +76,9 @@ def _split_atomic_nodes(requirement: str) -> tuple[list[tuple[str, str]], str]:
                 folder_ctx = [ln]
             else:
                 mode = "other"
+                folder_ctx = []
                 global_parts.append(ln)
-        elif ln.startswith("### ") and mode in ("folder", "node"):
+        elif ln.startswith("### ") and mode in ("folder", "node", "other"):
             flush()
             m = _NODE_HEADER_RE.match(ln)
             cur_id = m.group(1) if m else "?"
