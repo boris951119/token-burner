@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import ast
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -109,6 +110,8 @@ def generate_app_main(surfaces: list[ModuleSurface]) -> str:
             imports.append(f"import {s.name}  # noqa: F401  (保底导入)")
     imports = sorted(set(imports))
     return f'''"""机械装配的组装模块（mechanical_assembly 生成，勿手改）。"""
+import os
+
 from flask import Flask, jsonify
 
 {chr(10).join(imports)}
@@ -116,6 +119,9 @@ from flask import Flask, jsonify
 
 def create_app() -> Flask:
     app = Flask(__name__)
+    # 组装层自带 secret_key：冒烟闸对「有登录路由却缺 secret_key」判红，
+    # 保底壳若不含 session 支持，等于把可修的登录功能判死。
+    app.secret_key = os.environ.get("SECRET_KEY", "arcbench-assembled-app")
 
     @app.route("/api/health")
     def health():
@@ -297,3 +303,39 @@ def assemble(code_dir: Path, scaffold: bool = False) -> dict:
         "parse_errors": [f"{s.name}/{e}" for s in surfaces for e in s.parse_errors],
         "file": str(target / "app_main.py"),
     }
+
+
+_ENTRY_FACTORY = re.compile(r"^def create_app\b", re.M)
+_ENTRY_APP = re.compile(r"^(?:app|application)\s*=\s*[\w.]+\s*\(", re.M)
+
+
+def has_importable_entry(code_dir: Path) -> bool:
+    """官方 runner 导入期能否发现应用入口。
+
+    只认列零（模块级、import 即执行）的 `def create_app` 与
+    `app = Flask(...)`：缩进在 `if __name__ == "__main__"` 守卫里的 app
+    不算——runner 是 import 不是 run，那种产物在容器里直接 exit 1
+    （不评分，比任何 UI 缺陷都贵）。
+    """
+    for py in sorted(Path(code_dir).rglob("*.py")):
+        if "__pycache__" in py.parts:
+            continue
+        try:
+            src = py.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if _ENTRY_FACTORY.search(src) or _ENTRY_APP.search(src):
+            return True
+    return False
+
+
+def ensure_entry(code_dir: Path) -> dict | None:
+    """入口保底：树里查不到可导入入口时机械装配一个（返回 assemble 摘要）。
+
+    只在最后一道出口调用，不在构建/修复轮次里调用——保底壳与作者入口在
+    runner 的择优规则里会打架，作者入口在场时必须原样让位（返回 None）。
+    """
+    code_dir = Path(code_dir)
+    if has_importable_entry(code_dir):
+        return None
+    return assemble(code_dir)

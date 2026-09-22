@@ -144,7 +144,8 @@ def _export_official_layout(workdir: Path, project_dir: Path | None) -> bool:
         summary = export_platform_layout(workdir, project_dir)
         print("[export] 官方布局已落地: "
               f"backend={summary['backend_files']}文件, "
-              f"frontend={summary['frontend_files']}文件", flush=True)
+              f"frontend={summary['frontend_files']}文件, "
+              f"入口={summary.get('entry') or 'author'}", flush=True)
         return True
     except Exception as exc:
         print(f"[export] 布局适配失败（交付不受影响）: {exc!r}", flush=True)

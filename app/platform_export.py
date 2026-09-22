@@ -14,6 +14,10 @@ backend/ 目录（arc-bench 2026-09 更新）。参考契约（官方 12306 参�
 - backend/  = 生成代码全量 + 通用启动入口 main.py（自动发现 create_app）
 - frontend/ = 最小可构建 Vite+React 壳（过布局验证与 preview）
 评测页面仍由 backend 渲染，与本地 verify 语义一致。
+
+出口另有一道入口保底：发现树里没有任何可导入入口（作者组装模块缺失）时
+机械装配 app_main.create_app 兜底——产物起不来是 exit 1（不评分），比任
+何 UI 缺陷都贵，这一层不交给概率。
 """
 from __future__ import annotations
 
@@ -268,9 +272,30 @@ def export_platform_layout(output_dir: Path, project_dir: Path) -> dict:
     # = 活代码被 export 弄死；两遍探测的第二遍会扫到它）
     if (code_dir / "main.py").is_file():
         shutil.copy2(code_dir / "main.py", backend / "project_main.py")
+    # 入口保底（9/23 keep r0 产物取证）：整棵树查不到可导入入口时，通用
+    # 启动器 raise SystemExit → 容器 exit 1 = 不评分 = 整跑 0 分，UI 写得
+    # 再好也一样。机械装配一个 create_app（注册全部扫到的 Blueprint）至
+    # 少换来「服务活着 + /api/health 绿」的可评分终态。必须在写入通用
+    # 启动器之前扫描：那份文本里的 `app = max(...)` 会被入口规则误认。
+    entry_fix: dict | None = None
+    try:
+        from app.utils.mechanical_assembly import ensure_entry
+
+        entry_fix = ensure_entry(backend)
+    except Exception:
+        entry_fix = None
+    req_text = _requirements_for(code_dir)
+    if entry_fix:
+        import re
+
+        need = (["fastapi", "uvicorn"]
+                if entry_fix["framework"] == "fastapi" else ["flask"])
+        for dep in need:
+            if not re.search(rf"^{dep}\b", req_text, re.M | re.I):
+                req_text = req_text + f"{dep}\n"
     (backend / "main.py").write_text(_BACKEND_MAIN, encoding="utf-8")
     (backend / "requirements.txt").write_text(
-        _requirements_for(code_dir), encoding="utf-8")
+        req_text, encoding="utf-8")
     (backend / "package.json").write_text(
         json.dumps(_BACKEND_PACKAGE_JSON, indent=2), encoding="utf-8")
 
@@ -292,4 +317,7 @@ def export_platform_layout(output_dir: Path, project_dir: Path) -> dict:
         "frontend_files": sum(1 for _ in frontend.rglob("*") if _.is_file()),
         "backend": str(backend),
         "frontend": str(frontend),
+        # 入口来源：author = 生成的组装模块在场；mechanical = 保底壳已装配
+        # （务必见于日志，否则「产物活着」与「产物靠保底壳活着」看不出来）
+        "entry": ("mechanical" if entry_fix else "author"),
     }

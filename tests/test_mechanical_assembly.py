@@ -192,3 +192,43 @@ def test_scaffold_skips_broken_and_app_main(tmp_path):
     created = scaffold_frozen_modules(code, scan_surfaces(code))
     assert created == ["healthy/healthy_routes.py"], \
         "坏包与 app_main 不得放存根"
+
+
+# ---- 入口探测（export 出口保假的判据）----------------------------------
+# 官方 runner 是 import 而非 run：入口必须**导入期可见**才算数。
+
+def _entry_tree(tmp_path, src: str) -> bool:
+    from app.utils.mechanical_assembly import has_importable_entry
+
+    pkg = tmp_path / "code" / "notes"
+    pkg.mkdir(parents=True, exist_ok=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "notes.py").write_text(src, encoding="utf-8")
+    return has_importable_entry(tmp_path / "code")
+
+
+def test_import_time_entry_counts(tmp_path):
+    assert _entry_tree(tmp_path, "from flask import Blueprint\n"
+                                 "def create_app():\n    pass\n")
+    assert _entry_tree(tmp_path, "from flask import Flask\n"
+                                 "app = Flask(__name__)\n")
+
+
+def test_main_guarded_app_is_not_an_entry(tmp_path):
+    """`app = Flask(...)` 缩进在 __main__ 守卫里 = import 后无属性可取，
+    runner 两遍探测全空 → exit 1。这种树必须判「无入口」并触发保底装配。"""
+    assert not _entry_tree(tmp_path, "from flask import Flask\n"
+                                     "if __name__ == '__main__':\n"
+                                     "    app = Flask(__name__)\n")
+
+
+def test_ensure_entry_yields_to_author(tmp_path):
+    from app.utils.mechanical_assembly import ensure_entry
+
+    pkg = tmp_path / "code" / "notes"
+    pkg.mkdir(parents=True, exist_ok=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "notes.py").write_text(
+        "def create_app():\n    pass\n", encoding="utf-8")
+    assert ensure_entry(pkg.parent) is None
+    assert not (tmp_path / "code" / "app_main").exists()

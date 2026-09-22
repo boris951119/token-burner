@@ -161,3 +161,62 @@ def test_authored_app_entry_beats_create_app_factory(tmp_path):
         for name in list(sys.modules):
             if name.startswith(("app_main", "project_main", "runner_main")):
                 sys.modules.pop(name, None)
+
+
+# ---- 出口入口保底（9/23 keep r0 真产物取证）------------------------------
+# 那份交付的整棵树里没有任何 create_app，也没有模块级 app：官方 runner 的
+# 入口探测两遍全空 → SystemExit → 容器 exit 1 = **不评分**。首页写得再好
+# 也换不到一分，而管线当时还「尽力交付」成功了——这一层不能交给概率。
+
+@pytest.fixture
+def entryless_project(tmp_path):
+    proj = tmp_path / "eproj"
+    code = proj / "code"
+    (code / "records").mkdir(parents=True)
+    (code / "records" / "__init__.py").write_text("", encoding="utf-8")
+    (code / "records" / "records.py").write_text(
+        "from flask import Blueprint\n"
+        "bp = Blueprint('records', __name__)\n"
+        "@bp.route('/records')\n"
+        "def page():\n    return 'records page'\n", encoding="utf-8")
+    return proj
+
+
+def test_missing_entry_is_backfilled_at_export(tmp_path, entryless_project):
+    out = tmp_path / "out"
+    summary = export_platform_layout(out, entryless_project)
+    assert summary["entry"] == "mechanical", "出口必须报告入口是保底壳"
+    assert (out / "backend" / "app_main" / "app_main.py").is_file()
+    reqs = (out / "backend" / "requirements.txt").read_text(encoding="utf-8")
+    assert "flask" in reqs, "保底壳 import flask，依赖表得跟着补（缺=部署即死）"
+
+
+def test_backfilled_artifact_boots_with_business_routes(tmp_path,
+                                                        entryless_project):
+    """保底不是「只求活着」：扫到的 Blueprint 必须真挂上，否则产物只剩
+    /api/health，评测仍按可见文案全灭。"""
+    import importlib.util
+
+    out = tmp_path / "out"
+    export_platform_layout(out, entryless_project)
+    be = out / "backend"
+    spec = importlib.util.spec_from_file_location(
+        "runner_main_backfill", be / "main.py")
+    mod = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(mod)          # 模块级执行即完成入口探测
+        rules = {r.rule for r in mod.app.url_map.iter_rules()}
+        assert "/records" in rules and "/api/health" in rules, rules
+        assert mod.app.secret_key, "保底壳缺 secret_key：session 登录必 500"
+    finally:
+        for name in list(sys.modules):
+            if name.startswith(("app_main", "records", "runner_main")):
+                sys.modules.pop(name, None)
+
+
+def test_author_entry_is_never_shadowed(tmp_path, project):
+    out = tmp_path / "out"
+    summary = export_platform_layout(out, project)
+    assert summary["entry"] == "author"
+    assert not (out / "backend" / "app_main").exists(), \
+        "作者入口在场时装配保底必须让位，不得旁路修复成果"
