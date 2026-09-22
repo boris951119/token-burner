@@ -16,10 +16,12 @@
 from __future__ import annotations
 
 import base64
+import concurrent.futures
 import io
 import json
 import os
 import re
+import threading
 from pathlib import Path
 
 import httpx
@@ -32,7 +34,7 @@ VISION_MODELS = ("openai/kimi-k3", "openai/minimax-m3")
 # 需求描述里的内嵌图片引用（Markdown 图语法）
 _IMG_REF_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 
-_MAX_IMAGES = 24          # 单任务截图描述上限（成本护栏）
+_MAX_IMAGES = 40          # 单任务截图描述上限（成本护栏；ctrip 47 图实测）
 _MAX_EDGE = 1024          # 长边压到 1024px（token 护栏）
 
 
@@ -134,48 +136,84 @@ def describe_images(req_dir: Path, refs: list[str],
             cache = {}
 
     endpoints = _vision_endpoints(key, base)
-    todo = [r for r in refs if r not in cache][: _MAX_IMAGES]
+    pending = [r for r in refs if r not in cache]
+    todo = pending[:_MAX_IMAGES]
+    if len(pending) > len(todo):
+        print(f"[vision] 上限 {len(pending) - len(todo)} 图未转写"
+              f"（共引用 {len(pending)}，护栏 _MAX_IMAGES={_MAX_IMAGES}）",
+              flush=True)
     # run5 尸检（Linux 容器）：20 图串行转写在旧实现里全程零打印、
     # 缓存只在末尾一次性落盘——中途被杀则数十次视觉调用全部白烧，
     # 且平台侧日志看不到任何进展。改为逐图落盘 + 逐图打印 + 总时限。
+    # 9/23 run6 实测：单图 ~40s，串行下 600s 时限只吃得下 15 图，
+    # keep 剩 7 图、ctrip 46 图只剩 ~30 图——视觉保真层正是历次彩排
+    # 的死因所在，故并行拉高吞吐（3 路，网关已在生成阶段并发 3 模型）。
     import time as _time
+
     deadline = _time.monotonic() + float(
-        os.environ.get("ARCBENCH_VISION_DEADLINE", "600"))
-    for idx, ref in enumerate(todo, 1):
-        if _time.monotonic() > deadline:
-            print(f"[vision] 达总时限，{len(todo) - idx + 1} 图未转写"
-                  "（已转写部分照常注入）", flush=True)
-            break
+        os.environ.get("ARCBENCH_VISION_DEADLINE", "900"))
+    workers = max(1, int(os.environ.get("ARCBENCH_VISION_WORKERS", "3")))
+    lock = threading.Lock()
+
+    def _work(ref: str) -> tuple[str, str | None, str]:
         img = (req_dir / ref)
         if not img.is_file():          # 引用路径形如 ./reference/x.png
             img = req_dir / ref.lstrip("./")
         if not img.is_file():
-            continue
+            return ref, None, "缺文件"
         b64 = _downscale_b64(img)
         if b64 is None:
-            continue
+            return ref, None, "读图失败"
         for model, ebase, ekey in endpoints:
             try:
-                cache[ref] = _describe_one(model, b64, ekey, ebase,
-                                           timeout=90)
-                break
+                return ref, _describe_one(model, b64, ekey, ebase,
+                                          timeout=90), "ok"
             except Exception:
                 continue               # 逐备胎，全败则该图无描述
+        return ref, None, "FAIL"
+
+    def _flush() -> None:
         try:
             cache_path.write_text(
                 json.dumps(cache, ensure_ascii=False, indent=1),
                 encoding="utf-8")
         except Exception:
             pass
-        print(f"[vision] {idx}/{len(todo)} {ref} "
-              f"{'ok' if ref in cache else 'FAIL'}", flush=True)
+
+    done = 0
+    ex = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+    try:
+        futs = [ex.submit(_work, r) for r in todo]
+        remaining = deadline - _time.monotonic()
+        if remaining <= 0:
+            print("[vision] 达总时限，全部图未转写（已缓存部分照常注入）",
+                  flush=True)
+        else:
+            try:
+                for fut in concurrent.futures.as_completed(
+                        futs, timeout=remaining):
+                    ref, desc, status = fut.result()
+                    with lock:
+                        if desc:
+                            cache[ref] = desc
+                        done += 1
+                        _flush()
+                        print(f"[vision] {done}/{len(todo)} {ref} {status}",
+                              flush=True)
+            except concurrent.futures.TimeoutError:
+                print(f"[vision] 达总时限，{len(todo) - done} 图未转写"
+                      "（已转写部分照常注入）", flush=True)
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
     try:
         cache_path.write_text(
             json.dumps(cache, ensure_ascii=False, indent=1),
             encoding="utf-8")
     except Exception:
         pass
-    return {k: v for k, v in cache.items() if k in refs}
+    # 按 refs 原序返回：完成序会让注入需求文本的段落顺序随网络抖动变化，
+    # 同一题两次运行的提示词就不逐字相同了（复现性取证要求）
+    return {r: cache[r] for r in refs if r in cache}
 
 
 def render_image_section(descriptions: dict[str, str]) -> str:
