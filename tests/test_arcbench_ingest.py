@@ -203,3 +203,15 @@ def test_render_declares_the_grader_boots_on_an_empty_db():
     text = render_requirement_text(tree)
     assert "评测起服时是空库" in text
     assert "会被剥除" in text
+
+
+def test_render_requires_click_targets_to_be_wired():
+    """9/23 判分红叶取证：语义标签规则（17）只保证「是 <button>」，不保证
+    「点了有反应」——交付于是把需求动作用词抄成一排无脚本无处理器的哑按钮，
+    本地判分全绿、评测 29 例点击超时。硬契约必须自己把接线这一维说死。"""
+    import yaml
+
+    text = render_requirement_text(yaml.safe_load(_TREE))
+    assert "点下去会有反应" in text
+    assert "缺接线证据" in text
+    assert "60 秒点击超时" in text

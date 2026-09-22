@@ -477,9 +477,10 @@ def render_ux_checklist(checklists: list[NodeChecklist],
             parts.append("控件须可见: " + "、".join(
                 f'"{c}"' for c in ck.control_labels[:8]))
         if ck.click_controls:
-            parts.append("其中需求要求点击（必须是 <button>/<a>/勾选框，"
-                         "正文文字不算控件）: " + "、".join(
-                             f'"{c}"' for c in ck.click_controls[:6]))
+            parts.append("其中需求要求点击（必须是 <button>/<a href>/勾选框，"
+                         "且点下去真有反应——在 <form> 内提交或由页内 JS 监听"
+                         "并改变可见状态；正文文字与无行为的占位按钮都不算控件）: "
+                         + "、".join(f'"{c}"' for c in ck.click_controls[:6]))
         if ck.behavior_expectations:
             parts.append("动作后须出现: " + "、".join(
                 f'"{b}"' for b in ck.behavior_expectations[:6]))
@@ -499,6 +500,9 @@ def render_ux_checklist(checklists: list[NodeChecklist],
         "提示区文本），禁止同义改写；也禁止把文案塞进隐藏位置——"
         "display:none / hidden 元素、HTML 注释、<template> 都算未实现"
         "（评测按渲染后的可见性断言，藏在页面源码里的文案一分不得）。\n"
+        "把需求文案铺成一批「既不在 <form> 内、也没有任何脚本/处理器」的"
+        "<button> 摆在入口页充数，同样一分不得：评测点下去断言的是变化，"
+        "点了不会动的按钮与正文文字等价（验收按「缺接线证据」逐条判红）。\n"
         "「控件须可见」只要求**控件本身**在入口可达页出现；"
         "「动作后须出现」必须由点击/提交真的触发后才渲染——"
         "把动作后的提示、编辑框、确认项静态铺在页面上凑数，等于交互链"

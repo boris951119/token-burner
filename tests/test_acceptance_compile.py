@@ -376,6 +376,19 @@ def test_ux_checklist_keeps_actions_gated(tmp_path):
     assert "触发" in s and "交互链" in s
 
 
+def test_ux_checklist_demands_wired_click_targets(tmp_path):
+    """9/23 判分红叶取证：可点通道按标签名认控件，于是交付首页把需求动作
+    名词抄成一批无 <form>、无脚本、无处理器的 <button> 就骗过了本地全绿，
+    评测却在这些按钮上点了 29 次超时。契约必须自己说清「点了要有反应」，
+    否则修复环学会的第一课就是造诱饵页。"""
+    from app.acceptance_compile import compile_checklists, render_ux_checklist
+
+    s = render_ux_checklist(compile_checklists(_write(tmp_path)))
+    assert "点了不会动的按钮与正文文字等价" in s
+    line = next(ln for ln in s.splitlines() if "需求要求点击" in ln)
+    assert "真有反应" in line and "<form>" in line
+
+
 # ---- 可点击控件子集（9/23 取证：文案可见 ≠ 控件存在）--------------------
 # 官方按 getByRole('button'/'link', {name}) 点控件，无文本兜底；判分器要把
 # 「必须做成可点控件」的事实从「必须出现在页面上」里分出来，动词归属
