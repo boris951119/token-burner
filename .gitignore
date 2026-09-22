@@ -103,3 +103,10 @@ scripts/official_grade/specs-compiled/
 scripts/official_grade/compiled-report.json
 scripts/official_grade/compiled-summary.json
 scripts/official_grade/compiled-results/
+
+# 官方判分运行残留（本机彩排现场，不入库）
+scripts/official_grade/test-results*/
+scripts/official_grade/probe-*
+scripts/official_grade/app-boot.log
+scripts/official_grade/grade-run.log
+scripts/official_grade/scripts/
