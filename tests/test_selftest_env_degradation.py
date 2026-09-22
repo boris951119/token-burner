@@ -7,6 +7,8 @@
 ② 连带的 node-free 段（导出布局→起服→健康探针→零 LLM 编译判分）
    一起报废，而"布局违约""起服死亡"两大死因从来不依赖 node。
 """
+from pathlib import Path
+
 import pytest
 
 import app.utils.selftest_gate as sg
@@ -135,4 +137,80 @@ def test_empty_specs_dir_is_zero_signal_not_a_pass(tmp_path, monkeypatch):
     specs.mkdir()
     passed, failed, failures, tail = sg.run_selftests(tmp_path, specs)
     assert failed == 1 and "零收集" in failures[0]
+
+
+def test_boot_death_is_counted_and_carries_traceback(tmp_path, monkeypatch):
+    """起服即死（平台 0 分头号死因）：计数必须为 1（否则闸口按零信号
+    报废、修复环拿不到），且后端 traceback 必须随失败串进入修复指令
+    （旧实现 stdout/stderr 进 DEVNULL，只剩一句无信息量的超时）。"""
+    import app.platform_export as pe
+
+    def fake_export(out_dir, project_dir):
+        (out_dir / "backend").mkdir(parents=True, exist_ok=True)
+        (out_dir / "backend" / "main.py").write_text("pass", encoding="utf-8")
+        return {"backend_files": 1, "frontend_files": 0}
+
+    class _DyingProc:
+        pid = 4343
+
+        def __init__(self, *a, **k):
+            k["stdout"].write("ModuleNotFoundError: no module named 'notes'")
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    monkeypatch.setattr(pe, "export_platform_layout", fake_export)
+    monkeypatch.setattr(sg, "_free_port", lambda prefer: 39998)
+    monkeypatch.setattr(sg.subprocess, "Popen", _DyingProc)
+    monkeypatch.setattr(sg, "_wait_health", lambda url, deadline_s=90: False)
+    passed, failed, failures, tail = sg.run_selftests(tmp_path, None)
+    assert (passed, failed) == (0, 1)
+    assert "ModuleNotFoundError" in failures[0], "死因必须进修复指令"
+
+
+def test_relative_project_dir_still_launches_absolute(tmp_path, monkeypatch,
+                                                     tmp_path_factory):
+    """project_dir 相对路径下，起服脚本路径曾被 cwd 二次拼接
+    （`backend/<相对 project_dir>/backend/main.py`）→ 健康探针必然超时，
+    而失败原因看起来像"应用起不来"——假红会白白烧掉修复轮。"""
+    import app.platform_export as pe
+
+    captured = {}
+
+    class _NoopProc:
+        pid = 4444
+
+        def __init__(self, argv, *a, **k):
+            captured["argv"] = list(argv)
+            k["stdout"].write("booted")
+
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
+    def fake_export(out_dir, project_dir):
+        (out_dir / "backend").mkdir(parents=True, exist_ok=True)
+        (out_dir / "backend" / "main.py").write_text("pass", encoding="utf-8")
+        return {"backend_files": 1, "frontend_files": 0}
+
+    root = tmp_path_factory.mktemp("relroot")
+    monkeypatch.chdir(root)
+    (root / "proj").mkdir()
+    monkeypatch.setattr(pe, "export_platform_layout", fake_export)
+    monkeypatch.setattr(sg, "_free_port", lambda prefer: 39997)
+    monkeypatch.setattr(sg.subprocess, "Popen", _NoopProc)
+    monkeypatch.setattr(sg, "_wait_health", lambda url, deadline_s=90: True)
+    sg.run_selftests(Path("proj"), None)
+    assert Path(captured["argv"][1]).is_absolute(), captured["argv"]
 

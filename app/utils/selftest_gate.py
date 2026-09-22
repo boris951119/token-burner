@@ -368,7 +368,7 @@ def run_selftests(project_dir: Path, specs_dir: Path,
     → (passed, failed, failures, tail)。"""
     from app.platform_export import export_platform_layout
 
-    project_dir = Path(project_dir)
+    project_dir = Path(project_dir).resolve()
     # 时间戳模板目录（2026-09-20 取证：Windows 下上一轮服务子进程句柄
     # 未释放会让固定目录 rmtree 崩溃；新目录天然避开锁，旧目录尽力清理）
     template = project_dir / f".selftest_template_{int(time.time())}"
@@ -383,15 +383,30 @@ def run_selftests(project_dir: Path, specs_dir: Path,
     export_platform_layout(template, project_dir)
     backend = template / "backend"
     if not (backend / "main.py").is_file():
-        return 0, 0, ["导出缺 backend/main.py"], ""
+        # 计数必须与 failures 一致：旧实现返回 0/0 却带一条失败，
+        # 闸口按"零信号"报废——起服即死（平台 0 分头号死因）的诊断
+        # 信息被丢弃，且修复环拿不到这条最该修的失败。
+        return 0, 1, ["导出缺 backend/main.py"], ""
     port = _free_port(port_hint)
+    # 起服日志必须落盘：健康探针超时时，后端 traceback 是修复环唯一
+    # 看得见的死因（旧实现 stdout/stderr 全进 DEVNULL——只剩一句
+    # "健康探针超时"，修复 LLM 无从下手）
+    boot_log = template / "backend-boot.log"
+    boot_fp = open(boot_log, "w", encoding="utf-8", errors="replace")
     proc = subprocess.Popen(
         [sys.executable, str(backend / "main.py")],
         cwd=str(backend), env=dict(os.environ, PORT=str(port)),
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        stdout=boot_fp, stderr=subprocess.STDOUT)
     try:
         if not _wait_health(f"http://127.0.0.1:{port}/api/health"):
-            return 0, 0, ["健康探针超时"], ""
+            boot_fp.flush()
+            why = ""
+            try:
+                why = boot_log.read_text(
+                    encoding="utf-8", errors="replace").strip()[-1200:]
+            except Exception:
+                pass
+            return 0, 1, [f"健康探针超时，后端输出尾部：\n{why}"], why
         # 编译清单判分（零 LLM、秒级）：需求逐字事实 × 活服。失败串以
         # REQ id 开头，与自测失败同清单进修复环即为定向指令。
         csum: dict = {"passed": 0, "failures": []}
@@ -474,6 +489,10 @@ def run_selftests(project_dir: Path, specs_dir: Path,
             proc.wait(timeout=10)
         except Exception:
             proc.kill()
+        try:
+            boot_fp.close()   # Windows：句柄不关会锁死下一轮模板目录清理
+        except Exception:
+            pass
 
 
 def selftest_gate(project_dir: Path, requirement: str, settings,
@@ -486,7 +505,7 @@ def selftest_gate(project_dir: Path, requirement: str, settings,
     # 真实网关，生成会挂死真实网络调用）
     if os.environ.get("ARCBENCH_SELFTEST", "").lower() in {"off", "0", "no"}:
         return False, "自测闸关闭（ARCBENCH_SELFTEST=off）"
-    project_dir = Path(project_dir)
+    project_dir = Path(project_dir).resolve()
     reason = node_unavailable_reason()
     specs_dir: Path | None = None
     if reason:
