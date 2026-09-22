@@ -256,12 +256,34 @@ class _FieldAnchors(_HTMLParser):
                         or (i and i in self._label_fors))]
 
 
+def _page_paths(_app):
+    """全部无参 GET 页面路径，Flask/Starlette 双栈。
+
+    9/23 取证：本段此前直读 app.url_map（Flask 专有）——FastAPI 交付在这
+    一行抛 AttributeError 整段冒烟猝死，连后面的 DDL 缺表检查都跑不到，
+    修复环拿到的只有一段 traceback 而不是可执行判词。"""
+    if hasattr(_app, "url_map"):
+        for rule in _app.url_map.iter_rules():
+            if "GET" not in rule.methods:
+                continue
+            yield str(rule)
+        return
+    for r in getattr(_app, "routes", []):
+        path = getattr(r, "path", None)
+        if not path:
+            continue                      # Mount 等无 path 节点跳过
+        if "GET" not in (getattr(r, "methods", None) or ()):
+            continue
+        yield path
+
+
 _bodies = []
-for _rule in sorted(app.url_map.iter_rules(), key=lambda r: str(r)):
-    _p = str(_rule)
-    if "GET" not in _rule.methods or "<" in _p:
+for _p in sorted(_page_paths(app)):
+    if "<" in _p or "{" in _p:            # 带参路由留给旅程脚本
         continue
     if _p.startswith("/api") or "static" in _p:
+        continue
+    if _p in ("/openapi.json", "/docs", "/redoc", "/docs/oauth2-redirect"):
         continue
     try:
         _r = client.get(_p)

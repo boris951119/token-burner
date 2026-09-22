@@ -216,3 +216,44 @@ class TestAriaFieldAnchoring:
         ok, report = _run(tmp_path, _flask_app(
             "<a href='/x'>X</a><input id='q' type='text'>"))
         assert not ok and "可定位通道" in report
+
+
+def _fastapi_app(home_body: str) -> str:
+    return (
+        "from fastapi import FastAPI\n"
+        "from fastapi.responses import HTMLResponse\n"
+        "def create_app():\n"
+        "    app = FastAPI()\n"
+        "    @app.get('/api/health')\n"
+        "    def h():\n        return {'status': 'ok'}\n"
+        "    @app.get('/')\n"
+        f"    def home():\n        return HTMLResponse({home_body!r})\n"
+        "    @app.post('/')\n"
+        "    def make():\n        return {'ok': True}\n"
+        "    @app.get('/notes/{note_id}')\n"
+        "    def note(note_id: int):\n        return {'id': note_id}\n"
+        "    return app\n"
+    )
+
+
+class TestFastAPIPageCrawl:
+    """9/23 取证：页面体检段直读 Flask 专有的 url_map——FastAPI 交付在这
+    一行抛 AttributeError，整段冒烟猝死，后面的 DDL 缺表检查一并跑不到，
+    修复环只拿到一段 traceback 而没有可执行判词。技术栈规则一直推荐
+    「Flask 或 FastAPI」，双栈是这条推荐的义务。"""
+
+    def test_fastapi_reaches_same_aria_gate(self, tmp_path):
+        ok, report = _run(tmp_path, _fastapi_app(
+            "<a href='/x'>X</a><input type='text' name='q'>"))
+        assert not ok
+        assert "可定位通道" in report
+
+    def test_fastapi_anchored_input_passes(self, tmp_path):
+        ok, report = _run(tmp_path, _fastapi_app(
+            "<a href='/x'>X</a><input type='search' placeholder='Search'>"))
+        assert ok, report
+
+    def test_parameterised_and_post_routes_stays_out(self, tmp_path):
+        """/notes/{id} 与 POST / 都不该被 GET 探（405/422 页体会污染体检）。"""
+        ok, report = _run(tmp_path, _fastapi_app("<a href='/x'>X</a>"))
+        assert ok, report
