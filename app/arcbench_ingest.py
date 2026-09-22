@@ -17,6 +17,7 @@ ARC 官方流程，生成侧应把同目录 tests/helpers.ts 一并作为上下�
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 _REQUIREMENT_NAMES = ("requirements.yaml", "requirements.yml")
@@ -274,9 +275,51 @@ def locate_fixture(requirement_dir: str | Path) -> Path | None:
     return None
 
 
+_FIXTURE_HEAD_BUDGET = 8000
+_FIXTURE_TAIL_CAP = 4000
+_FIXTURE_QUOTED_RE = re.compile(r"[\"'`]([^\"'`\n]{3,80})[\"'`]")
+
+
+def _fixture_tail_facts(head: str, tail: str) -> str:
+    """截断尾段的逐字事实串 → 契约续块（不含则整体丢弃）。
+
+    保留判据＝可见文案形态：含大写 / 含空格 / 含 @（邮箱类种子）；
+    剔除 ARIA role、CSS/路径、模板插值、箭头函数等测试机制代码串。"""
+    head_strings = set(_FIXTURE_QUOTED_RE.findall(head))
+    kept: list[str] = []
+    seen: set[str] = set()
+    for m in _FIXTURE_QUOTED_RE.finditer(tail):
+        s = m.group(1)
+        if s in head_strings or s in seen:
+            continue
+        if not any(c.isupper() for c in s) and " " not in s and "@" not in s:
+            continue
+        if "${" in s or "=>" in s or s.startswith(("http", "./", "../", "#", "/")):
+            continue
+        seen.add(s)
+        kept.append(s)
+    if not kept:
+        return ""
+    body = "\n".join(f'- "{k}"' for k in kept)
+    if len(body) > _FIXTURE_TAIL_CAP:
+        body = body[:_FIXTURE_TAIL_CAP] + "\n- …"
+    return (
+        "\n\n【夹具截断尾部关键串（承接上文，同为精确断言）】\n" + body
+    )
+
+
 def load_fixture_hint(requirement_dir: str | Path) -> str:
-    """读取 tests/helpers.ts 原文作为种子数据契约；不存在返回空串。"""
+    """读取 tests/helpers.ts 原文作为种子数据契约；不存在返回空串。
+
+    12306 压测取证：原文 10-27KB，旧版整段 [:8000] 令截断点之后的
+    逐字 UI 标签（67 条：Passport number / Arrival Time…）从需求文本
+    与锚点清单双通道失踪——正是 keep#2「控件级缺口」死因的输入侧形态。
+    改法：head 预算不变，尾部逐字串提炼为续块（role/代码噪声过滤）。"""
     located = locate_fixture(requirement_dir)
     if located is None:
         return ""
-    return located.read_text(encoding="utf-8", errors="replace")[:8000]
+    raw = located.read_text(encoding="utf-8", errors="replace")
+    if len(raw) <= _FIXTURE_HEAD_BUDGET:
+        return raw
+    head = raw[:_FIXTURE_HEAD_BUDGET]
+    return head + _fixture_tail_facts(head, raw[_FIXTURE_HEAD_BUDGET:])

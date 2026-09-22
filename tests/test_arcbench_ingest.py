@@ -108,6 +108,39 @@ def test_fixture_hint_reads_helpers_ts(tmp_path):
     assert load_fixture_hint(tmp_path / "other" / "req") == ""
 
 
+def test_fixture_tail_facts_survive_truncation(tmp_path):
+    """12306 取证回归：8000 截断点后的逐字 UI 标签须以续块存活，
+    ARIA role/机制代码串不得混入。"""
+    req_dir = _write_tree(tmp_path)
+    tests_dir = req_dir.parent / "tests"
+    tests_dir.mkdir()
+    tail = (
+        'page.getByLabel("Passport number").fill(x);\n'
+        'await expect(page.getByRole("combobox")).toBeVisible();\n'
+        'const role = "button"; const seed = "arrival@hub.com";\n'
+        'expect(text).toBe("Arrival Time");\n'
+    )
+    body = 'export const HEAD = "Login";\n' + ("// pad\n" * 1400) + tail
+    (tests_dir / "helpers.ts").write_text(body, encoding="utf-8")
+    hint = load_fixture_hint(req_dir)
+    assert len(body) > 8000
+    assert "【夹具截断尾部关键串" in hint
+    cont = hint.split("【夹具截断尾部关键串", 1)[1]
+    assert "Passport number" in cont and "Arrival Time" in cont
+    assert "arrival@hub.com" in cont
+    assert "combobox" not in cont and "button" not in cont
+    assert "Login" in hint  # head 段原样保留
+
+
+def test_fixture_short_file_unchanged(tmp_path):
+    req_dir = _write_tree(tmp_path)
+    tests_dir = req_dir.parent / "tests"
+    tests_dir.mkdir()
+    raw = 'export const S = "Short file";'
+    (tests_dir / "helpers.ts").write_text(raw, encoding="utf-8")
+    assert load_fixture_hint(req_dir) == raw
+
+
 # ---- factory26 r4：夹具多布局探测 + 查询必须走种子的硬性契约 ----
 
 def test_locate_fixture_three_layouts(tmp_path):
