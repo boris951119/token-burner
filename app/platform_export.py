@@ -368,6 +368,7 @@ def export_platform_layout(output_dir: Path, project_dir: Path) -> dict:
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
     # 静态资源/模板等非 py 资产一并随迁（排除运行数据与缓存）
+    stripped_data: list[str] = []
     for src in code_dir.rglob("*"):
         parts = set(src.parts)
         if src.is_dir() or parts & {"__pycache__", "instance", ".git"}:
@@ -375,6 +376,7 @@ def export_platform_layout(output_dir: Path, project_dir: Path) -> dict:
         if src.suffix == ".py":
             continue
         if _is_runtime_data(src):
+            stripped_data.append(src.name)
             continue
         rel = src.relative_to(code_dir)
         dst = backend / rel
@@ -433,4 +435,6 @@ def export_platform_layout(output_dir: Path, project_dir: Path) -> dict:
         # 入口来源：author = 生成的组装模块在场；mechanical = 保底壳已装配
         # （务必见于日志，否则「产物活着」与「产物靠保底壳活着」看不出来）
         "entry": ("mechanical" if entry_fix else "author"),
+        # 剥除的运行库清单：产物数据不在这几枚文件里，只在启动播种里
+        "runtime_data_stripped": stripped_data,
     }

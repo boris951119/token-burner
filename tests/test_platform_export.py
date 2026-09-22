@@ -74,10 +74,13 @@ def test_sqlite_runtime_db_never_ships(tmp_path, project):
     (code / "notes.db-wal").write_text("w", encoding="utf-8")
     (code / "view" / "app.sqlite3").write_text("d", encoding="utf-8")
     out = tmp_path / "out"
-    export_platform_layout(out, project)
+    summary = export_platform_layout(out, project)
     names = {p.name for p in (out / "backend").rglob("*") if p.is_file()}
     assert not ({"notes.db", "notes.db-wal", "app.sqlite3"} & names), names
     assert "style.css" in names, "真资产仍要随迁，剥的只是运行库"
+    assert sorted(summary["runtime_data_stripped"]) == \
+        ["app.sqlite3", "notes.db", "notes.db-wal"], \
+        "剥了什么必须见于日志——否则「数据没了」查不到是谁干的"
 
 
 def test_frontend_shell_buildable_shape(tmp_path, project):

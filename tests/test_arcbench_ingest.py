@@ -191,3 +191,15 @@ def test_render_requires_single_anchored_database():
     assert "Path(__file__)" in text
     assert "严禁 CWD 相对路径" in text
     assert "多库并存判定集成失败" in text
+
+
+def test_render_declares_the_grader_boots_on_an_empty_db():
+    """9/23 交付侧取证：导出会剥除自带 sqlite 文件（自测残局不得当数据源），
+    所以需求文本必须把「空库起服、一切数据来自启动播种」写成硬契约——
+    否则模型会以为仓库里躺着个 .db 就够了，评测侧看到的却是空列表。"""
+    import yaml
+
+    tree = yaml.safe_load(_TREE)
+    text = render_requirement_text(tree)
+    assert "评测起服时是空库" in text
+    assert "会被剥除" in text
