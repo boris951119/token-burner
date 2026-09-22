@@ -186,6 +186,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    # 尸检锚点：ingest/视觉转写发生在 [config] 打印之前，此前进程
+    # 若卡在启动段（视觉串行上传等），日志一个字都没有。
+    print(f"[agent] boot ok argv={argv}", flush=True)
+
     req_dir = Path(args.requirement_path)
     fixture_warning = ""
     requirement_brief = None

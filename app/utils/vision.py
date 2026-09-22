@@ -135,7 +135,17 @@ def describe_images(req_dir: Path, refs: list[str],
 
     endpoints = _vision_endpoints(key, base)
     todo = [r for r in refs if r not in cache][: _MAX_IMAGES]
-    for ref in todo:
+    # run5 尸检（Linux 容器）：20 图串行转写在旧实现里全程零打印、
+    # 缓存只在末尾一次性落盘——中途被杀则数十次视觉调用全部白烧，
+    # 且平台侧日志看不到任何进展。改为逐图落盘 + 逐图打印 + 总时限。
+    import time as _time
+    deadline = _time.monotonic() + float(
+        os.environ.get("ARCBENCH_VISION_DEADLINE", "600"))
+    for idx, ref in enumerate(todo, 1):
+        if _time.monotonic() > deadline:
+            print(f"[vision] 达总时限，{len(todo) - idx + 1} 图未转写"
+                  "（已转写部分照常注入）", flush=True)
+            break
         img = (req_dir / ref)
         if not img.is_file():          # 引用路径形如 ./reference/x.png
             img = req_dir / ref.lstrip("./")
@@ -146,10 +156,19 @@ def describe_images(req_dir: Path, refs: list[str],
             continue
         for model, ebase, ekey in endpoints:
             try:
-                cache[ref] = _describe_one(model, b64, ekey, ebase)
+                cache[ref] = _describe_one(model, b64, ekey, ebase,
+                                           timeout=90)
                 break
             except Exception:
                 continue               # 逐备胎，全败则该图无描述
+        try:
+            cache_path.write_text(
+                json.dumps(cache, ensure_ascii=False, indent=1),
+                encoding="utf-8")
+        except Exception:
+            pass
+        print(f"[vision] {idx}/{len(todo)} {ref} "
+              f"{'ok' if ref in cache else 'FAIL'}", flush=True)
     try:
         cache_path.write_text(
             json.dumps(cache, ensure_ascii=False, indent=1),
