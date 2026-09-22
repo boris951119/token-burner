@@ -310,15 +310,23 @@ def main(argv: list[str] | None = None) -> int:
           f"wall_clock={settings.llm_wall_clock_seconds} "
           f"budget={settings.max_task_tokens}", flush=True)
     # 网关长挂防御：单请求实测可挂 25 分钟+（httpx read timeout 是字节
-    # 间隙口径，滴字续命永不触发）；墙钟 600s 超时走退避重试
+    # 间隙口径，滴字续命永不触发）；墙钟 600s 超时即刻换腿
     if settings.llm_wall_clock_seconds <= 0:
         settings.llm_wall_clock_seconds = 600
+    # read timeout 不得窄于墙钟：litellm 的 timeout 同样走 httpx 逐次读
+    # 间隙口径，而对话补全是非流式——整段生成期间一个字节都没有，推理
+    # 模型单次 200s+ 生成必被代码默认 120s 斩断（shape-keep 彩排取证：
+    # 零 config.json 形态下讨论阶段 4×120s 全灭，整跑 rc=1 零交付）。
+    # 抬高后墙钟成为唯一上界，慢但合法的生成不再被误判成网关故障。
+    if settings.llm_timeout_seconds < settings.llm_wall_clock_seconds:
+        settings.llm_timeout_seconds = settings.llm_wall_clock_seconds
     # 平台侧提交统一走 runtime.git（桥接层），双 git 会互相污染提交历史
     settings.enable_git = False
     print(f"[config] 最终编制: models={list(settings.models)} "
           f"multi={settings.platform_multi_model} "
           f"single={settings.single_model_mode} "
           f"wall_clock={settings.llm_wall_clock_seconds} "
+          f"read_timeout={settings.llm_timeout_seconds} "
           f"budget={settings.max_task_tokens}", flush=True)
 
     # 看门狗线程（keep5 取证：进程楔死在墙钟保护之外 7.7h 零取证）——

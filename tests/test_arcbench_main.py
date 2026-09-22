@@ -138,6 +138,7 @@ def test_success_path_entry_contract(monkeypatch, tmp_path, req_dir):
     assert settings.models == ["openai/glm-5.3"]      # 单模型（非 [m,m,m]）
     assert settings.single_model_mode is True          # 互异校验放行
     assert settings.llm_wall_clock_seconds == 600      # 墙钟兜底
+    assert settings.llm_timeout_seconds == 600         # read timeout 对齐墙钟
     assert settings.enable_git is False                # 双 git 污染防护
 
     # 管线拿到单模型（由 _model_triplet 同模补位为三元组）
@@ -150,6 +151,37 @@ def test_success_path_entry_contract(monkeypatch, tmp_path, req_dir):
         encoding="utf-8").strip().splitlines()]
     assert "runner_state" in kinds
     assert kinds[-1] in ("runner_state", "signal")
+
+
+def test_read_timeout_never_narrower_than_wall_clock(monkeypatch, tmp_path, req_dir):
+    """shape-keep 彩排取证（9/23 整跑夭折）：零 config.json 形态下 read
+    timeout 吃代码默认 120s，而对话补全是非流式——整段生成期间一个字节
+    都没有，推理模型慢调用必被 httpx 斩断成 litellm.Timeout（讨论阶段
+    4×120s 全灭 → rc=1 → 平台不评分）。runner 形态把两者对齐，墙钟成为
+    唯一上界：慢但合法的生成放行，真挂死的仍按秒退出。
+    """
+    out = tmp_path / "ws-rt"
+    _env(monkeypatch, out)
+    _patch_llm_paths(monkeypatch, _team_result(tmp_path / "rt"))
+    tuned = Settings(models=["openai/glm-5.3"], llm_wall_clock_seconds=1200,
+                     llm_timeout_seconds=200)
+    monkeypatch.setattr(entry, "load_settings", lambda **kw: tuned)
+    assert entry.main([str(req_dir), "-o", str(out), "--type", "web",
+                       "--mode", "auto"]) == 0
+    assert tuned.llm_timeout_seconds == 1200, "read timeout 必须抬到墙钟同宽"
+
+
+def test_wider_read_timeout_left_alone(monkeypatch, tmp_path, req_dir):
+    """配置本就给了更宽 read timeout 时不得被拉窄（对齐是单向地板）。"""
+    out = tmp_path / "ws-rt2"
+    _env(monkeypatch, out)
+    _patch_llm_paths(monkeypatch, _team_result(tmp_path / "rt2"))
+    tuned = Settings(models=["openai/glm-5.3"], llm_wall_clock_seconds=600,
+                     llm_timeout_seconds=900)
+    monkeypatch.setattr(entry, "load_settings", lambda **kw: tuned)
+    assert entry.main([str(req_dir), "-o", str(out), "--type", "web",
+                       "--mode", "auto"]) == 0
+    assert tuned.llm_timeout_seconds == 900
 
 
 def test_verify_failure_still_delivers(monkeypatch, tmp_path, req_dir):
