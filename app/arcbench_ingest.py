@@ -189,6 +189,12 @@ def render_requirement_text(
         "封装类导致报错定位错乱）；表结构的唯一权威是 seed_data 模块的 "
         "DDL——任何模块不得另建同名表、不得假设 DDL 之外的列（如 users.id）；"
         "跨模块表结构漂移判定集成失败；",
+        "17. 界面元素必须由语义标签承载：评测以可访问性角色+名字定位元素"
+        "（getByRole / getByLabel / getByPlaceholder），非语义实现等于不存在"
+        "——按钮=<button>（禁 div/span+onclick）、链接=<a href>、单行输入"
+        "=<input>（同时给 placeholder 与 <label for>）、多行=<textarea>、"
+        "勾选=<input type=checkbox>、下拉=<select>、条目=<li>或<article>、"
+        "表格=<table><tr><td>、弹窗=<dialog>、标题=<h1>~<h6>；",
         "",
         "功能与验收要求（模块划分必须与下列功能模块一一对应，不要合并、不要增删）：",
     ]

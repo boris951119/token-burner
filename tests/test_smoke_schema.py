@@ -172,3 +172,47 @@ class TestNightForensics:
         ok, report = _run(tmp_path, _flask_app("Welcome to my site"))
         assert not ok
         assert "<a>" in report or "占位壳" in report
+
+
+class TestAriaFieldAnchoring:
+    """9/23 ARIA 取证：官方用例按 getByRole/getByLabel/getByPlaceholder
+    定位，当期交付 placeholder 只有 2 处——定位不到的输入框等于不存在，
+    功能写对了也零分。冒烟因此做一次纯机械的「可定位通道」体检。"""
+
+    def test_bare_input_is_caught(self, tmp_path):
+        ok, report = _run(tmp_path, _flask_app(
+            "<a href='/x'>X</a><form><input type='text' name='q'></form>"))
+        assert not ok
+        assert "可定位通道" in report
+        assert "placeholder" in report and "<label" in report
+
+    def test_placeholder_counts_as_channel(self, tmp_path):
+        ok, report = _run(tmp_path, _flask_app(
+            "<a href='/x'>X</a><input type='search' placeholder='Search'>"))
+        assert ok, report
+
+    def test_label_for_pairs_even_when_written_after(self, tmp_path):
+        """<label for> 常写在控件之后（模板顺序不该决定判分）。"""
+        ok, report = _run(tmp_path, _flask_app(
+            "<a href='/x'>X</a><input id='q' type='text'>"
+            "<label for='q'>Query</label>"))
+        assert ok, report
+
+    def test_wrapping_label_counts_as_channel(self, tmp_path):
+        ok, report = _run(tmp_path, _flask_app(
+            "<a href='/x'>X</a><label>Body <textarea rows='4'></textarea>"
+            "</label>"))
+        assert ok, report
+
+    def test_non_text_input_ignored(self, tmp_path):
+        """hidden/submit 这类不参与文本定位，不得误报（假红=白烧修复轮）。"""
+        ok, report = _run(tmp_path, _flask_app(
+            "<a href='/x'>X</a><form><input type='hidden' name='csrf'>"
+            "<input type='submit' value='Go'></form>"))
+        assert ok, report
+
+    def test_id_alone_is_not_a_channel(self, tmp_path):
+        """评分器不按属性名定位：有 id 而无 label 配对仍算落空。"""
+        ok, report = _run(tmp_path, _flask_app(
+            "<a href='/x'>X</a><input id='q' type='text'>"))
+        assert not ok and "可定位通道" in report
