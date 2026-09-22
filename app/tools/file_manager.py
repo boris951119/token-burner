@@ -301,7 +301,12 @@ class FileManager:
 
     def _resolve(self, handle: ProjectHandle, relative_path: str) -> Path:
         """解析项目内相对路径，拒绝逃逸与绝对路径。"""
-        if not relative_path or Path(relative_path).is_absolute():
+        from pathlib import PureWindowsPath
+
+        # PureWindowsPath 检查不可省：POSIX 下 Path("C:/x").is_absolute()
+        # 为 False，安全边界不能随运行平台漂移（Windows 绝对路径恒拒）
+        if (not relative_path or Path(relative_path).is_absolute()
+                or PureWindowsPath(relative_path).is_absolute()):
             raise ValueError(f"路径必须为项目内相对路径: {relative_path!r}")
         candidate = (handle.root / relative_path).resolve()
         root_resolved = handle.root.resolve()

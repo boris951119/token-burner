@@ -72,7 +72,9 @@ def _peak_mem_mb():
         pass
     try:
         import resource
-        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+        peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        # Linux 为 KB、macOS 为字节（同单位差致 Mac 上峰值虚报 1024 倍）
+        return peak / 1048576 if sys.platform == "darwin" else peak / 1024
     except Exception:
         return -1.0
 
