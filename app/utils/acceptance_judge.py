@@ -30,16 +30,18 @@
   接线即判绿，故不会因此多判红。占位按钮与「文案当控件」两种红的修法不同
   （前者补抄文案只会再造一个诱饵），故分开点名。summary/option/勾选框不受
   此约束：它们的反应是浏览器原生行为。
-- 第三条通道兜客户端渲染（9/23 三组对照取证）：文案虽不在可见文本里、
-  但确实出现在页内脚本正文 = 浏览器渲染得出来 → 该条记射程外（不判红不
-  判绿，报告里点名条数）。只在页内源码里也不存在才判红，故 keep#2 那类
-  「换语言/塞隐藏位」的造假照旧全红。
+- 第三条通道兜客户端渲染（9/23 三组对照 + v8b keep 取证）：文案虽不在可见
+  文本里、但确实出现在页内脚本正文，或出现在**页面脚本自己调用**且解析得出
+  的 JSON 接口返回值里（且脚本有写 DOM 的动作）= 浏览器渲染得出来 → 该条记
+  射程外（不判红不判绿，报告里点名条数与来源）。只在页内源码里也不存在才判
+  红，故 keep#2 那类「换语言/塞隐藏位」的造假照旧全红。
 通用性（9/22 判据）：规则不含任何题目词——任何 web 应用 × 任何
 GWT 需求树都同样可判。
 """
 from __future__ import annotations
 
 import html as _html
+import json
 import re
 import urllib.request
 from dataclasses import dataclass, field
@@ -51,6 +53,17 @@ _ASSET = re.compile(
     r"\.(png|jpe?g|gif|svg|webp|ico|css|js|mjs|map|woff2?|ttf|mp4|txt)$",
     re.I)
 _HREF = re.compile(r"""href=["']([^"'?#]+)""", re.I)
+# 页内脚本亲口调用的同源路径 = 客户端渲染应用的数据源入口
+# （fetch("/api/state") / axios.get('/api/x') / load(`/api/items?page=2`)）。
+_JS_PATH = re.compile(r"""['"`](/[A-Za-z0-9_./-]+(?:\?[A-Za-z0-9_=&.%-]*)?)""")
+_API_MAX = 12                             # 数据源探测预算：一次判分多打几发
+# 页内脚本到底有没有把数据写进 DOM 的证据。接口返回值算不算「浏览器渲得
+# 出来」全看这一步：没有渲染代码的接口只是把需求文案换个地方堆着（keep#2
+# 造假门的第二扇），那一路不给射程外。
+_RENDER_JS = re.compile(
+    r"innerHTML|insertAdjacentHTML|outerHTML|appendChild|createElement"
+    r"|document\.(?:write|querySelector|getElement)|\.render\(|createRoot"
+    r"|ReactDOM|v-html|jquery|\$\s*\(|\.html\(", re.I)
 _ATTRVAL = re.compile(
     r"""(?:placeholder|aria-label|value|alt|title)=["']([^"']+)["']""", re.I)
 _SCRIPT = re.compile(r"<(script|style)[\s\S]*?</\1>", re.I)
@@ -172,6 +185,22 @@ def _fetch(url: str, timeout: float) -> str:
 def _is_html(src: str) -> bool:
     head = src[:2048].lstrip().lower()
     return head.startswith(("<!doctype html", "<html")) or "<body" in head
+
+
+def _is_json(src: str) -> bool:
+    """数据源通道的入场券：解析得出来的 JSON 文档。
+
+    严格解析而非「以 { 开头」，是为了让这一通道吃不下 HTML/模板/半截流——
+    「把需求文案倒进一个没人调的响应里」正是 keep#2 造假想借的另一扇门，
+    能过 json.loads 的载荷至少还是一个真的接口返回值。"""
+    head = src[:2048].lstrip()
+    if not head.startswith(("{", "[")):
+        return False
+    try:
+        json.loads(src)
+    except Exception:
+        return False
+    return True
 
 
 # ---- 可点击控件通道（9/23 取证）----------------------------------------
@@ -315,6 +344,10 @@ class _Crawl:
     raw: str = ""
     # 逐页原文（与 raw 同一份内容，只是不合并）：接线证据按页算用
     pages: list[str] = field(default_factory=list)
+    # 数据源通道：入口可达页 + 页内脚本自己调用的同源接口返回的 JSON。
+    # 客户端渲染应用的文案不在 HTML 里而在这些返回值里（浏览器照样渲得出来）
+    api: str = ""
+    api_paths: list[str] = field(default_factory=list)
     shell: bool = False                      # 入口页是否 JS 挂载壳
     html_pages: int = 0                      # 真正返回 HTML 文档的页面数
     links: int = 0                           # 站内链接总数（去重后）
@@ -324,7 +357,15 @@ class _Crawl:
 def _crawl_pages(base_url: str, max_pages: int,
                  timeout: float) -> _Crawl:
     """入口 BFS 一跳：抓首页与首页链出的站内页面，累计三条语料通道，
-    并把「导航是否真的通向页面」作为独立观测量带出来。"""
+    并把「导航是否真的通向页面」作为独立观测量带出来。
+
+    数据源通道（9/23 v8b keep 取证）：入口这一跳里的非 HTML 返回值，加上
+    页内脚本自己点名调用的同源接口，一起收进 `api`。那次的账是客户端渲染
+    应用 22/30 条判红写着「未出现在入口可达页面」，而浏览器按
+    fetch('/api/notes') 的返回值渲得出来——官方那侧这些用例是过的，逐条判红
+    只是让修复环围着不存在的缺陷烧一轮。反向保险见 _api_sources：只认脚本
+    点名过的路径、只认解析得出来的 JSON，空列表接口照旧让种子文案缺席判红。
+    """
     base = base_url.rstrip("/")
     c = _Crawl()
     queue: list[str] = ["/"]
@@ -333,6 +374,9 @@ def _crawl_pages(base_url: str, max_pages: int,
     attrs: list[str] = []
     scripts: list[str] = []
     raws: list[str] = []
+    jsons: list[str] = []                  # 数据源通道载荷（含脚本调用的接口）
+    api_paths: list[str] = []              # 真发过请求的接口路径（报告用）
+    tried: set[str] = set()                # 已发过请求的非 HTML 路径
     while queue and len(seen) <= max_pages:
         path = queue.pop(0)
         if path in seen:
@@ -343,11 +387,17 @@ def _crawl_pages(base_url: str, max_pages: int,
         except Exception:
             if path != "/":
                 c.dead_links.append(path)
+                tried.add(path)
             continue
         if not _is_html(body):
             # 链过去是 JSON/下载件：对按可见文案断言的评测等于没有这个页面
+            # （但它是数据源通道的候选载荷）
             if path != "/":
                 c.dead_links.append(path)
+                tried.add(path)
+                if _is_json(body):
+                    jsons.append(_html.unescape(body))
+                    api_paths.append(path)
             continue
         c.html_pages += 1
         raws.append(_html.unescape(body))
@@ -370,7 +420,42 @@ def _crawl_pages(base_url: str, max_pages: int,
     c.scripts = "\n".join(scripts)
     c.raw = "\n".join(raws)
     c.pages = raws
+    # 第二跳：页内脚本点名调用的接口（HTML 那一跳没走过的才在这里补）
+    more, paths = _api_sources(base, c.scripts, seen | tried, timeout)
+    jsons += more
+    api_paths += paths
+    # 反作弊闸门：只有页内脚本确实在写 DOM 时，接口返回值才算「浏览器渲得
+    # 出来」。否则「造一个没人调的 JSON 倒满需求文案」就是新的免检通道。
+    c.api = "\n".join(jsons) if _RENDER_JS.search(c.scripts) else ""
+    c.api_paths = api_paths
     return c
+
+
+def _api_sources(base: str, scripts: str, skip: set[str],
+                 timeout: float) -> tuple[list[str], list[str]]:
+    """页内脚本自己点名的同源路径 → 其 JSON 返回值。
+
+    三条约束合起来挡住「造一个没人调的接口倒满需求文案」（keep#2 造假想借
+    的第二扇门）：路径必须出现在脚本里、必须真的发出过请求、返回值必须是
+    解析得出来的 JSON。跳数只有这一跳（接口返回值不再解析出路径），请求数
+    封顶 _API_MAX，判分仍在秒级。"""
+    bodies: list[str] = []
+    paths: list[str] = []
+    for raw in _JS_PATH.findall(scripts):
+        path = raw.split("?")[0].split("#")[0]
+        if (not path.startswith("/") or path.startswith("//")
+                or _ASSET.search(path) or path in skip or path in paths):
+            continue
+        if len(paths) >= _API_MAX:
+            break
+        paths.append(path)
+        try:
+            body = _fetch(base + path, timeout)
+        except Exception:
+            continue
+        if _is_json(body):
+            bodies.append(_html.unescape(body))
+    return bodies, paths
 
 
 def _iter_facts(checklists: Iterable[NodeChecklist]):
@@ -404,6 +489,7 @@ def judge_checklists(checklists: list[NodeChecklist], base_url: str,
     text_norm = _norm(crawl.text)
     attr_norm = _norm(crawl.attrs)
     script_norm = _norm(crawl.scripts)
+    api_norm = _norm(crawl.api)
     if len(text_norm) < _THIN_CORPUS and len(attr_norm) < _THIN_CORPUS:
         # 官方交付容器无 node → Playwright 段 SKIP，本判分器是唯一质量闸。
         # 语料近乎为空时"事实全部缺席"是判分器失明的假象，不是 N 个缺陷：
@@ -423,7 +509,8 @@ def judge_checklists(checklists: list[NodeChecklist], base_url: str,
                     f"先修首页）"],
                 "note": "判分语料为空：逐条事实判红已归并为一条根因"}
     failures: list[str] = []
-    client_side: list[str] = []
+    client_side: list[str] = []             # 客户端渲染：不判红也不判绿
+    src_kind: dict[str, str] = {}           # 射程外事实出自哪一路（脚本/接口）
     found = 0                                     # 真实命中数（不得由减法倒推）
     absent: list[tuple[str, str, str]] = []   # 源码里查无此文 = 结构缺失候选
     raw_norm = _norm(crawl.raw)
@@ -434,11 +521,18 @@ def judge_checklists(checklists: list[NodeChecklist], base_url: str,
         if e in text_norm or e in attr_norm:
             found += 1
             continue
+        tag = f'{req_id} 编译清单[{kind}] "{ent}"'
         if e in script_norm:
             # 文案只存在于页内脚本正文：客户端渲染，浏览器出得来像素，
             # 静态判分出不来——射程外，不判红也不判绿（判红即幻影失败，
             # 修复环会围着一条修不好的指令烧掉整轮）。
-            client_side.append(f'{req_id} 编译清单[{kind}] "{ent}"')
+            client_side.append(tag)
+            src_kind[tag] = "脚本正文"
+        elif e in api_norm:
+            # 文案在应用自己调用的接口返回值里：同上，浏览器渲得出来，
+            # 静态判分射程外。判分红叶的多数假红出自这一路（v8b keep）。
+            client_side.append(tag)
+            src_kind[tag] = "接口返回值"
         elif e in raw_norm:
             # 源码里有、页面上没有 = 塞在隐藏块/注释里（keep#2 的造假口径）。
             # 这类绝不进归并：把它折成一条结构性根因等于给造假开脱。
@@ -480,8 +574,8 @@ def judge_checklists(checklists: list[NodeChecklist], base_url: str,
         e = _norm(lab)
         if not e or (e not in text_norm and e not in attr_norm):
             continue     # 缺席/塞隐藏位已由主通道各自判过
-        if e in script_norm:
-            continue            # 客户端渲染：静态判分射程外
+        if e in script_norm or e in api_norm:
+            continue     # 客户端渲染/接口供数据：静态判分射程外
         if not ctrl_corpus:
             ctrl_corpus = _interactive_corpus(crawl.pages)
             bare_corpus = _interactive_corpus(crawl.pages,
@@ -525,9 +619,14 @@ def judge_checklists(checklists: list[NodeChecklist], base_url: str,
                      f"结构性根因（HTML 页面 {crawl.html_pages} 个）；塞在不可见"
                      f"位置的文案不受此归并影响")
     if client_side:
-        notes.append(f"{len(client_side)} 条逐字事实仅见于页内脚本正文"
-                     f"（{'; '.join(client_side[:3])}…）：客户端渲染，静态判分"
-                     f"射程外，未判红也未判绿")
+        kinds: dict[str, int] = {}
+        for t in client_side:
+            kinds[src_kind.get(t, "接口返回值")] = \
+                kinds.get(src_kind.get(t, "接口返回值"), 0) + 1
+        where = "、".join(f"{n} 条见于{k}" for k, n in sorted(kinds.items()))
+        notes.append(f"{len(client_side)} 条逐字事实仅见于客户端渲染源"
+                     f"（{where}，例：{client_side[0]}…）：浏览器渲染得出来，"
+                     f"静态判分射程外，未判红也未判绿")
     if click_seen:
         notes.append(f"{click_seen - click_bad}/{click_seen} 条「点击 X」类控件"
                      f"确为可点元素"

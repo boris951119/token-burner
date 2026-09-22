@@ -256,15 +256,37 @@ SPA_API = {
 }
 
 
-def test_fetch_driven_copy_stays_red_as_known_limit():
-    """已知射程边界并钉住：判分器不读 API 响应，文案在页面源码里不存在
-    即判红。宁可留这一条假红，也不给「源码里没有」开绿灯——那是 keep#2
-    造假的同一扇门。"""
+def test_fetch_driven_copy_is_out_of_scope_not_phantom_red():
+    """射程边界重画（9/23 v8b keep 判分红叶取证）：应用自己 fetch 的接口
+    返回值里有这条文案、页内脚本也确实在写 DOM → 浏览器渲得出来，静态判分
+    射程外。判红即幻影失败：那一份交付 30 条失败里 22 条是这一形，修复环围着
+    不存在的缺陷烧掉整轮。不判绿同样如实——passed 不涨，note 点名条数。"""
     srv = _serve(SPA_API)
     url = f"http://127.0.0.1:{srv.server_address[1]}"
     r = judge_checklists([_ck(seed_entities=["My Shelf"])], url)
     srv.shutdown()
-    assert r["failed"] == 1 and r.get("client_side") == 0
+    assert r["failed"] == 0 and r["passed"] == 0, r
+    assert r["client_side"] == 1
+    assert "客户端渲染源" in r["note"] and "接口返回值" in r["note"]
+
+
+def test_api_dump_without_rendering_code_stays_red():
+    """反作弊：接口里堆满需求文案，页面脚本却没有一句写 DOM 的动作——数据
+    到不了屏幕，这一路不收（keep#2 造假门换的是 JSON 马甲而已）。"""
+    pages = {
+        "/": ('<html><body><h1>Reading Desk</h1>'
+              '<p>Shelves and the books inside them, all in one place'
+              ' for daily reading.</p>'
+              '<script>var pending = fetch("/api/state"); void pending;'
+              '</script></body></html>'),
+        "/api/state": '{"title": "My Shelf"}',
+    }
+    srv = _serve(pages)
+    url = f"http://127.0.0.1:{srv.server_address[1]}"
+    r = judge_checklists([_ck(seed_entities=["My Shelf"])], url)
+    srv.shutdown()
+    assert r["failed"] == 1 and r.get("client_side") == 0, r
+    assert "My Shelf" in r["failures"][0]
 
 
 # ---- 整墙查无此文 → 一条结构性根因（run6 Linux 真交付取证）--------------
