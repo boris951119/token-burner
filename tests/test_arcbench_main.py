@@ -139,6 +139,7 @@ def test_success_path_entry_contract(monkeypatch, tmp_path, req_dir):
     assert settings.single_model_mode is True          # 互异校验放行
     assert settings.llm_wall_clock_seconds == 600      # 墙钟兜底
     assert settings.llm_timeout_seconds == 600         # read timeout 对齐墙钟
+    assert settings.discussion_max_minutes == 20       # 讨论阶段时间闸
     assert settings.enable_git is False                # 双 git 污染防护
 
     # 管线拿到单模型（由 _model_triplet 同模补位为三元组）
@@ -182,6 +183,20 @@ def test_wider_read_timeout_left_alone(monkeypatch, tmp_path, req_dir):
     assert entry.main([str(req_dir), "-o", str(out), "--type", "web",
                        "--mode", "auto"]) == 0
     assert tuned.llm_timeout_seconds == 900
+
+
+def test_discussion_minutes_env_override(monkeypatch, tmp_path, req_dir):
+    """讨论时间闸 runner 缺省 20 分钟，DISCUSSION_MINUTES 可覆盖（含 0 关闭）。"""
+    out = tmp_path / "ws-dg"
+    _env(monkeypatch, out)
+    _patch_llm_paths(monkeypatch, _team_result(tmp_path / "dg"))
+    tuned = Settings(models=["openai/glm-5.3", "openai/minimax-m3",
+                             "openai/glm-4.6v"], discussion_max_minutes=0.0)
+    monkeypatch.setattr(entry, "load_settings", lambda **kw: tuned)
+    monkeypatch.setenv("DISCUSSION_MINUTES", "45")
+    assert entry.main([str(req_dir), "-o", str(out), "--type", "web",
+                       "--mode", "auto"]) == 0
+    assert tuned.discussion_max_minutes == 45.0
 
 
 def test_verify_failure_still_delivers(monkeypatch, tmp_path, req_dir):

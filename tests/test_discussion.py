@@ -350,3 +350,96 @@ class TestMessageRecording:
         engine = make_engine(llm, file_manager=None)
         engine.run_discussion("需求", None)
         assert len(engine.messages) == 4
+
+
+# ---------------------------------------------------------------------------
+# 批次#20：讨论阶段时间闸（shape-keep 彩排 9/23 取证）
+# 慢网关下「墙钟烧得快、token 烧得慢」，11.0 的省 token 模式（≥90%）永远
+# 不触发——方案讨论独占 48 分钟零产出后整跑夭折。阶段级时间闸让讨论自己
+# 收手：带说明提前进收敛裁决，而不是把预算烧在下一轮评审上。
+# ---------------------------------------------------------------------------
+
+
+class ManualClock:
+    """假钟：读数不推进时间，由 LLM 桩在每次调用后显式推进
+    （一次调用＝一段真实墙钟，判钟点的位置因此可被测试精确预测）。"""
+
+    def __init__(self):
+        self.t = 0.0
+
+    def __call__(self) -> float:
+        return self.t
+
+    def advance(self, seconds: float) -> None:
+        self.t += seconds
+
+
+class TimedScriptedLLM(ScriptedLLM):
+    """脚本桩 + 每次调用推进 clock_per_call 秒。"""
+
+    def __init__(self, scripts: list[str], clock: ManualClock,
+                 clock_per_call: float):
+        super().__init__(scripts)
+        self._clock = clock
+        self._per_call = clock_per_call
+
+    def chat(self, model, messages, json_mode=False):
+        result = super().chat(model, messages, json_mode=json_mode)
+        self._clock.advance(self._per_call)
+        return result
+
+
+def _gated_engine(scripts, minutes: float, per_call: float, rounds: int = 3):
+    clock = ManualClock()
+    llm = TimedScriptedLLM(scripts, clock, per_call)
+    engine = DiscussionEngine(
+        llm=llm, main_model="gpt-4o", dev_model="deepseek-chat",
+        test_model="claude-3-5-sonnet",
+        settings=Settings(max_discussion_rounds=rounds,
+                          discussion_max_minutes=minutes),
+        clock=clock,
+    )
+    return engine, llm
+
+
+class TestDiscussionTimeGate:
+    def test_gate_off_by_default_runs_all_rounds(self):
+        """产品缺省（0=关）：假钟每步 1000s 也不得改变既有轮数行为。"""
+        engine, llm = _gated_engine(varying_scripts(3), minutes=0.0,
+                                    per_call=1000.0)
+        outcome = engine.run_discussion("需求", None)
+        assert llm.remaining == 0, "关闸时逐次调用与旧版一致"
+        assert "时间闸" not in outcome.discussion_summary
+
+    def test_gate_stops_before_second_review(self):
+        """60s 上限、单次调用 40s：初始方案+开发评审后即越闸，
+        测试评审不再发起（省下的正是最贵的那一次）。"""
+        engine, llm = _gated_engine(varying_scripts(3), minutes=1.0,
+                                    per_call=40.0)
+        outcome = engine.run_discussion("需求", None)
+        assert [m["role"] for m in engine.messages] == [
+            "pm", "dev_review", "pm_converge"]
+        assert len(llm.calls) == 3, [c["model"] for c in llm.calls]
+        assert "时间闸" in outcome.discussion_summary
+        assert "跳过" in outcome.discussion_summary
+
+    def test_gate_still_delivers_spec(self):
+        """降级方向：越闸必须有 spec（收敛裁决照跑），不能变成空产物。
+        脚本按越闸后的真实调用序列供给（初始 → 开发评审 → 收敛）。"""
+        engine, llm = _gated_engine(
+            ["初始方案：使用 SQLite。",
+             review_json(weaknesses=["权限描述不足（第1轮新问题）"]),
+             "最终收敛 spec：项目目标与模块划分。"],
+            minutes=0.5, per_call=200.0)
+        outcome = engine.run_discussion("需求", None)
+        assert llm.remaining == 0, "越闸后只应剩收敛这一次调用"
+        assert "最终收敛 spec" in outcome.spec_md
+        assert "上限 0.5 分钟" in outcome.discussion_summary, "阈值须可读"
+
+    def test_gate_round_boundary_skips_revision(self):
+        """25s/次、60s 上限：第 1 轮成对评审完成后再判钟越闸 → 修订不发起。"""
+        engine, _ = _gated_engine(varying_scripts(3), minutes=1.0,
+                                  per_call=25.0)
+        engine.run_discussion("需求", None)
+        assert [m["role"] for m in engine.messages] == [
+            "pm", "dev_review", "test_review", "pm_converge"]

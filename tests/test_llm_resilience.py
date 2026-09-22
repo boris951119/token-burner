@@ -223,6 +223,11 @@ class TestSettingsValidation:
         with pytest.raises(ValueError, match="retry_backoff_base"):
             Settings(retry_backoff_base=-1.0)
 
+    def test_negative_discussion_gate_rejected(self):
+        """时间闸允许 0（关闭），但不允许负数（负数＝每轮都越闸＝静默停跑）。"""
+        with pytest.raises(ValueError, match="discussion_max_minutes"):
+            Settings(discussion_max_minutes=-0.5)
+
 
 # ---------------------------------------------------------------------------
 # factory26 网关长挂防御（墙钟上限）

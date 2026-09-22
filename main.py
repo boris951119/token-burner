@@ -320,6 +320,12 @@ def main(argv: list[str] | None = None) -> int:
     # 抬高后墙钟成为唯一上界，慢但合法的生成不再被误判成网关故障。
     if settings.llm_timeout_seconds < settings.llm_wall_clock_seconds:
         settings.llm_timeout_seconds = settings.llm_wall_clock_seconds
+    # 讨论阶段时间闸（批次#20）：彩排取证方案讨论在慢网关下可吃掉 48 分钟
+    # 且零产出，而 200 分钟看门狗只兜「完全没进展」——阶段级先收手才能留下
+    # 一份可继续的 spec。DISCUSSION_MINUTES=0 显式关闭。
+    if settings.discussion_max_minutes <= 0:
+        settings.discussion_max_minutes = float(
+            os.environ.get("DISCUSSION_MINUTES", "20") or 0)
     # 平台侧提交统一走 runtime.git（桥接层），双 git 会互相污染提交历史
     settings.enable_git = False
     print(f"[config] 最终编制: models={list(settings.models)} "

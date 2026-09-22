@@ -231,6 +231,14 @@ class Settings:
     # （瞬态，走既有退避重试）；参赛入口 main.py 兜底 600s。
     llm_wall_clock_seconds: int = 0
 
+    # ---- 批次#20：讨论阶段时间闸（shape-keep 彩排 9/23 取证）----
+    # 方案讨论独占 48 分钟/165k token 后整跑夭折——既有节流只有 token
+    # 口径（≥90% 才压缩轮数），网关变慢时是「墙钟烧得快、token 烧得慢」，
+    # 那条闸永远不触发。>0 时讨论阶段在轮次边界检查本阶段耗时，超闸即
+    # 带说明直接进收敛裁决（宁可 spec 少一轮评审，也不要零交付）。
+    # 0 = 关闭（产品缺省，行为不变）；参赛入口 main.py 兜底 20 分钟。
+    discussion_max_minutes: float = 0.0
+
     # ------------------------------------------------------------------
     # 校验（总则 D.1：确定性校验由程序承担）
     # ------------------------------------------------------------------
@@ -336,6 +344,12 @@ class Settings:
         if self.retry_backoff_base < 0:
             raise ValueError(
                 f"retry_backoff_base 必须非负，当前值: {self.retry_backoff_base!r}"
+            )
+
+        if self.discussion_max_minutes < 0:
+            raise ValueError(
+                f"discussion_max_minutes 必须非负（0=关闭），"
+                f"当前值: {self.discussion_max_minutes!r}"
             )
 
         # M8-5：限流参数校验（开启才细查；关闭时维持缺省即可）

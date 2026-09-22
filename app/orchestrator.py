@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from app.config import Settings
 from app.tools.prompt_templates import (
@@ -526,6 +527,7 @@ class DiscussionEngine:
         file_manager: FileManager | None = None,
         project_id: str | None = None,
         budget_guard: Any = None,
+        clock: Callable[[], float] | None = None,
     ):
         self.llm = llm
         self.main_model = main_model
@@ -535,6 +537,8 @@ class DiscussionEngine:
         self.file_manager = file_manager
         self.project_id = project_id
         self.budget_guard = budget_guard  # 11.0 总闸（省 token 模式判定）
+        # 批次#20：讨论阶段时间闸的可注入时钟（测试用假钟推进）
+        self._clock = clock or time.monotonic
         # M4-2：论点库持久化（opt-in，跨任务复用论点向量；冻结计数不跨任务）
         self._detector = LoopDetector(
             settings,
@@ -576,8 +580,23 @@ class DiscussionEngine:
 
     # ------------------------------------------------------------------
 
+    def _time_gated(self, t0: float) -> bool:
+        """讨论阶段耗时是否已越过时间闸（上限 0 = 永久关闭）。"""
+        limit = float(self.settings.discussion_max_minutes or 0)
+        return limit > 0 and (self._clock() - t0) >= limit * 60.0
+
+    def _time_gate_note(self, t0: float, rounds: int) -> str:
+        """降级留痕：为什么只讨论了 N 轮就去收敛（进 discussion_summary）。"""
+        return (
+            f"（讨论阶段时间闸：{rounds} 轮已耗 "
+            f"{(self._clock() - t0) / 60:.1f} 分钟 ≥ 上限 "
+            f"{self.settings.discussion_max_minutes:g} 分钟——网关过慢，"
+            "跳过剩余评审与修订，直接收敛出 spec）"
+        )
+
     def run_discussion(self, requirement: str, project_id: str | None = None) -> DiscussionOutcome:
         """执行完整方案讨论，产出收敛的 spec.md。"""
+        t0 = self._clock()  # 批次#20 时间闸基准（本阶段起点，非任务起点）
         pid = project_id or self.project_id
         # M7-6：需求文本不可信，进入提示词前包裹数据边界
         proposal = self._chat(
@@ -596,6 +615,11 @@ class DiscussionEngine:
         frozen = False
 
         while rounds < self.settings.max_discussion_rounds:
+            # 批次#20 时间闸：第 1 轮之后再看钟——慢网关下评审轮是最贵的
+            # 可弃项，宁要少一轮评审的 spec，不要烧穿看门狗的零交付
+            if rounds and self._time_gated(t0):
+                summaries.append(self._time_gate_note(t0, rounds))
+                break
             # 11.3：评审意见进入论点库检测（重复论点计数）；
             # 开发评审触发冻结时，本轮测试评审直接跳过（省 token）
             dev_review = self._get_review(requirement, proposal, self.dev_model, "开发工程师", "实现成本、技术可行性、模块划分合理性")
@@ -613,6 +637,15 @@ class DiscussionEngine:
                 summaries.append(
                     f"第 {rounds} 轮：\n- 开发评审：{dev_review}\n"
                     "（预算占用 ≥90%，省 token 模式：跳过测试评审与后续轮，直接收敛）"
+                )
+                break
+
+            # 单条评审就能烧掉整段预算（墙钟 600s×换腿链）：开发评审后
+            # 再判一次钟，超闸就不等测试评审了
+            if self._time_gated(t0):
+                summaries.append(
+                    f"第 {rounds} 轮：\n- 开发评审：{dev_review}\n"
+                    + self._time_gate_note(t0, rounds)
                 )
                 break
 
@@ -637,6 +670,11 @@ class DiscussionEngine:
                 break
 
             if rounds >= self.settings.max_discussion_rounds:
+                break
+
+            # 修订也是一次主 LLM 长调用：超闸就带着现有评审意见去收敛
+            if self._time_gated(t0):
+                summaries.append(self._time_gate_note(t0, rounds))
                 break
 
             proposal = self._chat(
