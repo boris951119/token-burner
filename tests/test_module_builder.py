@@ -285,3 +285,90 @@ class TestReservedModuleNames:
                                 file_manager=FileManager(projects_root="projects-unused"))
         plans = builder.split_spec("spec")
         assert [p.name for p in plans] == ["checker"]  # 重试后以合法名通过
+
+
+GATEWAY_DOWN = RuntimeError("网关 openai/deepseek-v4-pro 调用失败: Timeout")
+
+
+class FlakyLLM:
+    """剧本元素：字符串＝返回内容，异常实例＝抛出；default＝剧本耗尽后的返回。"""
+
+    def __init__(self, plan: list, default: str = ""):
+        self.plan = list(plan)
+        self.default = default
+        self.calls: list[dict] = []
+
+    def chat(self, model, messages, json_mode=False):
+        self.calls.append({"model": model, "json_mode": json_mode})
+        item = self.plan.pop(0) if self.plan else (
+            self.default or split_json())
+        if isinstance(item, BaseException):
+            raise item
+        return LLMResponse(model=model, content=item, input_tokens=10,
+                           output_tokens=5)
+
+
+def make_chain_builder(llm, fm, models=("m-main", "m-backup", "m-third")):
+    """带备胎链的 builder（腿序即 _leg_chain 的轮转序）。"""
+    return ModuleBuilder(
+        llm=llm, main_model=models[0],
+        settings=Settings(models=list(models)), file_manager=fm,
+    )
+
+
+class TestGatewayResilience:
+    """拆分/接口环的「一条腿故障不谋杀整跑」（批次#22，与评估环同族）。"""
+
+    def test_split_transient_failure_switches_leg(self, fm):
+        llm = FlakyLLM([GATEWAY_DOWN, split_json()])
+        plans = make_chain_builder(llm, fm).split_spec("spec")
+        assert [p.name for p in plans] == ["user", "data", "auth"]
+        assert [c["model"] for c in llm.calls] == ["m-main", "m-backup"]
+
+    def test_split_all_legs_down_raises_with_call_reason(self, fm):
+        # 尝试数＝1+max_parse_retries，轮转腿序；耗尽后仍交用户介入
+        llm = FlakyLLM([GATEWAY_DOWN] * 4)
+        with pytest.raises(SplitError, match="网关瞬态"):
+            make_chain_builder(llm, fm).split_spec("spec")
+        assert len(llm.calls) == 4
+
+    def test_split_budget_exhausted_propagates(self, fm):
+        from app.utils.budget import BudgetExceededError
+        llm = FlakyLLM([BudgetExceededError("总闸")] * 4)
+        with pytest.raises(BudgetExceededError):
+            make_chain_builder(llm, fm).split_spec("spec")
+        assert len(llm.calls) == 1, "换腿续跑＝绕过总闸继续烧"
+
+    def test_split_config_error_not_swallowed(self, fm):
+        from app.utils.model_client import MissingApiKeyError
+        llm = FlakyLLM([MissingApiKeyError("需要环境变量 X")] * 4)
+        with pytest.raises(MissingApiKeyError):
+            make_chain_builder(llm, fm).split_spec("spec")
+        assert len(llm.calls) == 1
+
+    def test_interface_transient_failure_retries_then_succeeds(self, fm):
+        # 接口环原先一次调用定生死：瞬态故障在此换腿重试
+        plans = [ModulePlan(name="a", responsibility="r", dependencies=[],
+                            priority=1)]
+        llm = FlakyLLM([GATEWAY_DOWN, iface_json([])])
+        built = make_chain_builder(llm, fm).generate_interfaces(plans)
+        assert built["a"]["dependencies"] == []
+        assert [c["model"] for c in llm.calls] == ["m-main", "m-backup"]
+        assert all(c["json_mode"] for c in llm.calls)
+
+    def test_interface_parse_failure_retries_then_raises(self, fm):
+        plans = [ModulePlan(name="a", responsibility="r", dependencies=[],
+                            priority=1)]
+        llm = FlakyLLM(["坏" for _ in range(4)], default="坏")
+        with pytest.raises(SplitError, match="解析"):
+            make_chain_builder(llm, fm).generate_interfaces(plans)
+        assert len(llm.calls) == 4
+
+    def test_interface_validation_failure_still_fails_fast(self, fm):
+        # 依赖不一致是契约违规不是网关抖动：不重试、原样抛（口径不变）
+        plans = [ModulePlan(name="a", responsibility="r",
+                            dependencies=["b"], priority=1)]
+        llm = FlakyLLM([iface_json([])], default=iface_json([]))
+        with pytest.raises(SplitError, match="一致"):
+            make_chain_builder(llm, fm).generate_interfaces(plans)
+        assert len(llm.calls) == 1

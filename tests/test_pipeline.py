@@ -292,3 +292,51 @@ class TestConservativeFallback:
         out_file.unlink(missing_ok=True)
         assert "auth.py" in content  # auth 来自 auth.py 而非 user/main.py
         assert "user.py" in content
+
+
+class TestDirectChatLegRelay:
+    """直出路径的换腿兜底（批次#22 同族：最便宜的出口原先最脆）。"""
+
+    class _Flaky:
+        def __init__(self, fail_first: bool, exc: Exception | None = None):
+            self.calls: list[str] = []
+            self.fail_first = fail_first
+            self.exc = exc or RuntimeError("网关 m-a 调用失败: Timeout")
+
+        def chat(self, model, messages, json_mode=False):
+            self.calls.append(model)
+            if self.fail_first and len(self.calls) == 1:
+                raise self.exc
+            return LLMResponse(model=model, content="直答内容",
+                               input_tokens=1, output_tokens=1)
+
+    def _pipeline(self, llm, fm):
+        return make_pipeline(llm, FakeExecutor([]), fm,
+                             settings=Settings(models=["m-a", "m-b"]))
+
+    def test_gateway_timeout_falls_to_next_leg(self, fm):
+        llm = self._Flaky(fail_first=True)
+        out = self._pipeline(llm, fm)._direct_chat("系统提示", "讲个笑话")
+        assert out == "直答内容"
+        assert llm.calls == ["m-a", "m-b"]
+
+    def test_healthy_first_leg_no_extra_call(self, fm):
+        llm = self._Flaky(fail_first=False)
+        assert self._pipeline(llm, fm)._direct_chat("s", "x") == "直答内容"
+        assert llm.calls == ["m-a"]
+
+    def test_config_error_does_not_walk_the_roster(self, fm):
+        # 缺密钥换腿也没用（同供应商同密钥）：直穿交上层报 503
+        from app.utils.model_client import MissingApiKeyError
+        llm = self._Flaky(fail_first=True,
+                          exc=MissingApiKeyError("需要环境变量 X"))
+        with pytest.raises(MissingApiKeyError):
+            self._pipeline(llm, fm)._direct_chat("s", "x")
+        assert llm.calls == ["m-a"]
+
+    def test_budget_exhausted_does_not_walk_the_roster(self, fm):
+        from app.utils.budget import BudgetExceededError
+        llm = self._Flaky(fail_first=True, exc=BudgetExceededError("总闸"))
+        with pytest.raises(BudgetExceededError):
+            self._pipeline(llm, fm)._direct_chat("s", "x")
+        assert llm.calls == ["m-a"]

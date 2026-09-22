@@ -46,7 +46,7 @@ from app.orchestrator import (
 )
 from app.tools.file_manager import FileManager
 from app.tools.git_manager import GitManager
-from app.utils.budget import BudgetExceededError, BudgetGuard
+from app.utils.budget import BudgetExceededError, BudgetGuard, TaskCancelledError
 
 # 看门狗数据源：全局最近进度时间戳（keep5 取证：进程可楔死在墙钟
 # 保护之外的子进程/库内部，心跳冻结数小时无法取证——由 main.py 的
@@ -60,7 +60,7 @@ def touch_progress() -> None:
     LAST_PROGRESS = time.time()
 
 
-from app.utils.model_client import ModelClient
+from app.utils.model_client import ModelClient, _is_timeout, _is_transient
 from app.utils.untrusted import sanitize_untrusted
 
 
@@ -214,6 +214,33 @@ class Pipeline:
             return route_models(route.difficulty_score, self.settings)
         return ("gpt-4o", "deepseek-chat", "claude-3-5-sonnet")
 
+    def _direct_chat(self, system: str, requirement: str) -> str:
+        """直出路径的单次调用：一条腿瞬态故障就换下一条腿。
+
+        批次#21 同族取证：直出是整条管线最便宜的出口，原先却最脆——团队
+        流程有重试环与备胎链，直出一次网关超时就是异常直穿。缺密钥这类配置
+        错误与预算/取消总闸不在此列，照旧直穿。
+        """
+        chain: list[str] = []
+        for m in self.settings.models or []:
+            if m and m not in chain:
+                chain.append(m)
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": requirement},
+        ]
+        last: RuntimeError | None = None
+        for model in chain:
+            try:
+                return self.llm.chat(model, messages).content
+            except (BudgetExceededError, TaskCancelledError):
+                raise
+            except RuntimeError as exc:
+                if not (_is_transient(exc) or _is_timeout(exc)):
+                    raise
+                last = exc
+        raise last  # type: ignore[misc]  # 链非空由 Settings 校验保证
+
     def _resolve_llm(self) -> ModelClient:
         """M8-1：任务开始时解析本任务的 ModelClient。
 
@@ -330,24 +357,15 @@ class Pipeline:
 
         # 3.2 路由分发
         if route.route is Route.DIRECT_OUTPUT:
-            answer = self.llm.chat(
-                self.settings.models[0],
-                [
-                    {"role": "system", "content": "你是助理，直接回答用户问题，简洁准确。"},
-                    {"role": "user", "content": requirement},
-                ],
-            ).content
+            answer = self._direct_chat(
+                "你是助理，直接回答用户问题，简洁准确。", requirement,
+            )
             return PipelineResult(kind="direct_answer", answer=answer, route=route)
 
         if route.route is Route.DIRECT_SIMPLE_CODING:
-            answer = self.llm.chat(
-                self.settings.models[0],
-                [
-                    {"role": "system",
-                     "content": "你是工程师，直接给出单文件 Python 代码，仅输出代码。"},
-                    {"role": "user", "content": requirement},
-                ],
-            ).content
+            answer = self._direct_chat(
+                "你是工程师，直接给出单文件 Python 代码，仅输出代码。", requirement,
+            )
             return PipelineResult(kind="direct_code", answer=answer, route=route)
 
         # TEAM_FLOW：组队（3.3 / 11.0）

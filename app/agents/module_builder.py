@@ -15,6 +15,8 @@ from dataclasses import dataclass
 
 from app.config import Settings
 from app.tools.file_manager import FileManager
+from app.utils.budget import BudgetExceededError, TaskCancelledError
+from app.utils.model_client import _is_timeout, _is_transient
 from app.utils.untrusted import sanitize_untrusted
 from app.utils.requirement_anchors import collect_anchors_from_text
 from app.tools.prompt_templates import (
@@ -212,6 +214,36 @@ class ModuleBuilder:
 
     # ------------------------------------------------------------------
 
+    def _leg_chain(self) -> list[str]:
+        """尝试用模型链：主模型打头，其余预设腿按序备胎（去重保序）。"""
+        ordered = [self.main_model] + list(self.settings.models or [])
+        seen: set[str] = set()
+        chain = []
+        for m in ordered:
+            if m and m not in seen:
+                seen.add(m)
+                chain.append(m)
+        return chain or [self.main_model]
+
+    def _chat_json(self, attempt: int, messages: list[dict]) -> tuple[str | None, str]:
+        """第 attempt 次 json 调用 → (内容, 失败原因)，瞬态故障时内容为 None。
+
+        轮转而非「每次尝试遍历全链」：一条腿超时最坏烧掉 600s 墙钟，嵌套
+        会把尝试数上限放大成腿数倍。配置错误（缺密钥）与预算/取消总闸直穿
+        ——换腿续跑等于把「立即中止」改成「多烧几腿」。
+        """
+        chain = self._leg_chain()
+        model = chain[attempt % len(chain)]
+        try:
+            response = self.llm.chat(model, messages, json_mode=True)
+        except (BudgetExceededError, TaskCancelledError):
+            raise
+        except RuntimeError as exc:
+            if not (_is_transient(exc) or _is_timeout(exc)):
+                raise
+            return None, f"调用失败（网关瞬态）{type(exc).__name__} {model}: {exc}"[:200]
+        return response.content, ""
+
     def split_spec(self, spec_md: str, project_id: str | None = None,
                    requirement: str = "") -> list[ModulePlan]:
         """主 LLM 拆分 spec 为模块列表（含重试与确定性校验）。
@@ -229,16 +261,17 @@ class ModuleBuilder:
             )
         attempts = 1 + self.settings.max_parse_retries
         last_error = "未知错误"
-        for _ in range(attempts):
-            response = self.llm.chat(
-                self.main_model,
-                [
-                    {"role": "system", "content": SPLIT_SYSTEM},
-                    {"role": "user", "content": user_content},
-                ],
-                json_mode=True,
-            )
-            value, _detail = parse_json(response.content, location="module_split")
+        for attempt in range(attempts):
+            content, call_error = self._chat_json(attempt, [
+                {"role": "system", "content": SPLIT_SYSTEM},
+                {"role": "user", "content": user_content},
+            ])
+            if content is None:
+                # shape-keep 彩排同族：拆分环一次网关超时曾直穿成 SplitError
+                # =零交付。这里本就有条带 last_error 的重试环，调用失败并进同一条口。
+                last_error = call_error
+                continue
+            value, _detail = parse_json(content, location="module_split")
             if value is None or not isinstance(value, dict):
                 last_error = "拆分输出解析失败"
                 continue
@@ -320,34 +353,48 @@ class ModuleBuilder:
         """主 LLM 为每个模块生成三字段接口契约并合并（12.1）。"""
         spec_deps = {p.name: set(p.dependencies) for p in plans}
         interfaces: dict[str, dict] = {}
+        attempts = 1 + self.settings.max_parse_retries
         for plan in plans:
-            response = self.llm.chat(
-                self.main_model,
-                [
-                    # M15-3：风格约束段按 contract_style 运行时拼接
-                    # （function 缺省 = M15-1 原文；class 类式；auto 弱引导）
-                    {
-                        "role": "system",
-                        "content": INTERFACE_SYSTEM
-                        + interface_style_prompt(self.settings.contract_style),
-                    },
-                    {
-                        "role": "user",
-                        "content": INTERFACE_USER.format(
-                            name=plan.name,
-                            responsibility=plan.responsibility,
-                            dependencies=", ".join(plan.dependencies) or "无",
-                        ),
-                    },
-                ],
-                json_mode=True,
-            )
-            value, _detail = parse_json(
-                response.content, location=f"interface_{plan.name}"
-            )
-            if not isinstance(value, dict) or any(
-                f not in value for f in _INTERFACE_FIELDS
-            ):
+            messages = [
+                # M15-3：风格约束段按 contract_style 运行时拼接
+                # （function 缺省 = M15-1 原文；class 类式；auto 弱引导）
+                {
+                    "role": "system",
+                    "content": INTERFACE_SYSTEM
+                    + interface_style_prompt(self.settings.contract_style),
+                },
+                {
+                    "role": "user",
+                    "content": INTERFACE_USER.format(
+                        name=plan.name,
+                        responsibility=plan.responsibility,
+                        dependencies=", ".join(plan.dependencies) or "无",
+                    ),
+                },
+            ]
+            value = None
+            last_error = "未取得可用输出"
+            for attempt in range(attempts):
+                content, call_error = self._chat_json(attempt, messages)
+                if content is None:
+                    # 接口环原先一次调用定生死：网关瞬态在此重试/换腿，
+                    # 不再直穿成 SplitError=零交付（批次#21 同族）。
+                    last_error = call_error
+                    continue
+                parsed, _detail = parse_json(
+                    content, location=f"interface_{plan.name}"
+                )
+                if not isinstance(parsed, dict):
+                    last_error = "接口契约输出解析失败"
+                    continue
+                value = parsed
+                break
+            if value is None:
+                raise SplitError(
+                    f"模块 {plan.name} 接口契约未取得可用输出"
+                    f"（重试 {attempts} 次）: {last_error}"
+                )
+            if any(f not in value for f in _INTERFACE_FIELDS):
                 raise SplitError(
                     f"模块 {plan.name} 接口契约缺少必要字段 {_INTERFACE_FIELDS}"
                 )
