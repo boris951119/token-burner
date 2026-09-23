@@ -66,12 +66,14 @@ def _make_completion(sleep: float = 0.0, stats: dict | None = None):
                  "weaknesses": [], "risks": []}, ensure_ascii=False))
         if "收敛" in system:
             return _resp("# SPEC\n单模块规格")
-        if "初始" in system:
-            return _resp("# 初始方案")
+        # 开发/测试两支必须先于"初始"判定：写码系统提示词里的种子幂等条款含
+        # "初始"二字，按文本子串分流时会被初始方案支抢走。
         if "开发副 LLM" in system:
             return _resp("def run():\n    return 1\n")
         if "测试副 LLM" in system:
             return _resp("def test_run():\n    assert True\n")
+        if "初始" in system:
+            return _resp("# 初始方案")
         raise AssertionError(f"未识别的调用环节: {system[:50]!r}")
 
     return completion

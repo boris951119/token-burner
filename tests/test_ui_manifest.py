@@ -208,3 +208,36 @@ class TestAriaRoleContract:
         text = render_requirement_text(tree)
         assert "可访问性角色" in text
         assert "<textarea>" in text and "<dialog>" in text
+
+
+class TestUIGlobalRulesReachEveryModule:
+    """批次#54 度量：inject_ui_manifest 只发给**一个**目标模块
+    （module_builder.py `target = max(plans, ...)`），而 40 份已知交付里
+    20 份的 HTML 页面散在 ≥2 个文件、且这些模块名多半不命中 UI 关键词
+    （shelves/books/pages 一类业务名）——写码那一轮（WRITE_CODE_USER 只有
+    模块名+职责+接口契约）于是完全看不到渲染层契约。规则改放逐模块共见的
+    系统提示词，射程由构造保证，不再依赖拆分阶段「猜对哪个是 UI 模块」。"""
+
+    def _system(self):
+        from app.tools.prompt_templates import WRITE_CODE_SYSTEM
+        return WRITE_CODE_SYSTEM
+
+    def test_render_from_storage_clause_is_in_the_per_module_prompt(self):
+        s = self._system()
+        assert "渲染层必须从库里读" in s
+        assert "首屏条目数等于库里该视图的条目数" in s
+        assert "静态样例" in s
+
+    def test_semantic_role_table_is_in_the_per_module_prompt(self):
+        s = self._system()
+        assert "<article>" in s and "条目级操作按钮写在该 article 内部" in s
+        assert "<textarea>" in s and "<dialog>" in s
+
+    def test_ambiguity_and_idempotent_seed_clauses(self):
+        s = self._system()
+        assert "公共定位面" in s and "两张同名卡" in s
+        assert "必须幂等" in s and "旧关联先清掉" in s
+
+    def test_rules_apply_regardless_of_module_name(self):
+        """射程口径本身必须写在提示词里：适用条件是「输出 HTML」，不是模块名。"""
+        assert "与模块名无关" in self._system()
