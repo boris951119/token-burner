@@ -55,9 +55,13 @@ class _FakeTraceability:
 class _FakeGit:
     def __init__(self) -> None:
         self.commits: list[str] = []
+        self.gitignore_writes = 0
 
     def commit(self, message: str) -> None:
         self.commits.append(message)
+
+    def ensure_arc_gitignore(self) -> None:
+        self.gitignore_writes += 1
 
 
 class _FakeRuntime:
@@ -117,6 +121,18 @@ def test_unknown_and_lifecycle_events_flow_through():
         "mark_run_completed",
         "mark_run_failed",
     ]
+
+
+def test_terminal_state_restamps_gitignore():
+    """交付用 copy2 把 code/.gitignore 盖到输出根，官方管理块（.env 不进
+    提交 / .arc/traceability 必进提交）就没了——终态必须重申一次。"""
+    rt = _FakeRuntime()
+    bridge = ArcBenchBridge(runtime=rt)
+    bridge.run_started("go")
+    assert rt.git.gitignore_writes == 0     # 注入桩不走装配
+    bridge.run_completed("done")
+    bridge.run_failed("bad")
+    assert rt.git.gitignore_writes == 2     # 两个终态各钉一次
 
 
 def test_handle_swallows_internal_errors():

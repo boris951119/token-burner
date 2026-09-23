@@ -231,6 +231,7 @@ class ArcBenchBridge:
             rt = self._rt()
             if rt is not None:
                 rt.events.mark_run_completed(message or None)
+                self._restamp_gitignore(rt)
         except Exception:
             pass
 
@@ -239,6 +240,22 @@ class ArcBenchBridge:
             rt = self._rt()
             if rt is not None:
                 rt.events.mark_run_failed(message or None)
+                self._restamp_gitignore(rt)
+        except Exception:
+            pass
+
+    def _restamp_gitignore(self, rt) -> None:
+        """终态重申 .gitignore——交付会在我们眼皮底下把它盖掉。
+
+        _export_official_layout/deliver_to_output_root 用 shutil.copy2 把
+        code/* 铺到输出根，生成物自带 .gitignore 时是覆盖式写入，官方那份
+        管理块（连同「.env 不提交」与「!.arc/traceability/ 必须提交」）就地
+        消失——traceability 表要是进不了提交，这次修好的登记等于白登。
+        main.py 的次序是先换入最终态再报终态，所以终态这里是最后一次机会；
+        ensure_arc_gitignore 本身是合并语义，重复调用幂等。
+        """
+        try:
+            rt.git.ensure_arc_gitignore()
         except Exception:
             pass
 
