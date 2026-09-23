@@ -35,6 +35,16 @@ _SHRINK_RATIO = 0.5
 _SHRINK_MIN_CHARS = 1200
 
 
+def _is_discarded_frontend(rel: str) -> bool:
+    """仓库根 frontend/**：web 交付导出时被最小 Vite 壳整体覆盖的路径。
+
+    只认仓库根那一个 frontend/——`code/frontend/` 是产品自己的包，随导出
+    一起进 backend/，改它是有意义的，不得误伤。
+    """
+    parts = rel.split("/")
+    return len(parts) > 1 and parts[0] == "frontend"
+
+
 def _read_text(p: Path) -> str:
     try:
         return p.read_text(encoding="utf-8", errors="replace")
@@ -172,7 +182,9 @@ class RepoFixer:
             '{"analysis": "根因简析", '
             '"files": [{"path": "相对路径", "change": "修改说明"}]}。'
             "只列必须修改的文件;禁止修改测试文件(除非 issue 明确要求);"
-            "路径使用相对仓库根的 POSIX 格式。"
+            "路径使用相对仓库根的 POSIX 格式;"
+            "UI 的真实落点是 code/ 里后端渲染的页面,仓库根 frontend/ 在交付"
+            "导出时会被最小壳整体覆盖(写它等于没写)。"
         )
         user = f"## Issue\n{issue}\n\n## 仓库文件树\n{self._tree()}"
         obj, detail = parse_json(self._chat(system, user), location="repo_fix.plan")
@@ -250,6 +262,17 @@ class RepoFixer:
         rejected: list[tuple[str, str]] = []
         for rel, content in changed.items():
             target = self.repo / rel
+            if _is_discarded_frontend(rel) and (self.repo / "code").is_dir():
+                # keep 彩排实测：修复环在仓库根 frontend/ 写过 23-43KB 的
+                # App.tsx，被判的 DOM 从来是 code/ 里后端渲染的那份页面——
+                # 出口无条件覆盖壳，这些字节等于白烧一轮修复。
+                why = ("交付导出会把仓库根 frontend/ 整体换成最小壳，这份修改"
+                       "不会被任何评测看到——UI 请改 code/ 里后端渲染的页面"
+                       "（模板文件或视图里的内联 HTML）")
+                print(f"[repo_fix] 拒收落在丢弃路径的修复内容 {rel}",
+                      flush=True)
+                rejected.append((rel, why))
+                continue
             if target.suffix == ".py":
                 try:
                     compile(content, str(target), "exec")

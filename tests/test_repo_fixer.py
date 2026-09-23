@@ -7,6 +7,7 @@ LLM(脚本桩)输出修复方案与完整新版文件,RepoFixer 应用并跑仓�
 
 from __future__ import annotations
 
+import inspect
 import json
 import re
 import shutil
@@ -303,3 +304,37 @@ class TestSyntaxRejection:
         assert "超时" in result.error          # 原因可读，不是「自动修复异常」
         assert result.ok is False
         assert "超时" in result.error or "验证" in result.error
+
+
+class TestDiscardedFrontendGuard:
+    """UI 修复落在仓库根 frontend/ 的护栏（keep 彩排取证：修复环在这里写
+    过 23-43KB 的 App.tsx，而交付导出无条件把该目录换成最小壳——被判的
+    DOM 从来是 code/ 里后端渲染的那份页面，那一轮的钱等于白烧）。"""
+
+    def _apply(self, repo, changed):
+        return RepoFixer(lambda *_a, **_k: "", repo)._apply(changed)
+
+    def test_root_frontend_is_rejected_with_landing_zone_in_reason(self, repo):
+        (repo / "code").mkdir()
+        rejected = self._apply(repo, {
+            "frontend/src/App.tsx": "<div>notes</div>\n",
+            "code/views/views.py": "x = 1\n"})
+        assert [rel for rel, _ in rejected] == ["frontend/src/App.tsx"]
+        assert not (repo / "frontend").exists(), "丢弃路径上的写入不得落盘"
+        assert (repo / "code" / "views" / "views.py").read_text(
+            encoding="utf-8") == "x = 1\n"
+        why = rejected[0][1]
+        assert "最小壳" in why and "code/" in why, "拒收理由要给出真实落点"
+
+    def test_frontend_under_code_is_product_code(self, repo):
+        """只认仓库根那一个 frontend/：code/frontend/ 会随导出进 backend/。"""
+        (repo / "code").mkdir()
+        assert self._apply(repo, {"code/frontend/views.py": "x = 1\n"}) == []
+
+    def test_guard_off_without_code_dir(self, repo):
+        """非 web 交付（仓库里没有 code/）不启用该护栏。"""
+        assert self._apply(repo, {"frontend/app.js": "1\n"}) == []
+
+    def test_plan_prompt_names_the_real_ui_landing_zone(self):
+        src = inspect.getsource(RepoFixer._plan)
+        assert "frontend/" in src and "最小壳" in src
