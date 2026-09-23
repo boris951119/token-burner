@@ -10,7 +10,7 @@
 3. fix_submodule_binding 子模块未绑定 → __init__.py 追加 from . import X
 4. fix_blueprint_registry Blueprint 未注册 → create_app 中插入注册行
 5. fix_dangling_template 悬空 {% extends %}/{% include %} → 摘除指令，页面自含渲染
-   （runA 取证：继承指令 10/10 指向从未生成的模板 = 整站每页 500）
+   （runA 取证：12 条继承指令里 10 条指向从未生成的模板 = 整站每页 500）
 
 每个修复器返回 (是否修改, 修改描述列表)。修改直接写入文件。
 """
@@ -686,8 +686,9 @@ def fix_dangling_template(code_dir: Path) -> list[str]:
     """悬空继承/包含 → 摘除指令，让页面自含渲染。
 
     2026-09-23 runA 交付复放取证：生成器按「多页应用」的直觉写
-    `{% extends "base.html" %}` 却从不创建父模板，本地 13 份带模板的交付里
-    这类指令 10 条、悬空 10 条（0 例父模板真的写过）——每个页面直接 500，
+    `{% extends "base.html" %}` 却常不创建父模板。本机 13 份带模板的交付里
+    用到继承/包含的有 3 份、指令 12 条，其中 **10 条指向从未生成的模板**
+    （runA 那份 6/6 全悬空 = 整站每页 500；9/20 那份 5 条里 4 条悬空）——
     判分面整片归零。摘除指令不损失任何已生成内容（父模板本来就不存在），
     子模板自己的 block 就地渲染，页面从 500 回到可判分。
     只对 extends/include 动手：import 掉的宏真被调用时摘了会换成
