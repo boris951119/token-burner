@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, get_origin, get_type_hints
@@ -51,6 +52,25 @@ VALID_EXECUTION_MODES: tuple[str, ...] = ("safe", "auto")
 
 # M14-3/M14-4：交付目标平台（提示词约束 + 危险扫描平台黑名单同源）
 VALID_TARGET_PLATFORMS: tuple[str, ...] = ("windows", "linux", "macos", "any")
+
+
+def detect_runtime_platform() -> str:
+    """未显式配置时的交付目标平台：按当前解释器实际跑在哪个 OS 上判定。
+
+    平台段是「交付物必须能在哪跑」的唯一依据，写死任一 OS 都会在别的环境里
+    反向起效：提示词会命令模型禁用该 OS 上并不存在的模块、并点名推荐另一 OS
+    的替代方案（Windows 段推荐的 msvcrt 在 Linux/macOS 上导入即 ImportError），
+    同源的危险扫描黑名单同时漏掉那一族、却拦掉本该合法的这一族。判分容器不带
+    config.json，所以这条路径不是兜底而是主路径。认不出的 OS 返 "any"
+    （不注入约束、不设平台黑名单），宁可少一条提示也不给一条反的。
+    """
+    if sys.platform.startswith(("win", "cygwin", "msys")):
+        return "windows"
+    if sys.platform == "darwin":
+        return "macos"
+    if sys.platform.startswith(("linux", "freebsd", "openbsd", "sunos")):
+        return "linux"
+    return "any"
 
 # M15-3：契约风格三态（门禁风格约束与 auto 回写共用）
 VALID_CONTRACT_STYLES: tuple[str, ...] = ("function", "class", "auto")
@@ -90,8 +110,10 @@ class Settings:
     sandbox_timeout_seconds: int = 30          # 3.6.3：沙箱 30s 超时熔断（Alpha v0.4）
 
     # ---- M14-3/M14-4 交付目标平台（v1.0：平台可移植性）----
-    # windows=本机交付环境（v0.5 实测教训：生成代码含 Unix-only fcntl 直接 ImportError）
-    target_platform: str = "windows"           # windows | linux | macos | any
+    # v0.5 实测教训：生成代码含 Unix-only fcntl 直接 ImportError——但那是「交付
+    # 环境=Windows」这一特定情形下的结论，缺省值写死它会让同一机制在 Linux 容器
+    # 里反过来把交付推向 msvcrt。故缺省改由运行时探测，显式 config.json 仍可覆盖。
+    target_platform: str = field(default_factory=detect_runtime_platform)
 
     # ---- M15-3 契约风格（v1.0：门禁风格约束可配置）----
     # function=顶层可调用导出（M15-1 缺省，与 v0.5 后行为一致）；

@@ -51,9 +51,37 @@ class TestPlatformPolicy:
 
 
 class TestSettingsPlatform:
-    def test_default_windows(self):
-        """缺省 windows（本机交付环境，v0.5 教训）。"""
-        assert Settings().target_platform == "windows"
+    def test_default_follows_runtime_os(self, monkeypatch):
+        """缺省按运行时 OS 判定——判分容器不带 config.json，这条是主路径不是兜底。
+
+        写死 windows 时同一机制会反向起效：提示词命令交付「必须能在 Windows 跑、
+        文件锁用 msvcrt」，而 Linux/macOS 上导入 msvcrt 即 ImportError。
+        """
+        import app.config as cfg
+        for sp, want in (("linux", "linux"), ("darwin", "macos"),
+                         ("win32", "windows")):
+            monkeypatch.setattr(cfg.sys, "platform", sp, raising=False)
+            assert Settings().target_platform == want
+
+    def test_unknown_os_degrades_to_any(self, monkeypatch):
+        """认不出的 OS 宁可「不注入约束」，也不能注入一条反的。"""
+        import app.config as cfg
+        monkeypatch.setattr(cfg.sys, "platform", "aos", raising=False)
+        assert Settings().target_platform == "any"
+        assert prompt_constraint("any") == ""
+
+    def test_explicit_value_overrides_detection(self, monkeypatch):
+        """显式 config.json/构造参数仍是最高优先（跨平台交付时人为指定 any）。"""
+        import app.config as cfg
+        monkeypatch.setattr(cfg.sys, "platform", "linux", raising=False)
+        assert Settings(target_platform="windows").target_platform == "windows"
+
+    def test_windows_target_still_names_posix_blacklist(self, monkeypatch):
+        """v0.5 事故场景不回退：指定 windows 时 fcntl 仍被点名禁止。"""
+        import app.config as cfg
+        monkeypatch.setattr(cfg.sys, "platform", "linux", raising=False)
+        s = Settings(target_platform="windows")
+        assert "fcntl" in prompt_constraint(s.target_platform)
 
     def test_invalid_rejected(self):
         with pytest.raises(ValueError, match="target_platform"):
@@ -107,13 +135,14 @@ class TestExecutorPlatformWiring:
         assert result.status.value != "BLOCKED"
 
     def test_factory_passes_platform(self):
-        """工厂构造 LocalExecutor 时透传 target_platform。"""
+        """工厂构造 LocalExecutor 时透传 target_platform（含探测出的缺省值）。"""
         from app.execution.factory import build_executor
 
+        from app.config import detect_runtime_platform
         s = Settings(docker_executor_enabled=False)
         ex = build_executor("auto", s)
         assert isinstance(ex, LocalExecutor)
-        assert ex.platform == "windows"    # Settings 缺省
+        assert ex.platform == detect_runtime_platform()
 
     def test_devloop_prompt_injected(self):
         """DevLoopEngine 按 target_platform 预生成提示词段。"""
