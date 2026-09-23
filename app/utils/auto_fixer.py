@@ -9,6 +9,8 @@
 2. fix_import_drift      import 路径漂移 → 重写为实际包路径
 3. fix_submodule_binding 子模块未绑定 → __init__.py 追加 from . import X
 4. fix_blueprint_registry Blueprint 未注册 → create_app 中插入注册行
+5. fix_dangling_template 悬空 {% extends %}/{% include %} → 摘除指令，页面自含渲染
+   （runA 取证：继承指令 10/10 指向从未生成的模板 = 整站每页 500）
 
 每个修复器返回 (是否修改, 修改描述列表)。修改直接写入文件。
 """
@@ -653,6 +655,90 @@ def fix_missing_module(code_dir: Path) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# 悬空模板继承
+# ---------------------------------------------------------------------------
+
+_TEMPLATE_SUFFIXES = (".html", ".htm", ".j2", ".jinja", ".jinja2")
+_JINJA_INHERIT_RE = re.compile(
+    r"""\{%-?\s*(extends|include)\s+(['"])([^'"]+)\2\s*-?%\}""")
+_TEMPLATES_DIR_NAMES = {"templates", "template"}
+
+
+def _template_logical_names(code_dir: Path) -> set[str]:
+    """交付里真实存在的模板，按 Jinja 会认的三种写法登记：裸文件名、
+    相对 code 根的路径、相对任一 templates/ 目录的路径。"""
+    names: set[str] = set()
+    for p in code_dir.rglob("*"):
+        if not p.is_file() or p.suffix.lower() not in _TEMPLATE_SUFFIXES:
+            continue
+        if {"__pycache__", "node_modules", ".git"} & set(p.parts):
+            continue
+        names.add(p.name)
+        names.add(p.relative_to(code_dir).as_posix())
+        parts = p.parts
+        for i, part in enumerate(parts):
+            if part in _TEMPLATES_DIR_NAMES:
+                names.add("/".join(parts[i + 1:]))
+    return names
+
+
+def fix_dangling_template(code_dir: Path) -> list[str]:
+    """悬空继承/包含 → 摘除指令，让页面自含渲染。
+
+    2026-09-23 runA 交付复放取证：生成器按「多页应用」的直觉写
+    `{% extends "base.html" %}` 却从不创建父模板，本地 13 份带模板的交付里
+    这类指令 10 条、悬空 10 条（0 例父模板真的写过）——每个页面直接 500，
+    判分面整片归零。摘除指令不损失任何已生成内容（父模板本来就不存在），
+    子模板自己的 block 就地渲染，页面从 500 回到可判分。
+    只对 extends/include 动手：import 掉的宏真被调用时摘了会换成
+    UndefinedError，收益不确定，留给 LLM 通道。
+    """
+    code_dir = Path(code_dir)
+    fixes: list[str] = []
+    have = _template_logical_names(code_dir)
+    # have 为空不提前返回：交付里一个模板文件都没有时，内联串里的
+    # extends/include 更是无处可解析——全部悬空，正是该修的形状。
+
+    targets = list(code_dir.rglob("*.py")) + [
+        p for p in code_dir.rglob("*")
+        if p.is_file() and p.suffix.lower() in _TEMPLATE_SUFFIXES]
+    for f in targets:
+        if "__pycache__" in f.parts or "node_modules" in f.parts:
+            continue
+        src = _read(f)
+
+        def _dangling(m: re.Match) -> bool:
+            return m.group(3) not in have and Path(m.group(3)).name not in have
+
+        found = [m for m in _JINJA_INHERIT_RE.finditer(src) if _dangling(m)]
+        if not found:
+            continue
+        rel = f.relative_to(code_dir).as_posix()
+        new_src = _JINJA_INHERIT_RE.sub(
+            lambda m: (f"{{# 机械摘除：目标模板 {m.group(3)} "
+                       f"未随交付生成 #}}"
+                       if _dangling(m) else m.group(0)),
+            src)
+        if f.suffix == ".py":
+            try:
+                compile(new_src, str(f), "exec")
+            except SyntaxError as exc:
+                fixes.append(
+                    f"{rel}: [发现] 悬空继承摘除后语法不通，未改写（{exc.msg}）")
+                continue
+        _write(f, new_src)
+        counted: dict[tuple[str, str], int] = {}
+        for m in found:
+            key = (m.group(1), m.group(3))
+            counted[key] = counted.get(key, 0) + 1
+        for (kind, target), n in sorted(counted.items()):
+            fixes.append(
+                f"{rel}: 摘除 {n} 处悬空 {kind} \"{target}\""
+                "（目标模板未生成，页面改为自含渲染）")
+    return fixes
+
+
+# ---------------------------------------------------------------------------
 # 统一入口
 # ---------------------------------------------------------------------------
 
@@ -700,6 +786,12 @@ def run_all_fixers(code_dir: Path,
         r = fix_missing_module(code_dir)
         if r:
             results["模块路径漂移"] = r
+    except Exception:
+        pass
+    try:
+        r = fix_dangling_template(code_dir)
+        if r:
+            results["悬空模板继承"] = r
     except Exception:
         pass
     try:
