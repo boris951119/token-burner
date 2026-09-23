@@ -39,6 +39,9 @@ class _FakeTraceability:
     def upsert_node_contract(self, req_id, content) -> None:
         self.calls.append(("upsert_node_contract", (req_id, content)))
 
+    def upsert_scenario(self, **kwargs) -> None:
+        self.calls.append(("upsert_scenario", kwargs))
+
     def list_interfaces(self, *, req_id=None):
         return [{"interface_id": f"{req_id}::sym_a"},
                 {"interface_id": f"{req_id}::sym_b"}]
@@ -252,6 +255,47 @@ class TestModuleTestRegistration:
         assert tests[0][1]["passed"] is False
         assert [c for c in rt.traceability.calls
                 if c[0] == "set_interface_implemented"] == []
+
+
+class TestScenarioBackfill:
+    """官方题面的 scenario 从不带 id，而 SDK 拿 id 当主键 → 表恒空。"""
+
+    TREE = {
+        "id": "ROOT", "type": "FOLDER", "children": [
+            {"id": "REQ-1", "type": "FOLDER", "name": "Link Directory",
+             "children": [
+                 {"id": "REQ-1.1", "type": "ATOMIC", "name": "Enter Website",
+                  "scenarios": [
+                      {"name": "Enter Website", "steps": [
+                          {"keyword": "WHEN", "content": "Open the entry URL"},
+                      ]},
+                      {"name": "Enter Website", "steps": []},
+                      {"id": "S-OFFICIAL", "name": "题面自带主键", "steps": []},
+                  ]},
+             ]},
+        ],
+    }
+
+    def _scenarios(self, rt):
+        return [c[1] for c in rt.traceability.calls
+                if c[0] == "upsert_scenario"]
+
+    def test_idless_scenarios_get_derived_keys(self):
+        rt = _FakeRuntime()
+        ArcBenchBridge(runtime=rt).store_tree(self.TREE)
+        registered = self._scenarios(rt)
+        assert [s["scenario_id"] for s in registered] == [
+            "REQ-1.1::enterwebsite", "REQ-1.1::enterwebsite#2",
+        ]
+        assert registered[0]["req_id"] == "REQ-1.1"
+        assert registered[0]["steps"] == [
+            {"keyword": "WHEN", "content": "Open the entry URL"}]
+
+    def test_official_scenario_ids_left_alone(self):
+        rt = _FakeRuntime()
+        ArcBenchBridge(runtime=rt).store_tree(self.TREE)
+        assert all("S-OFFICIAL" not in s["scenario_id"]
+                   for s in self._scenarios(rt))
 
 
 class TestBootstrapWithoutGit:

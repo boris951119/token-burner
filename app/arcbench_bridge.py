@@ -159,15 +159,62 @@ class ArcBenchBridge:
         """把平台需求树原文写入 traceability（官方 workflow 同款起点动作）。"""
         try:
             rt = self._rt()
-            if rt is not None:
-                rt.traceability.store_requirement_tree(tree)
-                self._folders = [
-                    {"id": c.get("id"), "name": c.get("name")}
-                    for c in (tree.get("children") or [])
-                    if isinstance(c, dict) and c.get("type") == "FOLDER"
-                ]
+            if rt is None:
+                return
+            rt.traceability.store_requirement_tree(tree)
+            self._folders = [
+                {"id": c.get("id"), "name": c.get("name")}
+                for c in (tree.get("children") or [])
+                if isinstance(c, dict) and c.get("type") == "FOLDER"
+            ]
+        except Exception:
+            return
+        try:
+            self._backfill_scenarios(rt, tree)
         except Exception:
             pass
+
+    def _backfill_scenarios(self, rt, tree: dict) -> None:
+        """给无 id 的官方 scenario 补一个确定性主键，否则 scenarios 表恒空。
+
+        runA 产物复放取证（9/23，官方题面形态）：requirements.yaml 的 ATOMIC
+        节点带 scenarios: [{name, steps:[{keyword, content}]}]，题面从不给
+        scenario id；而 SDK 的 store_requirement_tree 拿 id 当主键、无 id 一律
+        continue——真树灌进去 requirements 7 行、scenarios 0 行。平台按
+        scenario 粒度看功能覆盖（avg_feature_implementation_rate 就是这条
+        口径），空表＝整条通道零证据。这里只做机械命名（req_id::归一 name），
+        题面文字一字不改；官方哪天补了 id，本函数自然一条都不动。
+        """
+        seen: set[str] = set()
+
+        def walk(node: dict) -> None:
+            if not isinstance(node, dict):
+                return
+            req_id = str(node.get("id") or node.get("req_id") or "").strip()
+            for sc in (node.get("scenarios") or []):
+                if not isinstance(sc, dict) or not req_id:
+                    continue
+                if str(sc.get("id") or sc.get("scenario_id") or "").strip():
+                    continue  # 题面自带主键：以它为准，不越俎代庖
+                name = str(sc.get("name") or "").strip()
+                base = f"{req_id}::{_norm(name) or 'S'}"
+                scenario_id = base
+                bump = 2
+                while scenario_id in seen:  # 同名同节点的重复场景各有各的行
+                    scenario_id = f"{base}#{bump}"
+                    bump += 1
+                seen.add(scenario_id)
+                rt.traceability.upsert_scenario(
+                    scenario_id=scenario_id,
+                    req_id=req_id,
+                    name=name,
+                    steps=[s for s in (sc.get("steps") or [])
+                           if isinstance(s, dict)],
+                )
+            for child in (node.get("children") or []):
+                walk(child)
+
+        walk(tree)
 
     # ---- 生命周期（main.py 显式调用，不经事件推断）----
 
