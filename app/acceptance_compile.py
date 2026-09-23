@@ -183,13 +183,23 @@ _TYPE_VERB = re.compile(
     r"(?:\b(?:type|types|typing|enter|enters|entered|fill|fills|filled"
     r"|write|writes|writing|paste|pastes)\b|输入|填写|键入|填入)"
     r"[\s\w'’()/…\-]{0,40}$", re.I)
-# 但引号紧跟「字段类名词」时它是**输入框的名字**而不是值（fill in the
-# "Title" field）：评测按 getByLabel/getByPlaceholder("Title") 定位，这条必须
-# 留在控件通道。只允许夹一个词，否则 type "X" into the search box 会被误留。
-_FIELD_NOUN_AFTER = re.compile(
+# 勾选类动词短窗口（只用于「别剔除」这一侧，见 _typed_quotes_in 内的注释）。
+_TICK_VERB = re.compile(
+    r"(?:\b(?:check|checks|checked|tick|ticks|ticked|mark|marks)\b"
+    r"|勾选|勾上|选中)[\s\w'’()/…\-]{0,12}$", re.I)
+# 但引号紧跟「命名类名词」时它是**名字而不是值**，两类都要留在控件通道：
+# 字段类（fill in the "Title" field——评测按 getByLabel/getByPlaceholder 定位的
+# 就是它）与去处类（Enter the "Settings" tab / Enter the "Checkout" step——那是
+# 必须存在且可点的页签/步骤名，官方题面实测有这一形）。窗口只允许夹一个词，
+# 否则 type "X" into the search box 会被误留。
+_NAME_NOUN_AFTER = re.compile(
     r"^\s{0,2}(?:[\w一-鿿]{1,12}\s+)?\s*"
     r"(?:fields?|boxes|box|inputs?|text\s*fields?|textboxes?|areas?|columns?"
-    r"|fields?et|下拉|字段|输入框|文本框|框|栏)", re.I)
+    r"|tabs?|steps?|pages?|screens?|views?|sections?|flows?|menus?|routes?"
+    r"|URLs?|links?|下拉|字段|输入框|文本框|框|栏|步骤|标签页?|页|面板)"
+    # 名词后面紧跟另一个引号串时它属于**下一条**（with title "A" and URL "B"），
+    # 不是本条引号的名字——不这样判，一句里连着填两个字段就被误当字段名留下。
+    r"""\b(?!\s*["'`“‘])""", re.I)
 
 
 def _typed_quotes_in(text: str) -> set[str]:
@@ -201,10 +211,14 @@ def _typed_quotes_in(text: str) -> set[str]:
     for pat in (_QUOTED_D, _QUOTED_CJK, _QUOTED_S, _QUOTED_BT):
         for m in pat.finditer(body):
             left = body[:m.start()]
-            if not _TYPE_VERB.search(left) or _CLICK_VERB.search(left):
+            # 让位给「更近身的动作动词」：勾选类不进 _CLICK_VERB（那里加词会
+            # 把 "check whether the page shows X" 的提示语误升成必须可点），
+            # 但在这条剔除通道里 check/tick 紧邻的引号是复选框名，不是值。
+            if (not _TYPE_VERB.search(left) or _CLICK_VERB.search(left)
+                    or _TICK_VERB.search(left)):
                 continue
-            if _FIELD_NOUN_AFTER.match(body[m.end():]):
-                continue          # 引号里是输入框的名字，不是要打的值
+            if _NAME_NOUN_AFTER.match(body[m.end():]):
+                continue          # 引号里是字段名/去处名，不是要打的值
             q = _clean_quote(m.group(1))
             if q:
                 out.add(q)

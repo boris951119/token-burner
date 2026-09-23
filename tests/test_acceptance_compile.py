@@ -276,6 +276,18 @@ def test_typed_input_values_are_not_interface_copy(tmp_path):
     zh = ck('输入 “关键词” 后点击 “搜索”')
     assert zh.control_labels == ["搜索"] and zh.click_controls == ["搜索"]
     assert ck('填写 “书名” 字段').control_labels == ["书名"]
+    # 去处类名词同理：Enter the "X" tab/step 里的 X 是必须存在且可点的页签名，
+    # 不是要打的值（官方题面实测这一形）
+    assert ck('Enter the "Pending Tickets" tab').control_labels \
+        == ["Pending Tickets"]
+    assert ck('Enter the "Verify Identity" step and submit').control_labels \
+        == ["Verify Identity"]
+    # 勾选动词紧邻的引号是复选框名（同句里前面还有个 fill 也不能剔）
+    assert ck('Fill in the information and check "Set as default"') \
+        .control_labels == ["Set as default"]
+    # 但名词若属于**下一个**引号串（一句里连填两个字段）就不能替本条担保
+    assert ck('Fill the form with title "Fresh Report" and URL '
+              '"https://example.org/r", then submit').control_labels == []
 
 
 def test_cjk_and_ascii_quote_channels_are_parity(tmp_path):
