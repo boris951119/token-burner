@@ -1103,6 +1103,212 @@ def auto_bind_submodules(code_dir: Path) -> list[str]:
     return fixed
 
 
+# ---- 批次#43：DOM 表单动作 × 路由表对账（写路径冒烟）---------------------
+# 官方评测是 DOM 驱动的：在页面上填字段、点提交，走的是 form 的 action+method。
+# 我方原有两道验证都碰不到这条通道——冒烟只做**无参 GET**，旅程脚本按
+# 「路由表」生成请求（表里没有的路径它根本不会去试）。于是「页面里的
+# action」和「路由表」两份事实各写各的，谁也不对账。
+# 40 份已知交付实测（9/23 免费活服探针，零 LLM）：能装配起来的 24 份里
+# 4 份有「一点就死」的表单，且这 4 份当日冒烟**全是绿的**——
+# 2 份 action 指向路由表里不存在的路径（GET /notes、POST /api/login，
+# 浏览器提交即 404），2 份提交 500（建表没跑 / 列名不存在）。
+# 实现取法：复用冒烟模板的装配前段（择优算法与冒烟逐字同源，两处不同构
+# 就等于闸测不到判分面——116-121 行的老教训），后段换成表单对账；
+# 真提交跑在 code/ 的临时副本里，交付自带的库不会被探针写脏。
+_FORM_TAIL = r'''
+# ==== 表单动作 × 路由表对账（批次#43）====
+import re as _qre
+from urllib.parse import urlencode as _qenc
+
+_qrules = []
+if hasattr(app, "url_map"):
+    for _qr in app.url_map.iter_rules():
+        _qrules.append((str(_qr), set(_qr.methods) - {"HEAD", "OPTIONS"}))
+else:
+    for _qr in getattr(app, "routes", []) or []:
+        _qp0 = getattr(_qr, "path", None)
+        if _qp0:
+            _qrules.append((_qp0, set(getattr(_qr, "methods", None) or ())))
+
+_QNUL = "\x00"
+_QANY = "\x01"
+
+
+def _qrx(_rule):
+    """路由规则 → 匹配串。`<path:...>`/`{x:path}` 跨斜杠（漏了它会把
+    /static/js/app.js 这类真存在的目标判成「路由表里没有」= 假红）。"""
+    _b = _qre.sub(r"<\s*path\s*:\s*[A-Za-z_][A-Za-z0-9_]*\s*>", _QANY, _rule)
+    _b = _qre.sub(r"\{\s*[A-Za-z_][A-Za-z0-9_]*\s*:\s*path\s*\}", _QANY, _b)
+    _b = _qre.sub(r"<[^>]+>", _QNUL, _b)
+    _b = _qre.sub(r"\{[^}]+\}", _QNUL, _b)
+    _e = _qre.escape(_b)
+    return _qre.compile("^" + _e.replace(_qre.escape(_QANY), ".+")
+                        .replace(_qre.escape(_QNUL), "[^/]+") + "/?$")
+
+
+def _qfind(_path, _verb):
+    """(路由在不在, 有没有别的动词注册过这条路径)。"""
+    _other = False
+    for _rule, _ms in _qrules:
+        if _qrx(_rule).match(_path.rstrip("/") or "/"):
+            if _verb in _ms:
+                return True, False
+            _other = True
+    return False, _other
+
+
+_QFORM = _qre.compile(r"<form\b([^>]*)>([\s\S]*?)</form>", _qre.I)
+_QATTR = _qre.compile(r"\b(action|method)\s*=\s*(['\"])([^'\"]*)\2", _qre.I)
+_QNAME = _qre.compile(r"\bname\s*=\s*(['\"])([^'\"]*)\1", _qre.I)
+_QTYPE = _qre.compile(r"\btype\s*=\s*(['\"])([^'\"]*)\1", _qre.I)
+_QWORD = _qre.compile(r"placeholder\s*=\s*(['\"])([^'\"]+)\1", _qre.I)
+
+
+def _qcall(_method, _path, _data=None):
+    """GET 拼 query、POST 送表单——只用两家客户端都有的方法名入口。
+    （client.request 的签名在 Werkzeug/Starlette 之间不一致，传 data 直接
+    TypeError；这里宁可退一步也不能把签名错当成应用崩溃。）"""
+    if _method == "GET":
+        _fn = client.get
+        _url = _path + (("?" + _qenc(_data)) if _data else "")
+        _kw = {}
+    else:
+        _fn = client.post
+        _url = _path
+        _kw = {"data": _data or {}}
+    try:
+        _r = _fn(_url, follow_redirects=True, **_kw)
+    except TypeError as _te:                # Starlette 老版本不认逐请求参数
+        if "follow_redirects" not in str(_te):
+            raise
+        _r = _fn(_url, **_kw)
+    return getattr(_r, "status_code", 200)
+
+
+_QPAGES = {}
+for _qp in sorted({str(x) for x in _page_paths(app)}):
+    if "<" in _qp or "{" in _qp or _qp.startswith("/api") or "static" in _qp:
+        continue                            # 带参页与接口页留给旅程
+    try:
+        _qr = client.get(_qp)
+        _QB = (_qr.get_data(as_text=True) if hasattr(_qr, "get_data")
+               else getattr(_qr, "text", ""))
+    except Exception:
+        continue
+    if _QB.lstrip().startswith(("{", "[")):
+        continue
+    _QPAGES[_qp] = _QB
+
+_qissues = []
+_qn = 0
+for _qp, _qh in _QPAGES.items():
+    for _qm in _QFORM.finditer(_qh):
+        _qa = dict((k.lower(), v) for k, _q2, v in _QATTR.findall(_qm.group(1)))
+        _qact = (_qa.get("action") or _qp).strip()
+        if (not _qact or _qact.startswith(("http://", "https://", "#", "mailto:",
+                                           "javascript:", "data:"))
+                or "{{" in _qact or "{%" in _qact or "$" in _qact):
+            continue                        # 模板/前端框架自己拼的目标，静态无从判定
+        _qv = (_qa.get("method") or "get").upper()
+        if _qv not in ("GET", "POST"):
+            _qv = "POST"                    # put/delete 等表单方法浏览器也只发这两种之一
+        _qpath = _qact.split("?")[0]
+        if not _qpath.startswith("/"):
+            _qpath = "/" + _qpath
+        _qn += 1
+        _qf = [x for x in _QNAME.findall(_qm.group(2)) if x[1]]
+        _qhint = " 字段" + ",".join(sorted({x[1] for x in _qf})[:6])
+        _qok, _qother = _qfind(_qpath, _qv)
+        if not _qok:
+            _qissues.append(
+                f"页面 {_qp} 的表单提交到 {_qv} {_qpath}，路由表里没有这条"
+                + ("（路径在、方法没注册 = 提交即 405）" if _qother else
+                   "（提交即 404）")
+                + _qhint + "——把 action 改成真实存在的路径与方法，"
+                "或在装配层把这条路由注册上；本应用注册了 "
+                f"{len(_qrules)} 条路由")
+            continue
+        _qw = [x[1] for x in _QWORD.findall(_qm.group(2))][:8] or ["sample"]
+        _qd = {}
+        for _qf in _qre.finditer(r"<(input|textarea|select)\b([^>]*)>",
+                                 _qm.group(2), _qre.I):
+            _qat = _qf.group(2)
+            _qnm = _QNAME.search(_qat)
+            if not _qnm or not _qnm.group(2):
+                continue
+            _qty = ((_QTYPE.search(_qat) or [None, "text"])[1] or "text").lower()
+            if _qty in ("submit", "button", "reset", "file", "image"):
+                continue
+            if _qty in ("checkbox", "radio"):
+                if "checked" in _qat.lower():
+                    _qd[_qnm.group(2)] = "on"
+                continue
+            _qd[_qnm.group(2)] = _qw[len(_qd) % len(_qw)]
+        try:
+            _qst = _qcall(_qv, _qpath, _qd)
+        except Exception as _qe:
+            _qissues.append(
+                f"页面 {_qp} 的表单 {_qv} {_qpath} 一提交就崩（"
+                f"{type(_qe).__name__}: {str(_qe)[:90]}）" + _qhint
+                + "——评测就是在这一页填好字段点提交，崩了这条需求整族判红")
+            continue
+        if _qst >= 500:
+            _qissues.append(
+                f"页面 {_qp} 的表单 {_qv} {_qpath} 提交返回 {_qst}" + _qhint
+                + "——同上：填完点提交即服务端错误")
+print(f"@@FORMS@@ n={_qn} issues={len(_qissues)}")
+for _qi in _qissues[:8]:
+    print("@@FORM-ISSUE@@", _qi)
+# ==== 对账结束（探针始终以 0 退出：结论由父进程按标记行解读）====
+raise SystemExit(0)
+'''
+
+# 装配前段直接切自冒烟模板：两道验证共用同一套应用择优算法
+_VERIFY_ASSEMBLY_PREFIX = "_fa = _FieldAnchors()"
+
+
+def _form_script() -> str:
+    """拼出表单对账探针脚本（冒烟装配前段 + 对账后段）。"""
+    if _VERIFY_ASSEMBLY_PREFIX not in _VERIFY_TEMPLATE:
+        return ""
+    return _VERIFY_TEMPLATE.split(_VERIFY_ASSEMBLY_PREFIX)[0] + _FORM_TAIL
+
+
+def run_form_probe(code_dir: Path, python: str | None = None,
+                   timeout: int = 120) -> list[str]:
+    """在 code/ 的临时副本上跑表单×路由对账，返回缺陷描述列表（空=没问题）。
+
+    副本是硬要求：对账要真提交，真提交会写库——探针不能把测试数据烙进
+    交付自带的 sqlite（评测看见多出来的行同样是保真缺陷）。
+    探针自己炸了（超时/装不起应用/脚本没跑起来）一律返回空列表：
+    这是工具失效，不是应用缺陷，不该拦交付。
+    """
+    code_dir = Path(code_dir).resolve()
+    script = _form_script()
+    if not script:
+        return []
+    work = Path(tempfile.mkdtemp(prefix="arcbench-formprobe-"))
+    try:
+        dst = work / "code"
+        shutil.copytree(code_dir, dst,
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        path = work / "form_probe.py"
+        path.write_text(script, encoding="utf-8")
+        proc = subprocess.run(
+            [python or sys.executable, str(path), str(dst)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            env=dict(os.environ, PYTHONIOENCODING="utf-8"),
+            timeout=timeout, cwd=str(dst),
+        )
+    except Exception:
+        return []
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    out = (proc.stdout or "") + (proc.stderr or "")
+    return [ln[len("@@FORM-ISSUE@@ "):].strip()
+            for ln in out.splitlines() if ln.startswith("@@FORM-ISSUE@@")]
+
+
 def run_smoke(code_dir: Path, python: str | None = None) -> tuple[bool, str]:
     """确定性集成冒烟。返回 (是否通过, 报告文本)。"""
     code_dir = Path(code_dir).resolve()
@@ -1153,6 +1359,13 @@ def run_smoke(code_dir: Path, python: str | None = None) -> tuple[bool, str]:
             "（官方运行环境仅 2GB，含浏览器）")
     if shims:
         report = "[shim] 机械垫片已生成: " + ", ".join(shims) + " → " + report
+    if ok:
+        # 绿了才查写路径：红的时候修复环已经拿到判词，且探针要再启一次应用
+        issues = run_form_probe(code_dir, python=python)
+        if issues:
+            ok = False
+            report += ("\n[form] 页面表单与路由表对不上（评测在页面上点提交，"
+                       "冒烟只 GET 所以此前全程看不见）:\n  " + "\n  ".join(issues))
     return ok, report.strip()
 
 
