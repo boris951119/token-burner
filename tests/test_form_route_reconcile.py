@@ -12,11 +12,19 @@ from __future__ import annotations
 
 import pathlib
 import sqlite3
+import subprocess
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
-from app.arcbench_smoke import _form_script, run_form_probe, run_smoke  # noqa: E402
+from app.arcbench_smoke import (  # noqa: E402
+    FORM_TIMEOUT,
+    SMOKE_TIMEOUT,
+    _form_script,
+    run_form_probe,
+    run_smoke,
+    write_gate_scripts,
+)
 
 
 def _write(p, s):
@@ -57,6 +65,32 @@ _FORM = ("<a href='/x'>X</a>"
          "<form action='{path}' method='{verb}'>"
          "<input name='title' placeholder='Title'>"
          "<input type='submit' value='Save'></form>")
+
+
+# 真会写库的交付：POST 入库 + 自带 app.db（副本沙箱的反证对象）
+_DB_APP_SRC = (
+    "import sqlite3\n"
+    "from flask import Flask, request, jsonify\n"
+    "def create_app():\n"
+    "    app = Flask(__name__)\n"
+    "    conn = sqlite3.connect('app.db')\n"
+    "    conn.execute('CREATE TABLE IF NOT EXISTS books"
+    " (id INTEGER PRIMARY KEY, title TEXT)')\n"
+    "    conn.commit()\n    conn.close()\n"
+    "    @app.route('/api/health')\n"
+    "    def h():\n        return jsonify(status='ok')\n"
+    "    @app.route('/')\n"
+    "    def home():\n        return \"<a href='/x'>X</a>"
+    "<form action='/books' method='post'>"
+    "<input name='title' placeholder='Title'></form>\"\n"
+    "    @app.route('/books', methods=['POST'])\n"
+    "    def add():\n"
+    "        conn = sqlite3.connect('app.db')\n"
+    "        conn.execute('INSERT INTO books (title) VALUES (?)',\n"
+    "                       (request.form.get('title', ''),))\n"
+    "        conn.commit()\n        conn.close()\n        return 'ok'\n"
+    "    return app\n"
+)
 
 
 class TestFormActionRouteReconcile:
@@ -203,28 +237,7 @@ class TestProbeSandbox:
         code = tmp_path / "code"
         _write(code / "app_mod" / "__init__.py",
                "from app_mod.app_mod import *  # noqa: F401,F403\n")
-        _write(code / "app_mod" / "app_mod.py", (
-            "import sqlite3\n"
-            "from flask import Flask, request, jsonify\n"
-            "def create_app():\n"
-            "    app = Flask(__name__)\n"
-            "    conn = sqlite3.connect('app.db')\n"
-            "    conn.execute('CREATE TABLE IF NOT EXISTS books"
-            " (id INTEGER PRIMARY KEY, title TEXT)')\n"
-            "    conn.commit()\n    conn.close()\n"
-            "    @app.route('/api/health')\n"
-            "    def h():\n        return jsonify(status='ok')\n"
-            "    @app.route('/')\n"
-            "    def home():\n        return "
-            "\"<a href='/x'>X</a><form action='/books' method='post'>\"\n"
-            "            \"<input name='title' placeholder='Title'></form>\"\n"
-            "    @app.route('/books', methods=['POST'])\n"
-            "    def add():\n"
-            "        conn = sqlite3.connect('app.db')\n"
-            "        conn.execute('INSERT INTO books (title) VALUES (?)',\n"
-            "                       (request.form.get('title', ''),))\n"
-            "        conn.commit()\n        conn.close()\n        return 'ok'\n"
-            "    return app\n"))
+        _write(code / "app_mod" / "app_mod.py", _DB_APP_SRC)
         db = code / "app.db"
         conn = sqlite3.connect(str(db))
         conn.execute("CREATE TABLE IF NOT EXISTS books "
@@ -234,7 +247,9 @@ class TestProbeSandbox:
         conn.close()
         before = db.read_bytes()
 
-        run_smoke(code)
+        ok, report = run_smoke(code)
+        # 前提断言：应用必须真的装配起来了，否则「库没被动」是空话
+        assert ok, report
 
         assert db.read_bytes() == before, "探针把测试数据写进了交付自带的库"
         conn = sqlite3.connect(str(db))
@@ -280,6 +295,101 @@ class TestVerdictWiring:
             "<h1>Welcome</h1><p>No affordance here.</p>"))
         assert not ok
         assert "[form]" not in report, report
+
+
+class TestSmokeGate:
+    """批次#44：修复循环的复测（test_cmd）必须与判定同闸。
+
+    锚点闸的取证就是这条教训：判词说的是锚点缺口，复测跑的却是本来就过的
+    冒烟，于是三轮修复分文未收敛。表单闸同形——不复用同一个闸，等于让
+    模型朝「让基线冒烟绿」收敛，而 [form] 红字它照单收进了提示词。
+    """
+
+    def _run(self, code_dir, gate):
+        return subprocess.run(
+            [sys.executable, str(gate), str(code_dir)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=300, cwd=str(pathlib.Path(code_dir).parent))
+
+    def test_gate_red_on_dead_action(self, tmp_path):
+        code = _code(tmp_path, _app_src(_FORM.format(path="/notes", verb="get")))
+        p = self._run(code, write_gate_scripts())
+        assert p.returncode != 0, p.stdout[-400:]
+        assert "[form]" in p.stdout and "路由表里没有这条" in p.stdout, p.stdout[-400:]
+
+    def test_gate_green_on_matching_action(self, tmp_path):
+        code = _code(tmp_path, _app_src(
+            _FORM.format(path="/books", verb="post"),
+            "    @app.route('/books', methods=['POST'])\n"
+            "    def add():\n        return 'ok'\n"))
+        p = self._run(code, write_gate_scripts())
+        assert p.returncode == 0, p.stdout[-400:]
+
+    def test_gate_stops_at_base_smoke_when_it_is_red(self, tmp_path):
+        """基线红就直接判红：探针段不再跑（与 run_smoke 同口径）。"""
+        code = _code(tmp_path, _app_src("<h1>Hi</h1><p>Nothing to click.</p>"))
+        p = self._run(code, write_gate_scripts())
+        assert p.returncode != 0, p.stdout[-400:]
+        assert "[form]" not in p.stdout, p.stdout[-400:]
+
+    def test_gate_passes_when_probe_script_is_lost(self, tmp_path):
+        """探针脚本没落盘＝工具失效，一律放行：闸炸了不该算交付的错。"""
+        code = _code(tmp_path, _app_src(_FORM.format(path="/notes", verb="get")))
+        gate = write_gate_scripts()
+        (gate.parent / "arcbench_smoke_forms.py").unlink()
+        p = self._run(code, gate)
+        assert p.returncode == 0, p.stdout[-400:]
+        assert "工具失效" in p.stdout, p.stdout[-400:]
+
+    def test_gate_leaves_delivered_db_untouched(self, tmp_path):
+        """闸自己也跑副本：修复循环每轮复测都写一次交付库的话，评测拿到的
+        时候库里已经多了测试数据。"""
+        code = _code(tmp_path, _DB_APP_SRC)
+        db = code / "app.db"
+        conn = sqlite3.connect(str(db))
+        conn.execute("CREATE TABLE IF NOT EXISTS books "
+                     "(id INTEGER PRIMARY KEY, title TEXT)")
+        conn.execute("INSERT INTO books (title) VALUES ('seed')")
+        conn.commit()
+        conn.close()
+        before = db.read_bytes()
+        p = self._run(code, write_gate_scripts())
+        assert p.returncode == 0, p.stdout[-400:]
+        assert db.read_bytes() == before
+
+    def test_gate_budget_fits_fixer_timeout(self):
+        """复测总预算必须留在 RepoFixer 的 test_timeout 之内：被外层熔断会
+        给出「验证命令超时」这种修复者读不懂的信号。"""
+        import inspect
+
+        from app.agents.repo_fixer import RepoFixer
+        limit = inspect.signature(RepoFixer.__init__).parameters[
+            "test_timeout"].default
+        assert (SMOKE_TIMEOUT - 10) + (FORM_TIMEOUT - 30) < limit
+
+    def test_auto_repair_uses_the_gate(self, tmp_path, monkeypatch):
+        """接线本身要有断言：默认 test_cmd 指向闸脚本，而不是裸冒烟。"""
+        captured = {}
+
+        class _FakeFixer:
+            def __init__(self, llm, project_dir, test_cmd=None, **kw):
+                captured["test_cmd"] = list(test_cmd or [])
+
+            def fix(self, issue):
+                import types
+                return types.SimpleNamespace(ok=True, rounds=1)
+
+        project = tmp_path / "project"
+        code = _code(project, _app_src(_FORM.format(path="/notes", verb="get")))
+        assert not run_smoke(code)[0], "前提：这份交付必须是被 [form] 判红的"
+        monkeypatch.setattr("app.agents.repo_fixer.RepoFixer", _FakeFixer)
+        monkeypatch.setattr("app.utils.model_client.ModelClient",
+                            lambda settings: object())
+        from app.arcbench_smoke import auto_repair
+        auto_repair(project, settings=None, max_rounds=1)
+        assert captured["test_cmd"], "修复循环没拿到复测命令"
+        assert captured["test_cmd"][1].endswith("arcbench_smoke_gate.py"), \
+            captured["test_cmd"]
 
 
 def test_probe_script_compiles():

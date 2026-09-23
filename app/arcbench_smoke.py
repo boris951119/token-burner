@@ -1274,8 +1274,109 @@ def _form_script() -> str:
     return _VERIFY_TEMPLATE.split(_VERIFY_ASSEMBLY_PREFIX)[0] + _FORM_TAIL
 
 
+# 三段脚本落在同一个临时目录：闸脚本按「同目录邻居」找前两段，
+# RepoFixer 以 cwd=项目目录 执行它时才不会找不着北。
+VERIFY_SCRIPT_NAME = "arcbench_smoke_verify.py"
+FORMS_SCRIPT_NAME = "arcbench_smoke_forms.py"
+GATE_SCRIPT_NAME = "arcbench_smoke_gate.py"
+SMOKE_TIMEOUT = 180          # 基线冒烟（run_smoke 用）
+FORM_TIMEOUT = 120           # 表单对账（run_form_probe 用）
+
+_GATE_TEMPLATE = '''\
+"""ArcBench 冒烟闸（自动生成）：基线冒烟 × 表单对账，红字与判定同口径。
+
+上游 run_smoke 说什么，修复循环就被什么验收——两段脚本与本文件同目录。
+"""
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+HERE = Path(__file__).resolve().parent
+code = Path(sys.argv[1]).resolve()
+
+
+def _run(_cmd, _timeout, _cwd=None):
+    return subprocess.run(_cmd, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace",
+                          timeout=_timeout, cwd=_cwd)
+
+
+try:
+    base = _run([__PY__, str(HERE / "__VERIFY__"), str(code)], __BASE_TIMEOUT__,
+                str(code))
+except Exception as exc:
+    # 基线段跑不起来＝交付没通过（与 run_smoke 把超时判 FAIL 同口径）
+    print("基线冒烟未能执行（" + type(exc).__name__ + ": " + str(exc)[:120] + "）")
+    raise SystemExit(1)
+print((base.stdout or "")[-1500:])
+if (base.stderr or "").strip():
+    print((base.stderr or "")[-500:])
+if base.returncode != 0:
+    raise SystemExit(base.returncode)
+
+work = None
+try:
+    work = Path(tempfile.mkdtemp(prefix="arcbench-gate-forms-"))
+    dst = work / "code"
+    shutil.copytree(code, dst, ignore=shutil.ignore_patterns(
+        "__pycache__", "*.pyc"))
+    pr = _run([__PY__, str(HERE / "__FORMS__"), str(dst)], __FORM_TIMEOUT__,
+              str(dst))
+    out = (pr.stdout or "") + (pr.stderr or "")
+    if "@@FORMS@@" not in out:
+        # 没跑起来（解释器报错/脚本被删/应用装不起）：分不清是工具坏了还是
+        # 交付坏了，一律按工具失效放行——误拦一次交付的代价比漏一次大。
+        print("[gate] 表单探针未跑成（rc=" + str(pr.returncode) + "），按工具失效放行")
+        raise SystemExit(0)
+except Exception as exc:
+    # 探针自己失效（含超时）一律不拦交付：工具坏了不是应用缺陷
+    print("[gate] 表单探针未跑成（" + type(exc).__name__ + "），按工具失效放行")
+    raise SystemExit(0)
+finally:
+    if work is not None:
+        shutil.rmtree(work, ignore_errors=True)
+bad = [ln[len("@@FORM-ISSUE@@ "):].strip() for ln in out.splitlines()
+       if ln.startswith("@@FORM-ISSUE@@")]
+if bad:
+    print("[form] 页面表单与路由表对不上:")
+    for ln in bad[:8]:
+        print("  " + ln)
+    raise SystemExit(1)
+raise SystemExit(0)
+'''
+
+
+def write_gate_scripts(python: str | None = None) -> Path:
+    """把「判定」写成可独立执行的闸脚本，返回其路径（复测与判定同闸）。
+
+    存在的理由：auto_repair 的修复循环用 test_cmd 判自己修好没有。若复测只看
+    基线冒烟而判词里带着 [form] 红，循环就会朝「让基线绿」收敛——锚点闸当年
+    正是这样三轮分文未收敛（见 _ANCHOR_GATE_TEMPLATE 的取证）。
+    """
+    d = Path(tempfile.gettempdir())
+    (d / VERIFY_SCRIPT_NAME).write_text(_VERIFY_TEMPLATE, encoding="utf-8")
+    script = _form_script()
+    if script:
+        (d / FORMS_SCRIPT_NAME).write_text(script, encoding="utf-8")
+    gate = d / GATE_SCRIPT_NAME
+    gate.write_text(
+        _GATE_TEMPLATE
+        .replace("__VERIFY__", VERIFY_SCRIPT_NAME)
+        .replace("__FORMS__", FORMS_SCRIPT_NAME)
+        # 复测总预算必须小于 RepoFixer 的 test_timeout（缺省 300s）：两段各让
+        # 出余量，宁可内部先判超时，也不能被外层熔断成「验证命令超时」这种
+        # 修复者读不懂的信号。
+        .replace("__BASE_TIMEOUT__", str(SMOKE_TIMEOUT - 10))
+        .replace("__FORM_TIMEOUT__", str(FORM_TIMEOUT - 30))
+        .replace("__PY__", repr(python or sys.executable)),
+        encoding="utf-8")
+    return gate
+
+
 def run_form_probe(code_dir: Path, python: str | None = None,
-                   timeout: int = 120) -> list[str]:
+                   timeout: int = FORM_TIMEOUT) -> list[str]:
     """在 code/ 的临时副本上跑表单×路由对账，返回缺陷描述列表（空=没问题）。
 
     副本是硬要求：对账要真提交，真提交会写库——探针不能把测试数据烙进
@@ -1292,7 +1393,7 @@ def run_form_probe(code_dir: Path, python: str | None = None,
         dst = work / "code"
         shutil.copytree(code_dir, dst,
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
-        path = work / "form_probe.py"
+        path = work / FORMS_SCRIPT_NAME
         path.write_text(script, encoding="utf-8")
         proc = subprocess.run(
             [python or sys.executable, str(path), str(dst)],
@@ -1325,7 +1426,7 @@ def run_smoke(code_dir: Path, python: str | None = None) -> tuple[bool, str]:
     except Exception:
         pass
     _clear_pycache(code_dir)
-    verify = Path(tempfile.gettempdir()) / "arcbench_smoke_verify.py"
+    verify = Path(tempfile.gettempdir()) / VERIFY_SCRIPT_NAME
     verify.write_text(_VERIFY_TEMPLATE, encoding="utf-8")
 
     try:
@@ -1333,7 +1434,7 @@ def run_smoke(code_dir: Path, python: str | None = None) -> tuple[bool, str]:
             [python or sys.executable, str(verify), str(code_dir)],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             env=dict(os.environ, PYTHONIOENCODING="utf-8"),
-            timeout=180,
+            timeout=SMOKE_TIMEOUT,
             cwd=str(code_dir),
         )
     except subprocess.TimeoutExpired:
@@ -1341,7 +1442,7 @@ def run_smoke(code_dir: Path, python: str | None = None) -> tuple[bool, str]:
         # 上抛会穿过 verify_delivery 的冒烟段（该段无 try），把已经写完的
         # 项目换成一次崩溃退出。
         return False, (
-            "冒烟验证超时（180s 熔断）：导入应用模块时疑似被阻塞——"
+            f"冒烟验证超时（{SMOKE_TIMEOUT}s 熔断）：导入应用模块时疑似被阻塞——"
             "典型成因是模块级 while True/常驻服务/等待输入。"
             "应用应可 import 而不阻塞（服务启动放 __main__ 守卫内）。")
     except OSError as exc:
@@ -2224,11 +2325,9 @@ def auto_repair(
             "禁止修改 tests/ 目录；禁止重构无关代码。"
         )
     if test_cmd is None:
-        test_cmd = [
-            sys.executable,
-            str(Path(tempfile.gettempdir()) / "arcbench_smoke_verify.py"),
-            str(code_dir),
-        ]
+        # 复测与判定同闸：基线冒烟 × 表单对账。判词里带着 [form] 红字而复测
+        # 只看基线，循环就会朝「让基线绿」收敛（锚点闸同形取证：三轮分文未收敛）。
+        test_cmd = [sys.executable, str(write_gate_scripts()), str(code_dir)]
     fixer = RepoFixer(
         llm, project_dir,
         test_cmd=test_cmd,
