@@ -70,8 +70,8 @@ class TestL1RenderingContract:
     当时最大的死因簇不是模型能力，而是生成器把 UX 结构交给了「硬编码
     mockup」——库里种了 28 条，页面上手写 16 条不接库，官方 32 条用例从
     第一条定位就落空。单条「渲染层必须读库」契约赎回约 17 题。
-    其余四条同样是量出来的（子串匹配、同名双卡、非幂等种子、hover 才渲染
-    的卡内入口），规则必须泛化到零题目内容（#46 口径）。"""
+    其余四条同样是量出来的（getByText 子串兜底挑错元素、同名双卡、非幂等
+    种子、hover 才渲染的卡内入口），规则必须泛化到零题目内容（#46 口径）。"""
 
     REQ = '需求：首页含 "Search" 输入框与笔记列表。'
 
@@ -89,9 +89,13 @@ class TestL1RenderingContract:
         assert "静态样例" in r, "必须点名手写样例条目这一死法"
 
     def test_substring_locator_anti_contract(self):
-        """getByRole 的 name 默认子串匹配——短词面撞长词面是双向判歧义。"""
+        """9/23 深夜复读官方 helpers.ts 更正口径：按钮定位普遍写 /^原文$/i
+        精确锚定，真正会撞名的是 noteCard 一类兜底——getByText(子串口径)
+        + .first() 挑中错元素，再往那个窄作用域里找控件全超时。契约必须
+        按这条真实通道说，而不是笼统说「name 是子串匹配」。"""
         r = self._inject()
-        assert "子串" in r and "而不是全等" in r
+        assert "子串" in r and "/^原文$/i" in r
+        assert "getByText" in r and ".first()" in r
         assert "公共定位面" in r, "内部/编辑态词面不得进侧栏与菜单"
 
     def test_duplicate_name_creation_is_ambiguity(self):
@@ -106,9 +110,12 @@ class TestL1RenderingContract:
 
     def test_card_actions_stay_in_dom(self):
         """常驻 vs 按需渲染是实测两难（赎回 2 题 vs 判红 6 题），契约须写死
-        取向，否则模型每轮自己重新发明一次。"""
+        取向，否则模型每轮自己重新发明一次。理由要按官方 helpers 的两类路径
+        说：一类 hoverNamed 后再点卡内按钮、一类不悬停直接断言可见——
+        只说「评测不会悬停」是说过头了（9/23 复读 helpers.ts 更正）。"""
         r = self._inject()
-        assert "常驻 DOM" in r and "悬停" in r
+        assert "常驻 DOM" in r
+        assert "悬停" in r and "不悬停" in r, "两类定位路径都得讲到"
         assert "按常驻这侧取舍" in r
 
 
