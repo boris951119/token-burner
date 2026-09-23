@@ -247,6 +247,15 @@ class TestGenSystemLocatorPolicy:
         assert ".or()" in seg and ".first()" in seg
         assert "strict mode violation" in seg
 
+    def test_repair_instruction_does_not_demand_case_exact_copy(self):
+        """修复提示词也不能比判分口径更严：9/23 双口径实测（同一份交付，
+        旧口径 0/12 绿、官方口径 6/12 绿），要求「精确出现」会让修复轮去
+        改文案大小写凑断言，而评测本来就是 /i。"""
+        import inspect
+        src = inspect.getsource(sg.selftest_gate)
+        assert "词面逐字" in src and "大小写不敏感" in src
+        assert "必须精确出现在对应控件上" not in src
+
 
 class TestSpecRunWallClock:
     """一轮自测的墙钟预算直接决定修复环能跑几轮（9/23 实测 16 分钟/轮）。"""
