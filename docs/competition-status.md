@@ -301,9 +301,16 @@ keep=537k（余量 2.7x）、bookstack=1.19M（1.2x），修复保留额 25% ≈
 `_repair_blocked()` 的开工前体检（钱不会在修复途中变多，判一次就够）。
 
 ### 待上传候选
-**v34.zip**（202 文件 548KB，合规自检通过）＝ v33 + 批次#51 判分射程分级，
+**v35.zip**（202 文件 550KB，合规自检通过）＝ v34 + 批次#52（L1 五条语义契约进生成侧），
+与 v34 的文件集逐名一致、内容差异**只有** `app/agents/module_builder.py`
+（sha1 逐个比过，包内测试目录不含本次改动的 test_ui_manifest.py）⇒ 又是干净的单变量位。
+v35 复验（tb-shape:runA-mini，Python 3.11.16，`.tmp/probe-v52/verify_v35.sh`）：
+包内 `app/` 64 文件 compileall rc=0、契约 5/5 条随包（注入文本 4387 字符）、
+官方 6 套题面种子事实仍 53 条（未退化）、误抽守卫生效、包内代码跑 UI 契约+纯度+编译+判分
+99 例全绿（v34 94 例 + 批次#52 的 5 例）。
+上一级 **v34.zip**（202 文件 548KB，合规自检通过）＝ v33 + 批次#51 判分射程分级，
 与 v33 的文件集逐名一致、内容差异**只有** `app/utils/acceptance_judge.py`
-（sha1 逐个比过）⇒ 这是两级之间干净的单变量位；v33 本身相对 v32 只动
+（sha1 逐个比过）；v33 本身相对 v32 只动
 `app/acceptance_compile.py` + `app/utils/auto_fixer.py` 两个文件。
 两级复验同形（tb-shape:runA-mini，Python 3.11.16）：包内 `app/` 64 文件 compileall
 rc=0、官方 6 套题面种子事实 53 条、误抽守卫生效、包内代码跑编译+判分+纯度+UI 契约
@@ -311,7 +318,8 @@ v33 89 例 / v34 94 例全绿（多出的 5 例即分级三护栏）。
 递进链：v25（#40 判分红字挂死因）→ v26（+#41 修复落点守卫）→ v27（+#42 悬空继承摘除）
 → v28（+#42 取证数字更正）→ v29（+#43 表单×路由对账闸）→ v30（+#44 修复环复测同闸）
 → v31（+#45 入口短语反向约束）→ v32（+#46 提示词与落盘模板去题目专名）
-→ **v33**（+#49 import 漂移修复器自伤修补，+#48 编译环存在句种子通道）。
+→ v33（+#49 import 漂移修复器自伤修补，+#48 编译环存在句种子通道）
+→ v34（+#51 判分射程分级不放开）→ **v35**（+#52 L1 语义契约进生成侧）。
 
 v33 五读复验（全部免费，零 LLM，`.tmp/probe-v48/verify_v33.sh` @ tb-shape:runA-mini）：
 ① 与 v32 文件集 202/202 逐名一致，内容差异**只有** `app/acceptance_compile.py` 与
@@ -483,3 +491,38 @@ UI 契约 12 例绿）；当时的第五读是我写过头的断言——它扫�
 还挂着 40 条子页面缺口。按「开销直接计分」的官方口径，这多烧的修复轮次是要记账的；
 反面是：18 号官方 0/32 的死因恰是子页面根本没做，修这些缺口正是分数的来源。
 ⇒ 这一笔只能由一次真实上传结算（看 v34 的修复轮次数与 token 开销 vs v33 基线）。
+
+## L1 赎回率测量（2026-09-23 深夜，侧会话完成，免费零 LLM）
+
+**问题：** 手工把 keep 导出副本的首页从"硬编码 mockup"重写为"DB 渲染 + 全语义角色 + 纯客户端交互"，官方 32 题能赎回几题？
+
+**读数：1/32 → 30/32**（三轮迭代：23 → 28 → 30；每轮全量 32 spec，产物与三轮 RESULT 落盘 `.tmp/l1-redemption-keep-0923/`）。
+剩余 2 题（REQ-2.7.4 / 2.8.3）为 spec 结构性冲突：全局 `getByRole('button', {name:'More options'/'Pin note'})` 与卡内同名按钮 strict-mode 相撞，唯一解法（hover 才渲染卡内按钮）会反杀另外 6 题 → 生成器结构上限即 30/32。
+
+**生成器契约（按死因收益排序，可直接写进 inject_ui_manifest / acceptance_compile）：**
+1. **首页必须 DB 渲染**：全部种子逐条渲染为 `role="article"` + `aria-label=标题` 卡片，标题/内容为字面文本——mockup 硬编码 = 语义层全军覆没的根因（单条契约赎回 ~17 题）。
+2. **角色精确到控件类型**：导航 Settings/Toggle sidebar 用 `button` 不用 `link`；搜索框 `type=search` + `aria-label='Search'`（role=searchbox）；侧栏 `complementary`；视图切换 `List view`/`Grid view` 按钮带 `aria-pressed`，缺省 grid=true。
+3. **卡片交互族**：卡内 `More options` 按钮 → role=menu（Delete Note / Archive / Change color / Change labels）→ toast（`Note trashed`/`Action undone`/`Undo`）；标题点击进编辑器（textbox name='Title'/'Note content'，Close 保存）。
+4. **strict-mode 反契约（最廉价自伤清单）**：① getByRole name 是**子串匹配**——同族词面互斥（`Work` 撞 `Work editable`，内部标签不得进侧栏/标签菜单）；② 同一词面不得同时长在 button 文本与 placeholder（`Take a note`）；③ 创建同名笔记必须替换旧卡（exact 断言撞双卡）；④ 种子对 note_labels 必须幂等重建且服从题面（Movie list 不得自带 Reminders）。
+5. **Settings 流**：button Settings → menuitem Settings → 面板逐字文案（`Move new notes to the bottom` 等）+ Save/Cancel。
+
+**结论：** 瓶颈不在模型能力，在生成器把 UX 结构交给了 mockup。上述契约进生成侧后，keep 域冷启动理论上限 30/32；其他题目域需各自跑一轮同款测量验证迁移性。
+
+## 批次#52：L1 契约进生成侧（2026-09-23 深夜，v35，免费零 LLM）
+
+上面五条契约已泛化落进 `inject_ui_manifest` 的硬规则（`app/agents/module_builder.py`，
+随包提示词的一部分），逐条对应关系：L1#1→「渲染层必须从库里读」+ 首屏条目数等于库里条目数；
+L1#2→卡片/地标/aria-pressed 三行此前已有，本次补「按名定位是**子串**匹配而不是全等」与
+「内部/编辑态词面不得进公共定位面」；L1#3→卡内行内操作入口**常驻 DOM**（并写死两难取舍：
+常驻侧优于 hover 侧）；L1#4→幂等种子 + 旧关联先清 + 聚合标签去重 + 归类只来自需求原文 +
+同名创建按替换/去重。零题目专名（纯度测试原样覆盖注入文本，5 例新测试逐条钉住措辞）。
+全量 1781 passed / 2 skipped；容器复验见「待上传候选」段。
+
+**这一批没有量到的（别把它当分数读数用）：** 契约是提示词，生效与否只能由**新生成**证明。
+9/22 起没有任何一次完整冷启动生成→评分，两次彩排都死在修环预算上（880k 信封撞顶），
+所以「模型会不会照这五条做、做全了赎回几题」仍是未知数——L1 的 30/32 是手工重写导出件的
+上限，不是生成器上限。v35 之后要拿到的第一条真读数就是它。
+
+**自登记成本账：** 注入文本 3707 → 4387 字符（+680，约 +18%），write_code 每个 UI 模块都带一次；
+按「开销直接计分」口径，这笔会在 v35 上传后的 token 开销里露出来，与 #51 的红字涨到 46 条
+同一张账（两项都是净增开销换净增射程/契约，只有真实上传能结算）。
