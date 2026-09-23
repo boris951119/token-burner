@@ -493,7 +493,7 @@ def render_checklist_spec(checklists: list[NodeChecklist]) -> str:
                 f"  test('{ck.req_id} CHK-SEED: {_ts_str(ent)}', async "
                 "({ page }) => {\n"
                 f"    const found = await visibleOnReachable(page, "
-                f"p => p.getByText({_ts_str(ent)}, {{ exact: true }}));\n"
+                f"p => p.getByText({_ts_str(ent)}));\n"
                 f"    expect(found, {_ts_str('入口一跳内未见: ' + ent)}"
                 ").toBe(true);\n"
                 "  });")
@@ -502,11 +502,11 @@ def render_checklist_spec(checklists: list[NodeChecklist]) -> str:
                 f"  test('{ck.req_id} CHK-CTRL: {_ts_str(lab)}', async "
                 "({ page }) => {\n"
                 "    const found = await visibleOnReachable(page, p =>\n"
-                "      p.getByText(" + _ts_str(lab) + ", { exact: true })\n"
+                "      p.getByText(" + _ts_str(lab) + ")\n"
                 "        .or(p.getByPlaceholder(" + _ts_str(lab) + "))\n"
                 "        .or(p.getByLabel(" + _ts_str(lab) + "))\n"
                 "        .or(p.getByRole('button', { name: " + _ts_str(lab)
-                + ", exact: true })));\n"
+                + " })));\n"
                 f"    expect(found, {_ts_str('入口一跳内未见控件: ' + lab)}"
                 ").toBe(true);\n"
                 "  });")

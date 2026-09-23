@@ -135,8 +135,25 @@ def test_render_spec_escapes_cjk_and_quotes():
                        seed_entities=['他说"引号"与中文'], control_labels=[])
     spec = render_checklist_spec([ck])
     assert "他说" in spec                               # ensure_ascii=False 原样
-    token = spec.split("getByText(", 1)[1].split(", {", 1)[0]
+    token = spec.split("getByText(", 1)[1].split("))", 1)[0]
     assert json.loads(token) == '他说"引号"与中文'   # 转义后可被 JSON 原样还原
+
+
+def test_render_spec_matches_official_text_leniency():
+    """官方 helpers 把夹具字符串编译成大小写不敏感、空白归一的 regex
+    （toPatterns），getByRole 的 name 亦然。此前 compiled spec 写
+    exact: true，比官方更严：同一个交付官方判绿、我们判红，红项还会
+    直灌修复环白烧钱。零 LLM 环尤其没有「让模型解释一下」的余地。"""
+    ck = NodeChecklist(req_id="REQ-2.1", req_name="n", module_id="REQ-2",
+                       language="en", home_visible=True,
+                       seed_entities=["Widget One"], control_labels=["Save"])
+    spec = render_checklist_spec([ck])
+    assert "exact: true" not in spec
+    # 仍然只走可访问性/文本通道，且每条都带 .first() 兜严格模式
+    for ch in ("getByText", "getByPlaceholder", "getByLabel",
+               "getByRole('button'"):
+        assert ch in spec, ch
+    assert ".or(" in spec and "visibleOnReachable" in spec
 
 
 def test_to_json_roundtrip(tmp_path):

@@ -106,6 +106,17 @@ class TestAriaRoleContract:
         assert 'role="status"' in r and 'role="alert"' in r, "缺反馈实况区"
         assert "不能只有标题或正文文本" in r, "缺入口控件硬通道一行"
 
+    def test_card_container_and_state_attribute(self):
+        """9/23 官方 helpers 真身取证（判分工作区 specs/*/helpers.ts）：卡片
+        解析器首选容器只有 getByRole('article')，之后每个行内操作都是
+        card.getByRole('button') —— 卡片用 <li>/div 承载时可见性尚有文本兜底，
+        卡内按钮却一个都取不到，整族交互用例连环红（实测 17/32 停在这）。
+        互斥视图切换另按 aria-pressed 判当前态。"""
+        r = self._inject()
+        assert "行内操作按钮也必须写进同一个 <article>" in r
+        assert "aria-pressed" in r, "缺状态属性一行"
+        assert "<ul><li>" in r, "纯展示清单的出口得留着，别把规则写反"
+
     def test_visibility_is_scoped_to_trigger_timing(self):
         """「禁止隐藏元素」被当成「全部摊在首屏」是实测失分形状：入口留在
         首屏，状态控件在各自触发后出现，且同一角色下不得同名重复。"""

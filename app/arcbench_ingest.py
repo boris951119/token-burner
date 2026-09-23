@@ -198,8 +198,14 @@ def render_requirement_text(
         "（getByRole / getByLabel / getByPlaceholder），非语义实现等于不存在"
         "——按钮=<button>（禁 div/span+onclick）、链接=<a href>、单行输入"
         "=<input>（同时给 placeholder 与 <label for>）、多行=<textarea>、"
-        "勾选=<input type=checkbox>、下拉=<select>、条目=<li>或<article>、"
-        "表格=<table><tr><td>、弹窗=<dialog>、标题=<h1>~<h6>；",
+        "勾选=<input type=checkbox>、下拉=<select>、条目=<article>（条目级"
+        "操作按钮必须写在该 <article> 内部：评测先按 article 解析卡片再往"
+        "卡内找按钮，用 <li>/div 承载卡片时可见性尚有文本兜底、卡内按钮却"
+        "一律找不到，整族交互用例判红）、表格=<table><tr><td>、弹窗=<dialog>"
+        "（编辑/详情弹窗须带可访问名：aria-label 或与需求标题一致的 <h*>，"
+        "卡内每个输入框各有 label/placeholder）、互斥视图切换按钮带 "
+        "aria-pressed=true/false（评测以该属性判定当前态，无属性即红）、"
+        "标题=<h1>~<h6>；",
         "18. 需求点名的点击对象还必须是「点下去会有反应」的控件：要么在 "
         "<form> 内提交（<button> 默认即 submit），要么由页内 JS 监听并真实"
         "改变可见状态——评测点击之后断言的是变化，不是元素存在。严禁把需求"

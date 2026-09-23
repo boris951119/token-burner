@@ -219,6 +219,34 @@ class TestGenSystemLocatorPolicy:
                   "arc-bench", "agentic-requirement-compiler"):
             assert w not in low, w
 
+    def test_card_locator_has_the_official_text_fallback(self):
+        """官方 noteCard 只把 article 当首选容器，取不到就退回
+        getByText().first()。9/22 那份 <li> 交付上我们只认 article，
+        十余条可见性断言判红而官方判绿——假红直接变成白烧的修复轮。"""
+        i, j = (sg._GEN_SYSTEM.index(s) for s in ("4. 定位只允许", "4b."))
+        seg = sg._GEN_SYSTEM[i:j]
+        assert "getByText" in seg and ".first()" in seg
+        # 但卡内行内按钮官方无兜底：这条必须继续从严，否则是假绿
+        assert "行内按钮必须" in seg
+        # 且官方取按钮前先悬停条目，不悬停是我们自己造的红
+        assert "hover" in seg
+
+    def test_text_assertions_are_case_insensitive_like_official(self):
+        """官方 toPatterns 把夹具字符串编译成 /.../i 且空白归一，
+        精确大小写的 hasText 字符串比官方更严。"""
+        i, j = (sg._GEN_SYSTEM.index(s) for s in ("4d. 可见文本", "4e."))
+        seg = sg._GEN_SYSTEM[i:j]
+        assert "大小写" in seg and "/i" in seg and "\\s+" in seg
+
+    def test_or_chains_are_pinned_to_first(self):
+        """.or() 在严格模式下命中多节点直接抛 strict mode violation
+        （实测 placeholder 与标题文案同时命中 3 个）——判分器错误，
+        产品无从修复，必须在生成侧挡掉。"""
+        i = sg._GEN_SYSTEM.index("4e. ")
+        seg = sg._GEN_SYSTEM[i:]
+        assert ".or()" in seg and ".first()" in seg
+        assert "strict mode violation" in seg
+
 
 class TestSpecRunWallClock:
     """一轮自测的墙钟预算直接决定修复环能跑几轮（9/23 实测 16 分钟/轮）。"""

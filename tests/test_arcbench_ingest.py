@@ -215,3 +215,16 @@ def test_render_requires_click_targets_to_be_wired():
     assert "点下去会有反应" in text
     assert "缺接线证据" in text
     assert "60 秒点击超时" in text
+
+
+def test_render_rule17_requires_article_and_pressed_state():
+    """规则 17 原先写「条目=<li>或<article>」，而官方卡片解析器只把 article
+    当容器、行内按钮再从容器里往内找——选 <li> 是合规实现却是判分死法。
+    需求文本必须与判分口径同形，否则写码侧没有改错的机会。"""
+    import yaml
+
+    text = render_requirement_text(yaml.safe_load(_TREE))
+    assert "条目=<article>" in text
+    assert "或<article>" not in text, "<li> 不能再作为卡片容器的等价选项"
+    assert "条目级操作按钮必须写在该 <article> 内部" in text
+    assert "aria-pressed" in text, "互斥视图切换的当前态口径"
