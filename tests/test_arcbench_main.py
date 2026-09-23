@@ -378,6 +378,34 @@ class TestForcedRouteOnTreeEntry:
         # 模块化判定输入：FOLDER 数 → estimated_files ≥ 阈值 6
         assert route.estimated_files >= 6
 
+    def test_tree_entry_gets_size_aware_budget_envelope(
+            self, monkeypatch, tmp_path, req_dir):
+        """题面入口的信封按需求条数折算，而不是吃 config 里写死的数。
+
+        官方容器不带 config.json → 生效值是代码缺省 200k（自动 ×2.5=500k），
+        而 9/23 全真彩排里四需求的最小一道题实测就要 518k：预算低于最小可完成
+        成本时先撞墙的是修复（三轮瞬时抛在同一行「预算已耗尽」上）。
+        """
+        from app.utils.budget import size_aware_budget
+
+        out = tmp_path / "wsB"
+        _env(monkeypatch, out)
+        captured = _patch_llm_paths(
+            monkeypatch, _team_result(tmp_path / "db"))
+        assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 0
+        # req_dir 夹具的树里 1 条 ATOMIC
+        assert captured["run_kwargs"]["budget_override"] == size_aware_budget(1)
+
+    def test_text_entry_leaves_budget_to_config(self, monkeypatch, tmp_path):
+        """纯文本需求没有题面可量 → 不折算，仍走配置/代码缺省。"""
+        out = tmp_path / "wsB2"
+        _env(monkeypatch, out)
+        captured = _patch_llm_paths(
+            monkeypatch, _team_result(tmp_path / "db2"))
+        assert entry.main(["做一个备忘录网页应用", "-o", str(out),
+                           "--mode", "auto"]) == 0
+        assert captured["run_kwargs"]["budget_override"] is None
+
     def test_text_entry_keeps_llm_router(self, monkeypatch, tmp_path):
         out = tmp_path / "wsT"
         _env(monkeypatch, out)

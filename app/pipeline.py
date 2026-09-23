@@ -396,6 +396,8 @@ class Pipeline:
         guard = BudgetGuard(
             budget_tokens=budget_override or team.budget_tokens,
             throttle_threshold=self.settings.budget_throttle_threshold,
+            repair_reserve_ratio=getattr(
+                self.settings, "budget_repair_reserve", 0.0),
         )
         # getattr 防护与 200/692 行同构：测试桩 LLM 无 call_log 时按 0 计
         guard.record(_sum_tokens(getattr(self.llm, "call_log", [])[baseline:]))
@@ -969,6 +971,8 @@ class Pipeline:
         guard = BudgetGuard(
             budget_tokens=team.budget_tokens,
             throttle_threshold=self.settings.budget_throttle_threshold,
+            repair_reserve_ratio=getattr(
+                self.settings, "budget_repair_reserve", 0.0),
         )
         # M14-6：恢复历史用量（11.0 单任务总预算语义——多次 resume 不再
         # N×budget 超支；「交用户决定续跑」语义保留：预算仍可被重新配置）

@@ -1549,6 +1549,44 @@ def _journey_gate(
     return True, ""
 
 
+def _repair_blocked() -> str:
+    """LLM 修复通道开工前的预算体检：返不可开工的原因，可修则返空串。
+
+    彩排取证（shape-mini，9/23）：总闸在验收段被打穿后，三轮修复各自瞬时
+    raise 在同一行「任务 token 总预算已耗尽」上——异常被下方 except 吞成一条
+    note，循环照进下一轮，于是零进展、零修复、墙钟照烧，最后 rc=0 交出一份
+    明知是坏的交付。开工前判一次就够了：钱不会在修复途中变多。
+    零 LLM 的机械修复（run_all_fixers）不受此限——它不花钱。
+    """
+    try:
+        from app.utils.budget import get_active_budget_guard
+
+        guard = get_active_budget_guard()
+    except Exception:
+        return ""
+    if guard is None:
+        return ""
+    if guard.exceeded:
+        return f"总闸已耗尽 {guard.summary()}"
+    if guard.repair_reserve_ratio > 0 and not guard.repair_fund_intact:
+        return f"修复保留额已动用 {guard.summary()}"
+    return ""
+
+
+def _failure_sig(*parts: str) -> str:
+    """一轮失败的指纹（空白归一 + 数字抹平），用于识别「修了等于没修」。
+
+    keep-r1 彩排取证：R2 与 R3 在同一条 seed 断言上各自失败（`expected pinned
+    seed 'Sprint goals' in /api/notes, got []` 重复 4 次），repo_fix 对同一文件
+    连续两次交出语法非法补丁（views.py 138 行 / 116 行）——行号在变、根因没变，
+    所以数字必须抹平后再比。指纹相同即证明这一轮的修复没有改变可观察失败。
+    """
+    blob = " | ".join(
+        re.sub(r"\d+", "#", re.sub(r"\s+", " ", p or "")).strip()
+        for p in parts if p)
+    return blob[:400]
+
+
 def _beat(project_dir: Path, stage: str, detail: str = "") -> None:
     """验收阶段直接写心跳（r18 误判教训：verify 阶段心跳冻结 6 小时
     被误判为挂死——排障者需要「验收进行到哪一步」的实时信号）。"""
@@ -1596,6 +1634,7 @@ def verify_delivery(
     notes: list[str] = []
     all_reports: list[str] = []
     all_passed = False
+    prev_sig = ""
     _beat(project_dir, "验收-启动")
 
     for verify_round in range(1, max_verify_rounds + 1):
@@ -1620,18 +1659,36 @@ def verify_delivery(
                 ok, report = run_smoke(code_dir)
         if not ok:
             notes.append(f"[R{verify_round}][smoke] FAIL → auto_repair")
-            _beat(project_dir, f"验收-R{verify_round}-冒烟修复")
-            try:
-                ok, report = auto_repair(
-                    project_dir, settings, max_rounds=max_app_rounds,
-                    requirement=requirement,
-                )
-            except Exception as exc:
+            blocked = _repair_blocked()
+            if blocked:
+                # 不假装在修：一句话交代为什么停修，随后由轮末指纹判定收手
                 ok = False
-                report = f"自动修复异常: {exc!r}"[:400]
+                report = f"冒烟修复未开工（{blocked}）"
+                notes.append(f"[R{verify_round}][smoke] SKIP LLM 修复：{blocked}")
+            else:
+                _beat(project_dir, f"验收-R{verify_round}-冒烟修复")
+                try:
+                    ok, report = auto_repair(
+                        project_dir, settings, max_rounds=max_app_rounds,
+                        requirement=requirement,
+                    )
+                except Exception as exc:
+                    ok = False
+                    report = f"自动修复异常: {exc!r}"[:400]
             notes.append(f"[R{verify_round}][smoke] {'PASS' if ok else 'FAIL'}")
             if not ok:
                 all_reports.append(f"[R{verify_round}] smoke FAIL: {report[-200:]}")
+                sig = _failure_sig(report)
+                if _repair_blocked():
+                    # 修复已无钱开工，下一轮只会重复同一个失败
+                    break
+                if sig and sig == prev_sig:
+                    # keep-r1 取证：同一条 seed 断言在 R2/R3 各自失败 4 次
+                    notes.append(
+                        f"[R{verify_round}] 冒烟失败指纹与上一轮相同"
+                        "（修复换不来变化）→ 停止空转，按现状交付")
+                    break
+                prev_sig = sig
                 continue  # smoke 还没过，不进旅程，直接下一轮
 
         # --- Phase 1.5: 锚点覆盖修复（平台 v6 取证：全盘落空根因）---
@@ -1645,7 +1702,13 @@ def verify_delivery(
             missing = _anchor_missing(code_dir, requirement)
         except Exception:
             missing = []
-        if missing:
+        if missing and (blocked := _repair_blocked()):
+            # 锚点缺口不是交付闸（放行进旅程，评分只能更好），但 LLM 修复
+            # 无钱开工时不假装在修——如实留一条痕，交付照走
+            notes.append(
+                f"[R{verify_round}][anchor] 缺失 {len(missing)} 个需求锚点，"
+                f"LLM 修复未开工（{blocked}）")
+        elif missing:
             notes.append(
                 f"[R{verify_round}][anchor] 缺失 {len(missing)} 个需求锚点"
                 f"（前 5: {missing[:5]}）→ 修复")
@@ -1723,6 +1786,13 @@ def verify_delivery(
                 f"[R{verify_round}] journey FAIL: {jreport[-200:]}")
         if all_passed:
             break
+        sig = _failure_sig("" if ok else report, "" if jok else jreport)
+        if sig and sig == prev_sig:
+            notes.append(
+                f"[R{verify_round}] 失败指纹与上一轮相同（修复换不来变化）"
+                "→ 停止空转，按现状交付")
+            break
+        prev_sig = sig
 
     # --- Phase 3: 自测交付闸（v8 原则三：需求→自生成 Playwright 自测→
     # 修复→交付前最后检测）。弱自检全过≠行为可用（平台双跑取证：

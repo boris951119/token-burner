@@ -51,6 +51,11 @@ def _root_atomics(tree: dict) -> list[dict]:
     return [c for c in tree.get("children") or [] if c.get("type") == "ATOMIC"]
 
 
+def count_requirements(tree: dict) -> int:
+    """题面原子需求条数（含根级 ATOMIC）——11.0 预算按题面体量折算用这个口径。"""
+    return len(_atomic_nodes(tree))
+
+
 def _render_scenario(atomic: dict) -> str:
     lines: list[str] = []
     for scenario in atomic.get("scenarios") or []:

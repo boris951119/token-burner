@@ -86,6 +86,12 @@ class Settings:
     # ---- 第 11 章 六层成本护栏（11.6 默认值）----
     max_task_tokens: int = 200_000            # 第 0 层：单任务 token 总预算（总闸）
     budget_throttle_threshold: float = 0.9     # 11.0：≥90% 进入省 token 模式
+    # 11.0 修复保留额：总预算里划给「验收后的 LLM 修复」那一段的比例。省 token
+    # 模式据此提前触发（越过 预算-保留额 就地收敛，不再加讨论轮），使总闸之前
+    # 仍有钱可修——彩排取证：缺这层隔离时四需求那道题在 103.7% 撞墙，三轮修复
+    # 全部瞬时抛在同一行「预算已耗尽」上，一步没走、墙钟照烧，交出一份明知是坏
+    # 的交付。0 = 关闭（行为与旧口径一致）。
+    budget_repair_reserve: float = 0.25
     auto_mode_budget_multiplier: float = 2.5   # 11.0/3.6.3：自动模式预算倍数（×2~3）
     max_discussion_rounds: int = 3             # 第 1 层：讨论轮数上限
     max_response_tokens: int = 8_000           # 第 2 层：单轮对话输出上限
@@ -309,6 +315,13 @@ class Settings:
             value = getattr(self, name)
             if not 0.0 < value <= 1.0:
                 raise ValueError(f"{name} 必须落在 (0, 1] 区间，当前值: {value!r}")
+
+        # 保留额可以是 0（关闭隔离），但不能吃掉整段预算（那等于没有修复）
+        if not 0.0 <= self.budget_repair_reserve < 1.0:
+            raise ValueError(
+                "budget_repair_reserve 必须落在 [0, 1) 区间，当前值: "
+                f"{self.budget_repair_reserve!r}"
+            )
 
         # M9：快判开启时模型必须在预设列表（调用前确定性校验，尽早失败）
         if self.fast_triage_enabled and self.fast_triage_model not in self.models:

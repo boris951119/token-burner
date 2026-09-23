@@ -256,3 +256,122 @@ class TestMechFixBeforeLlm:
         ok, report = sm.verify_delivery(tmp_path, "需求", self._settings())
         assert ok, report
         assert order == ["llm"], "机械修复无发现时必须落到 LLM 通道"
+
+
+class TestRepairFundAndStallGates:
+    """修复开工前的预算体检 + 「修了等于没修」的指纹止损。
+
+    彩排取证两条：shape-mini 三轮修复各自瞬时抛在同一行「任务 token 总预算
+    已耗尽」上（异常被 except 吞成 note，循环照进下一轮）；keep-r1 的 R2/R3 在
+    同一条 seed 断言上各自失败。两者都是零进展空转，烧的却是墙钟。
+    """
+
+    def _drive(self, monkeypatch, tmp_path, *, smoke_report, rounds=3,
+               budget=100_000, used=0, journey_ok=False, reserve=0.0):
+        import app.arcbench_smoke as sm
+        from app.utils.budget import BudgetGuard, set_active_budget_guard
+
+        proj = tmp_path / "proj"
+        (proj / "code").mkdir(parents=True)
+        guard = BudgetGuard(budget, repair_reserve_ratio=reserve)
+        guard.record(used)
+        set_active_budget_guard(guard)
+        calls = {"smoke": 0, "repair": 0}
+
+        def run_smoke(code_dir):
+            calls["smoke"] += 1
+            return (False, smoke_report) if smoke_report else (True, "ok")
+
+        def auto_repair(*a, **k):
+            calls["repair"] += 1
+            return False, smoke_report
+
+        monkeypatch.setattr(sm, "run_smoke", run_smoke)
+        monkeypatch.setattr(sm, "run_all_fixers", lambda cd, ddl: {})
+        monkeypatch.setattr(sm, "collect_ddl", lambda cd: [])
+        monkeypatch.setattr(sm, "_anchor_missing", lambda cd, req: [])
+        monkeypatch.setattr(sm, "auto_repair", auto_repair)
+        monkeypatch.setattr(sm, "_llm_from", lambda s: (lambda *a, **k: "x"))
+        monkeypatch.setattr(sm, "_journey_gate",
+                            lambda *a, **k: (journey_ok, "journey 断言失败"))
+        monkeypatch.setattr("app.utils.selftest_gate.selftest_gate",
+                            lambda *a, **k: (False, "selftest 未过"))
+        try:
+            ok, report = sm.verify_delivery(proj, "做一件事", Settings(),
+                                            max_verify_rounds=rounds)
+        finally:
+            set_active_budget_guard(None)
+        return ok, report, calls
+
+    def test_exhausted_budget_skips_repair_and_does_not_repeat_rounds(
+            self, monkeypatch, tmp_path):
+        ok, report, calls = self._drive(
+            monkeypatch, tmp_path,
+            smoke_report="AssertionError: expected 'Sprint goals' got []",
+            budget=100_000, used=100_000)
+        assert ok is False
+        assert calls["repair"] == 0          # 一分钱都不再花
+        assert calls["smoke"] == 1           # 也不再空转第二、三轮
+        assert "SKIP LLM 修复" in report and "总闸已耗尽" in report
+
+    def test_repair_fund_is_the_gate_not_the_hard_stop(self, monkeypatch,
+                                                       tmp_path):
+        """总闸还差一段，但保留额已被前置阶段吃掉 → 同样不假装在修。"""
+        ok, report, calls = self._drive(
+            monkeypatch, tmp_path,
+            smoke_report="GET /api/links 500", budget=100_000, used=90_000,
+            reserve=0.25)
+        assert calls["repair"] == 0 and calls["smoke"] == 1
+        assert "修复保留额已动用" in report
+
+    def test_identical_smoke_failure_stops_after_second_round(
+            self, monkeypatch, tmp_path):
+        """有钱修但修不动：同一条失败第二次出现即收手，第三轮不再烧。"""
+        ok, report, calls = self._drive(
+            monkeypatch, tmp_path,
+            smoke_report="AssertionError: expected 'Sprint goals' got []",
+            rounds=5, budget=1_000_000, used=0)
+        assert ok is False
+        assert calls["repair"] == 2 and calls["smoke"] == 2
+        assert "停止空转" in report
+
+    def test_changing_failure_keeps_looping(self, monkeypatch, tmp_path):
+        """反例守卫：每轮失败都在变（修复有效但没修完）→ 不许被止损掐掉。"""
+        import app.arcbench_smoke as sm
+        from app.utils.budget import BudgetGuard, set_active_budget_guard
+
+        proj = tmp_path / "proj2"
+        (proj / "code").mkdir(parents=True)
+        set_active_budget_guard(BudgetGuard(1_000_000))
+        words = ("锚点缺失", "路由未注册", "种子为空", "端口占用",
+                 "模板未渲染", "静态资源丢失", "会话过期", "字段改名")
+        reports = iter([f"AssertionError: {w}" for w in words])
+
+        monkeypatch.setattr(sm, "run_smoke",
+                            lambda cd: (False, next(reports)))
+        monkeypatch.setattr(sm, "run_all_fixers", lambda cd, ddl: {})
+        monkeypatch.setattr(sm, "collect_ddl", lambda cd: [])
+        monkeypatch.setattr(sm, "_anchor_missing", lambda cd, req: [])
+        monkeypatch.setattr(sm, "auto_repair",
+                            lambda *a, **k: (False, next(reports)))
+        monkeypatch.setattr(sm, "_llm_from", lambda s: (lambda *a, **k: "x"))
+        monkeypatch.setattr(sm, "_journey_gate",
+                            lambda *a, **k: (False, "journey"))
+        monkeypatch.setattr("app.utils.selftest_gate.selftest_gate",
+                            lambda *a, **k: (False, "selftest 未过"))
+        try:
+            ok, report = sm.verify_delivery(proj, "做一件事", Settings(),
+                                            max_verify_rounds=3)
+        finally:
+            set_active_budget_guard(None)
+        assert ok is False
+        assert "停止空转" not in report       # 失败在变 → 三轮跑满
+
+    def test_failure_sig_ignores_line_numbers(self):
+        """keep-r1 的两次补丁报错只差行号（138/116），根因同一条。"""
+        import app.arcbench_smoke as sm
+
+        a = sm._failure_sig("invalid syntax (views.py, line 138)")
+        b = sm._failure_sig("invalid syntax (views.py, line 116)")
+        assert a == b
+        assert sm._failure_sig("a") != sm._failure_sig("b")

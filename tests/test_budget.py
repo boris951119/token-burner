@@ -291,3 +291,82 @@ class TestDevLoopBudgetStop:
         )
         with pytest.raises(BudgetExceededError):
             engine.run_module("m")
+
+
+class TestSizeAwareBudget:
+    """题面体量→token 信封折算（参赛入口用；官方容器零 config.json）。"""
+
+    def test_small_task_still_covers_measured_minimum(self):
+        """四需求那道题实测 518k 才走完生成+验收——信封必须容得下它加修复。"""
+        from app.utils.budget import size_aware_budget
+
+        assert size_aware_budget(4) > 518_424
+
+    def test_grows_with_requirement_count_and_caps(self):
+        from app.utils.budget import size_aware_budget
+
+        assert size_aware_budget(32) < size_aware_budget(125)
+        assert size_aware_budget(9999) == size_aware_budget(10**9)  # 顶格
+
+    def test_garbage_input_falls_back_to_base_not_crash(self):
+        """入口在生成前算体量：脏值不该把整跑换成一次启动异常。"""
+        from app.utils.budget import size_aware_budget
+
+        assert size_aware_budget(-5) == size_aware_budget(0)
+        assert size_aware_budget(None) == size_aware_budget(0)
+        assert size_aware_budget("32") == size_aware_budget(32)
+
+    def test_count_requirements_covers_root_level_atomics(self):
+        """根级 ATOMIC（官方题面 REQ-0「打开首页」那一形）也计入体量。"""
+        from app.arcbench_ingest import count_requirements
+
+        tree = {"type": "FOLDER", "children": [
+            {"type": "ATOMIC", "id": "REQ-0"},
+            {"type": "FOLDER", "id": "REQ-1", "children": [
+                {"type": "ATOMIC", "id": "REQ-1.1"},
+                {"type": "ATOMIC", "id": "REQ-1.2"},
+            ]},
+        ]}
+        assert count_requirements(tree) == 3
+
+
+class TestRepairReserve:
+    """11.0 修复保留额：总闸之前留一段给修复，越过保留线就地收敛。"""
+
+    def test_default_off_behaviour_unchanged(self):
+        g = BudgetGuard(1000)
+        assert not g.throttling and g.repair_reserve == 0
+        g.record(899)
+        assert not g.throttling          # 旧口径：仍是 ≥90% 才节流
+        g.record(101)
+        assert g.exceeded
+
+    def test_reserve_moves_the_throttle_line_not_the_hard_stop(self):
+        g = BudgetGuard(1000, repair_reserve_ratio=0.25)
+        assert g.repair_reserve == 250 and g.remaining == 1000
+        g.record(700)
+        assert not g.throttling and g.repair_fund_intact
+        g.record(60)
+        # 同一条线两副面孔：前置阶段到此收敛，修复通道到此仍开工
+        assert g.throttling and not g.repair_fund_intact
+        assert not g.exceeded            # 总闸口径不动（1000 才算耗尽）
+        g.record(240)
+        assert g.exceeded and not g.repair_fund_intact
+
+    def test_reserve_below_throttle_line_wins(self):
+        """保留额比 90% 线更靠前时按更靠前那条触发（隔离要有牙齿）。"""
+        g = BudgetGuard(1000, throttle_threshold=0.9,
+                        repair_reserve_ratio=0.3)
+        g.record(701)
+        assert g.throttling
+
+    @pytest.mark.parametrize("bad", (1.0, -0.1, 1.5))
+    def test_bad_reserve_rejected(self, bad):
+        """保留额 ≥1 等于没有总闸、<0 无意义——构造期确定性拒绝。"""
+        with pytest.raises(ValueError, match="repair_reserve_ratio"):
+            BudgetGuard(1000, repair_reserve_ratio=bad)
+
+    def test_settings_default_reserves_a_quarter_and_validates(self):
+        assert Settings().budget_repair_reserve == 0.25
+        with pytest.raises(ValueError, match="budget_repair_reserve"):
+            Settings(budget_repair_reserve=1.0)

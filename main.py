@@ -448,6 +448,7 @@ def main(argv: list[str] | None = None) -> int:
             result = pipeline.resume(project_id)
         else:
             preset_route = None
+            task_budget = None
             if tree is not None:
                 # 官方题面入口零路由决策：requirements.yaml 解析成功即铁定
                 # 是编程任务，闲聊/问答意图分类器在此永远是纯误判面——
@@ -467,6 +468,16 @@ def main(argv: list[str] | None = None) -> int:
                     reason="arcbench 需求树入口：强制完整团队流程",
                     estimated_files=max(6, n_folders + 2),
                 )
+                # 11.0 总闸按题面体量给信封：官方容器零 config.json，写死的
+                # 缺省 200k（自动 ×2.5=500k）低于我们跑过的最小一道题的实测
+                # 成本 518k——先撞墙的是修复而不是质量。
+                from app.arcbench_ingest import count_requirements
+                from app.utils.budget import size_aware_budget
+
+                n_atomic = count_requirements(tree)
+                task_budget = size_aware_budget(n_atomic)
+                print(f"[config] 任务信封={task_budget:,} token"
+                      f"（原子需求 {n_atomic} 条，11.0 按题面折算）", flush=True)
             result = pipeline.run(
                 requirement,
                 # 不传 models 时管线会退到硬编码默认三模型（无对应密钥），
@@ -478,6 +489,7 @@ def main(argv: list[str] | None = None) -> int:
                 project_dirname="arcbench-app",
                 requirement_brief=requirement_brief,
                 route=preset_route,
+                budget_override=task_budget,
             )
     except Exception as exc:  # 平台需要明确的失败终态
         import traceback
