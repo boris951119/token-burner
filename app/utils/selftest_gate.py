@@ -21,10 +21,146 @@ import time
 import urllib.request
 from pathlib import Path
 
-GRADE_DIR = Path(__file__).resolve().parents[2] / "scripts" / "official_grade"
+# 判分工作区有两个住所：①开发仓库的 scripts/official_grade（node_modules
+# 已装好，本地跑不必碰网络）；②随包的 app/utils/grade_workspace。
+# 取证（2026-09-23 包清单核对）：打包白名单只认 app/ 等根条目，scripts/
+# 永远不进提交包——旧实现把 GRADE_DIR 写死在 scripts/ 上，官方容器里那是
+# 一条不存在的路径，探测的 cwd 直接 FileNotFoundError，我们最强的一层
+# 行为验收（需求→Playwright 自测）在真实判分时结构性缺席。
+_DEV_GRADE_DIR = Path(__file__).resolve().parents[2] / "scripts" / "official_grade"
+_BUNDLED_GRADE_DIR = Path(__file__).resolve().parent / "grade_workspace"
+
+
+def _resolve_grade_dir() -> Path:
+    """开发目录优先——它带着已安装的 node_modules，本地测试零网络零等待。"""
+    if (_DEV_GRADE_DIR / "package.json").is_file():
+        return _DEV_GRADE_DIR
+    if (_BUNDLED_GRADE_DIR / "package.json").is_file():
+        return _BUNDLED_GRADE_DIR
+    return _DEV_GRADE_DIR
+
+
+GRADE_DIR = _resolve_grade_dir()
 
 # None=未探测；""=可用；其余=不可用原因（进程内缓存，探测只花一次）
 _node_probe: str | None = None
+
+# npm 只在「CLI 有、模块没有」时兜底跑一次，给足冷启动时间但不给第二口
+NPM_INSTALL_TIMEOUT_S = 300
+
+
+def _module_installed(base: Path) -> bool:
+    return (base / "@playwright" / "test").is_dir()
+
+
+def _global_module_roots(npx: str) -> list[Path]:
+    """从 npx 的位置反推全局 node_modules：官方镜像自检里有 Playwright，
+    通常是全局装的。命中它=零网络，且版本与镜像自带的 Chromium 配套——
+    比 npm install 一个新版本再等浏览器下载更靠谱。
+
+    推算要同时吃软链两侧：homebrew/nodesource 的 npx 是脚本软链，只按
+    resolve() 后的目录推会推出 npm 自己的 node_modules。
+    """
+    roots: list[Path] = []
+    bins = [Path(npx).parent]
+    try:
+        r = Path(npx).resolve().parent
+        if r not in bins:
+            bins.append(r)
+    except OSError:
+        pass
+    for b in bins:
+        for cand in (b.parent / "lib" / "node_modules",   # *nix / nvm 布局
+                     b / "node_modules",                  # Windows 安装器布局
+                     b.parent / "node_modules"):
+            if cand.is_dir() and cand not in roots:
+                roots.append(cand)
+    for extra in (os.environ.get("NODE_PATH") or "").split(os.pathsep):
+        if extra:
+            p = Path(extra)
+            if p.is_dir() and p not in roots:
+                roots.append(p)
+    return roots
+
+
+_npm_root_cache: str | None = None
+
+
+def _npm_global_root() -> str:
+    """路径推算猜不出来时问 npm 自己（进程内只问一次）。"""
+    global _npm_root_cache
+    if _npm_root_cache is not None:
+        return _npm_root_cache
+    _npm_root_cache = ""
+    npm = shutil.which("npm") or shutil.which("npm.cmd")
+    if npm:
+        try:
+            r = subprocess.run([npm, "root", "-g"], capture_output=True,
+                               text=True, encoding="utf-8", errors="replace",
+                               timeout=60)
+            if r.returncode == 0:
+                _npm_root_cache = (r.stdout or "").strip()
+        except Exception:
+            pass
+    return _npm_root_cache
+
+
+def _link_module_dir(link: Path, target: Path) -> bool:
+    if link.exists() or link.is_symlink():
+        return _module_installed(link)
+    if os.name == "nt":
+        # 目录联接：免管理员权限，mklink 只有 cmd 内建版本
+        subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)],
+                       capture_output=True, text=True, encoding="utf-8",
+                       errors="replace")
+    else:
+        try:
+            link.parent.mkdir(parents=True, exist_ok=True)
+            os.symlink(target, link, target_is_directory=True)
+        except OSError:
+            return False
+    return _module_installed(link)
+
+
+def _ensure_playwright_module(npx: str, cli_version: str = "") -> str:
+    """让 GRADE_DIR 能解析到 @playwright/test。""=就绪，其余=不可用原因。
+
+    按代价排三档：本地已装 → 链到镜像的全局安装（零网络） → npm install
+    （唯一可能联网的一档，只在前面全空时跑一次）。
+
+    第三档按 CLI 报出的版本号装：镜像里烤好的 Chromium 与全局 playwright
+    同版本，装一个新版本下来就会「模块有、浏览器没有」——官方容器里
+    browserType.launch 报 Executable doesn't exist，白烧一轮墙钟。
+    """
+    nm = GRADE_DIR / "node_modules"
+    if _module_installed(nm):
+        return ""
+    # 先纯路径推算（零成本），全空才问 npm 自己——那一次 subprocess 能省则省
+    candidates = _global_module_roots(npx)
+    if not any(_module_installed(r) for r in candidates):
+        g = _npm_global_root()
+        if g and Path(g).is_dir():
+            candidates.append(Path(g))
+    for root in candidates:
+        if _module_installed(root) and _link_module_dir(nm, root):
+            return ""
+    npm = shutil.which("npm") or shutil.which("npm.cmd")
+    if not npm:
+        return f"@playwright/test 模块缺失（{nm}）且环境无 npm 可装"
+    ver = re.search(r"\d+\.\d+\.\d+", cli_version or "")
+    pkg = f"@playwright/test@{ver.group(0)}" if ver else "@playwright/test"
+    try:
+        r = subprocess.run([npm, "install", "--no-save", pkg,
+                            "--no-audit", "--no-fund", "--loglevel=error"],
+                           cwd=str(GRADE_DIR), capture_output=True,
+                           text=True, encoding="utf-8", errors="replace",
+                           timeout=NPM_INSTALL_TIMEOUT_S)
+    except Exception as exc:
+        return f"playwright 依赖安装异常 {exc!r}"[:200]
+    if _module_installed(nm):
+        return ""
+    err = ((r.stderr or "") or (r.stdout or "")).strip()
+    return f"@playwright/test 安装失败（rc={r.returncode}）: {err[:200]}"
 
 
 def node_unavailable_reason() -> str:
@@ -47,11 +183,13 @@ def node_unavailable_reason() -> str:
                            cwd=str(GRADE_DIR), capture_output=True,
                            text=True, encoding="utf-8", errors="replace",
                            timeout=120)
-        if r.returncode == 0:
-            _node_probe = ""
-        else:
+        if r.returncode != 0:
             err = ((r.stderr or "") or (r.stdout or "")).strip()
             _node_probe = f"playwright CLI 不可用: {err[:120]}"
+        else:
+            # CLI 通了不等于能跑 spec：'@playwright/test' 的模块解析走
+            # GRADE_DIR/node_modules，随包工作区里那份得先就位
+            _node_probe = _ensure_playwright_module(npx, (r.stdout or "").strip())
     except Exception as exc:
         _node_probe = f"playwright 探测失败 {exc!r}"[:160]
     return _node_probe

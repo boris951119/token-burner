@@ -73,6 +73,10 @@ vscode-extension/node_modules/
 vscode-extension/out/
 *.vsix
 
+# 随包判分工作区：node_modules 由容器内探测按需安装，绝不入库
+# （build_submission 的禁令也挡得住，但 git status 得保持可读）
+app/utils/grade_workspace/node_modules/
+
 # v1.1 C1 连接注册表密钥库
 secrets.local.json
 
