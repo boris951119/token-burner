@@ -6,8 +6,10 @@
 秒级完成；起服/停服生命周期由调用方（selftest_gate 已持有活服）负责。
 
 判分口径与 Playwright 编译 spec 同源、同宽严：
-- 只判 home_visible 节点的 seed_entities（可见文案通道）与 control_labels
-  （文本/placeholder/aria-label/value/alt/title 任一属性通道）；
+- 主档只判 home_visible 节点的 seed_entities（可见文案通道）与 control_labels
+  （文本/placeholder/aria-label/value/alt/title 任一属性通道）；非入口可见节点
+  走「次级射程」档：同一套判据、只在主档已经判红时追加、且一律排在红字清单
+  最尾（批次#51「分级不放开」，口径见 _presence_scan 与 judge_checklists 尾部）；
 - 两侧语料都只收**渲染得出来**的内容：display:none / hidden / template 等
   不可见子树先剔除（spec 用 isVisible()，判分器不能比它宽，否则隐藏 div
   塞满需求文案即可本地全绿、官方 0 分）；
@@ -173,6 +175,10 @@ _WALL_MIN = 10
 # 可点击通道的逐条指令上限：同类缺陷一条就够说清修法，超出部分归并成
 # 一条计数（修复环只吃前 20 条指令，不能让同一形状刷屏）。
 _CLICK_FAIL_MAX = 8
+# 次级射程档的红字标记。必须跟在 REQ id 之后（grade_repair_loop 的
+# re.match(r"(REQ-[\\d.]+)") 抓的是串首），又必须看得见是哪个档说的——
+# 修复环拿到「点进去才看得到」的事实，修法与主档不同（补首页链接优先）。
+_TIER2_MARK = " 〔次级射程〕"
 
 
 def _norm(s: str) -> str:
@@ -491,6 +497,21 @@ def _iter_facts(checklists: Iterable[NodeChecklist]):
             yield ck.req_id, "控件文案", lab
 
 
+def _iter_facts_tier2(checklists: Iterable[NodeChecklist]):
+    """次级射程：主档之外（home_visible=False）的那批事实，与 _iter_facts 互斥。
+
+    批次#50 实测这批占编译事实的 81%，且在其中两份交付上把点名面从 4→20、3→22，
+    新增点名的 REQ 全部是官方判红的 REQ。
+    """
+    for ck in checklists:
+        if ck.home_visible:
+            continue
+        for ent in ck.seed_entities:
+            yield ck.req_id, "种子文案", ent
+        for lab in ck.control_labels:
+            yield ck.req_id, "控件文案", lab
+
+
 def _iter_click_facts(checklists: Iterable[NodeChecklist]):
     """需求以「点击 X」形式承诺、因而必须是可点控件的那部分文案。"""
     for ck in checklists:
@@ -514,6 +535,56 @@ def _hidden_control_revealable(crawl: _Crawl, e_norm: str) -> bool:
     """
     return any(e_norm in _interactive_corpus(p, require_wiring=True)
                for p in crawl.pages)
+
+
+def _presence_scan(facts, norms, crawl, marker: str = ""):
+    """逐字事实 × 已抓语料 → (命中数, 查无此文, 射程外标签, 来源路别, 隐藏副本红字)。
+
+    主档与次级档共用这一套判据，只换进来的事实清单——分档改的是射程，
+    不是宽严。红字串以 REQ id 开头（grade_repair_loop 的 re.match 抓首位），
+    `marker` 只能跟在 id 之后：次级档靠它标注来源。
+    """
+    text_norm, attr_norm, script_norm, api_norm, raw_norm = norms
+    found = 0                                 # 真实命中数（不得由减法倒推）
+    absent: list[tuple[str, str, str]] = []   # 源码里查无此文 = 结构缺失候选
+    client_side: list[str] = []               # 客户端渲染：不判红也不判绿
+    src_kind: dict[str, str] = {}             # 射程外事实出自哪一路（脚本/接口）
+    hidden: list[str] = []
+    for req_id, kind, ent in facts:
+        e = _norm(ent)
+        if not e:
+            continue
+        if e in text_norm or e in attr_norm:
+            found += 1
+            continue
+        tag = f'{req_id}{marker} 编译清单[{kind}] "{ent}"'
+        if e in script_norm:
+            # 文案只存在于页内脚本正文：客户端渲染，浏览器出得来像素，
+            # 静态判分出不来——射程外，不判红也不判绿（判红即幻影失败，
+            # 修复环会围着一条修不好的指令烧掉整轮）。
+            client_side.append(tag)
+            src_kind[tag] = "脚本正文"
+        elif e in api_norm:
+            # 文案在应用自己调用的接口返回值里：同上，浏览器渲得出来，
+            # 静态判分射程外。判分红叶的多数假红出自这一路（v8b keep）。
+            client_side.append(tag)
+            src_kind[tag] = "接口返回值"
+        elif e in raw_norm:
+            # 源码里有、页面上没有：先分「真造假」与「SPA 的隐藏二级视图」。
+            # 长在本页可点控件上的 hidden 文案由页内脚本自己摘掉，评测点得到
+            # ——静态通道判不了它的可见性，记射程外（keep#2 那种零脚本陈列
+            # 依旧逐条判红，这类绝不进归并：折成一条根因等于给造假开脱）。
+            if _hidden_control_revealable(crawl, e):
+                client_side.append(tag)
+                src_kind[tag] = "隐藏控件（页内脚本可展开）"
+            else:
+                hidden.append(
+                    f'{tag} 只存在于页面的不可见位置'
+                    f'（隐藏元素/HTML 注释/属性）：评测按渲染后的可见性断言，'
+                    f'必须让它就出现在对应控件上，删掉这种隐藏副本')
+        else:
+            absent.append((req_id, kind, ent))
+    return found, absent, client_side, src_kind, hidden
 
 
 def judge_checklists(checklists: list[NodeChecklist], base_url: str,
@@ -547,47 +618,17 @@ def judge_checklists(checklists: list[NodeChecklist], base_url: str,
                     f"一步连环落空（本轮 {len(facts)} 条逐字事实未判，"
                     f"先修首页）"],
                 "note": "判分语料为空：逐条事实判红已归并为一条根因"}
-    failures: list[str] = []
-    client_side: list[str] = []             # 客户端渲染：不判红也不判绿
-    src_kind: dict[str, str] = {}           # 射程外事实出自哪一路（脚本/接口）
-    found = 0                                     # 真实命中数（不得由减法倒推）
-    absent: list[tuple[str, str, str]] = []   # 源码里查无此文 = 结构缺失候选
-    raw_norm = _norm(crawl.raw)
-    for req_id, kind, ent in facts:
-        e = _norm(ent)
-        if not e:
-            continue
-        if e in text_norm or e in attr_norm:
-            found += 1
-            continue
-        tag = f'{req_id} 编译清单[{kind}] "{ent}"'
-        if e in script_norm:
-            # 文案只存在于页内脚本正文：客户端渲染，浏览器出得来像素，
-            # 静态判分出不来——射程外，不判红也不判绿（判红即幻影失败，
-            # 修复环会围着一条修不好的指令烧掉整轮）。
-            client_side.append(tag)
-            src_kind[tag] = "脚本正文"
-        elif e in api_norm:
-            # 文案在应用自己调用的接口返回值里：同上，浏览器渲得出来，
-            # 静态判分射程外。判分红叶的多数假红出自这一路（v8b keep）。
-            client_side.append(tag)
-            src_kind[tag] = "接口返回值"
-        elif e in raw_norm:
-            # 源码里有、页面上没有：先分「真造假」与「SPA 的隐藏二级视图」。
-            # 长在本页可点控件上的 hidden 文案由页内脚本自己摘掉，评测点得到
-            # ——静态通道判不了它的可见性，记射程外（keep#2 那种零脚本陈列
-            # 依旧逐条判红，这类绝不进归并：折成一条根因等于给造假开脱）。
-            if _hidden_control_revealable(crawl, e):
-                client_side.append(tag)
-                src_kind[tag] = "隐藏控件（页内脚本可展开）"
-            else:
-                failures.append(
-                    f'{req_id} 编译清单[{kind}] "{ent}" 只存在于页面的不可见位置'
-                    f'（隐藏元素/HTML 注释/属性）：评测按渲染后的可见性断言，'
-                    f'必须让它就出现在对应控件上，删掉这种隐藏副本')
-        else:
-            absent.append((req_id, kind, ent))
+    norms = (text_norm, attr_norm, script_norm, api_norm, _norm(crawl.raw))
+    found, absent, client_side, src_kind, hidden_reds = _presence_scan(
+        facts, norms, crawl)
+    failures: list[str] = list(hidden_reds)
     total = len(facts)
+    # 「未出现在入口可达页面」有两种修法：内容真没做，或做了但首页没链过去。
+    # 后者只补文案修不好，所以入口只有一个页、又一条站内链接都没有时，指令
+    # 必须把这一层点出来（主档零星缺席与次级射程两档共用同一条提示）。
+    hint = ("（且首页没有一条站内链接：这些内容若在别的页面，首页必须"
+            "用链接指过去——评测先导航再断言，链不过去就等于没有）"
+            if crawl.html_pages <= 1 and not crawl.links else "")
     walled = (len(absent) >= _WALL_MIN and len(absent) >= _WALL_RATIO * total
               and crawl.html_pages <= 1)
     if walled:
@@ -606,13 +647,6 @@ def judge_checklists(checklists: list[NodeChecklist], base_url: str,
             f"种子数据），首页用链接指过去——评测先导航再断言可见文案，路由不"
             f"在则全部用例第一步即落空。缺口的样例：{examples} …"))
     else:
-        # 「未出现在入口可达页面」有两种修法：内容真没做，或做了但首页没链
-        # 过去。后者只补文案修不好，所以入口只有一个页、又一条站内链接都没
-        # 有时，指令必须把这一层点出来（整墙判红会走归并通道，这里是零星
-        # 缺席那一档——同样值得指对方向）。
-        hint = ("（且首页没有一条站内链接：这些内容若在别的页面，首页必须"
-                "用链接指过去——评测先导航再断言，链不过去就等于没有）"
-                if crawl.html_pages <= 1 and not crawl.links else "")
         failures += [f'{r} 编译清单[{k}] "{e}" 未出现在入口可达页面{hint}'
                      for r, k, e in absent]
     # ---- 可点击通道（append 在最尾：不得挤掉上面任何一条指令）----------
@@ -662,10 +696,35 @@ def judge_checklists(checklists: list[NodeChecklist], base_url: str,
             f'另有 {click_bad - _CLICK_FAIL_MAX} 条「点击 X」类控件同样只是'
             f'文本或点了不会动（同类缺陷，逐条指令已达上限）：按上一条的'
             f'口径一次改完')
+    # ---- 次级射程（批次#51「分级不放开」）---------------------------------
+    # 非入口可见节点上还有 81% 的编译事实主档看不见。批次#50 拿官方逐 REQ 判红
+    # 对表：bookstack/stackoverflow 两份交付把点名面从 4→20、3→22，新增点名的
+    # 35 个 REQ 全部是官方判红的 REQ。两条护栏把它做成单向上界：
+    # ① 主档已经判红才追加——次级档的假红分母在这 40 份对照集上量不出来（官方
+    #    得分清一色 0-9%，「官方给了分而我们判红」那一格几乎没有样本），所以
+    #    绝不靠它把一道绿的闸判红；本轮既然已经要进修复环，就把摊不平的账一起摊开。
+    # ② 一律排在清单最尾——修复提示词只吃 failures[:20]（selftest_gate.py:918），
+    #    「直接放开射程」实测会让 15 号主档 7 条高把握红字只剩 1 条还在预算内；
+    #    分级保证新增是净增，不会挤掉现有指令。
+    tier2_total = tier2_found = 0
+    if failures:
+        t2_facts = list(_iter_facts_tier2(checklists))
+        tier2_total = len(t2_facts)
+        if t2_facts:
+            tier2_found, t2_absent, _, _, t2_hidden = _presence_scan(
+                t2_facts, norms, crawl, marker=_TIER2_MARK)
+            failures += t2_hidden
+            failures += [f'{r}{_TIER2_MARK} 编译清单[{k}] "{e}"'
+                         f' 未出现在入口可达页面{hint}'
+                         for r, k, e in t2_absent]
     out = {"passed": found,
            "failed": len(failures), "total": total, "failures": failures,
-           "client_side": len(client_side)}
+           "client_side": len(client_side),
+           "tier2_total": tier2_total, "tier2_found": tier2_found}
     notes: list[str] = []
+    if tier2_total:
+        notes.append(f"次级射程（非入口可见节点）另判 {tier2_total} 条事实、"
+                     f"命中 {tier2_found} 条，其红字一律排在主档之后")
     if walled:
         notes.append(f"{len(absent)} 条「源码里查无此文」的同因事实已归并为一条"
                      f"结构性根因（HTML 页面 {crawl.html_pages} 个）；塞在不可见"

@@ -6,7 +6,8 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 from app.acceptance_compile import NodeChecklist
-from app.utils.acceptance_judge import judge_checklists
+from app.utils.acceptance_judge import (_iter_facts, _iter_facts_tier2,
+                                        judge_checklists)
 
 PAGES = {
     "/": ('<html><body><a href="/list">L</a><a href="/x.css">c</a>'
@@ -638,3 +639,63 @@ class TestInertControlEvidence:
             assert r["failed"] == 0, r["failures"]
         finally:
             srv.shutdown()
+
+
+# ---- 次级射程（批次#51「分级不放开」）------------------------------------
+# 主档只判入口可见节点，把 81% 的编译事实挡在判分面外。批次#50 用官方逐 REQ
+# 判红当裁判：非入口那批在 bookstack 上把点名面从 4→20、stackoverflow 从
+# 3→22，新增点名的 35 个 REQ 全部是官方判红的 REQ。但「直接放开射程」实测会
+# 把高把握指令挤出修复预算（15 号主档 7 条红字只剩 1 条还在 failures[:20]），
+# 所以做成两档：同判据、只在主档已判红时追加、永远排在清单最尾。
+
+
+class TestTier2Range:
+    def _ck(self, n_sub: int = 3):
+        return [_ck(seed_entities=["Home shelf"]),
+                _ck(req_id="REQ-4.1", home_visible=False,
+                    seed_entities=[f"Book detail {i}" for i in range(n_sub)])]
+
+    def test_main_tier_green_never_opens_tier2(self):
+        """单向上界的正面：主档全绿时次级档根本不启动——假红分母在 40 份
+        对照集上量不出来（官方得分清一色 0-9%），就不拿它去判红一道绿闸。"""
+        r = judge_checklists(self._ck(), _url_for("<h1>Home shelf</h1>"))
+        assert r["failed"] == 0 and r["failures"] == [], r["failures"]
+        assert r["tier2_total"] == 0
+
+    def test_tier2_appends_after_main_reds_with_req_first(self):
+        r = judge_checklists(self._ck(), _url_for("<h1>无关标题</h1>"))
+        assert r["tier2_total"] == 3 and r["tier2_found"] == 0
+        assert len(r["failures"]) == 4, r["failures"]      # 1 主档 + 3 次级
+        assert "〔次级射程〕" not in r["failures"][0], "主档指令不得被挤到后面"
+        assert all(f.startswith("REQ-") for f in r["failures"])
+        assert r["failures"][1].startswith("REQ-4.1 〔次级射程〕")
+        # 主档口径原样：passed/total 只数主档事实，报告里的 X/Y 不被灌水
+        assert r["total"] == 1 and r["passed"] == 0
+        assert "次级射程" in r["note"]
+
+    def test_tier2_absence_does_not_feed_the_wall_merge(self):
+        """归并基数只数主档：否则 12 条次级缺席会把主档那条定向指令折成一句
+        「界面未实现」（批次#47 在 18 号上实测到的吞 id 效应）。"""
+        r = judge_checklists(self._ck(12), _url_for("<h1>无关标题</h1>"))
+        assert not any("界面未实现" in f for f in r["failures"]), r["failures"][0]
+        assert sum(1 for f in r["failures"]
+                   if "〔次级射程〕" in f) == 12
+
+    def test_tier2_hidden_copy_shares_the_main_wording(self):
+        """分档改射程不改宽严：源码里有、页面上没有 → 同一条隐藏副本红，
+        只多一个档位标记。"""
+        ck = [_ck(seed_entities=["缺席的主档文案"]),
+              _ck(req_id="REQ-5.2", home_visible=False,
+                  seed_entities=["Book archive panel"])]
+        r = judge_checklists(ck, _url_for(
+            "<h1>Home 无关</h1><div hidden>Book archive panel</div>"))
+        hits = [f for f in r["failures"] if "Book archive panel" in f]
+        assert len(hits) == 1 and hits[0].startswith("REQ-5.2 〔次级射程〕")
+        assert "不可见位置" in hits[0]
+
+    def test_two_tiers_partition_the_compiled_facts(self):
+        ck = [_ck(seed_entities=["a"]),
+              _ck(home_visible=False, seed_entities=["b"],
+                  control_labels=["c"])]
+        assert [e for _, _, e in _iter_facts(ck)] == ["a"]
+        assert [e for _, _, e in _iter_facts_tier2(ck)] == ["b", "c"]
