@@ -199,6 +199,20 @@ def test_discussion_minutes_env_override(monkeypatch, tmp_path, req_dir):
     assert tuned.discussion_max_minutes == 45.0
 
 
+def test_env_float_dirty_value_falls_back(monkeypatch, capsys):
+    """批次#24：这两处读取在 pipeline.run 之前，裸 float() 遇
+    `DISCUSSION_MINUTES=35min` 这类笔误直接抛 ValueError＝整跑零交付，
+    而看门狗/讨论闸本身都是保命用的，不该成为最早的死因。"""
+    monkeypatch.setenv("DISCUSSION_MINUTES", "35min")
+    assert entry._env_float("DISCUSSION_MINUTES", "35") == 35.0
+    assert "非数值" in capsys.readouterr().out
+    # 空串＝显式关闭（原口径不变），合法值原样采信
+    monkeypatch.setenv("DISCUSSION_MINUTES", "")
+    assert entry._env_float("DISCUSSION_MINUTES", "35") == 0.0
+    monkeypatch.setenv("WATCHDOG_MINUTES", "120")
+    assert entry._env_float("WATCHDOG_MINUTES", "200") == 120.0
+
+
 def test_verify_failure_still_delivers(monkeypatch, tmp_path, req_dir):
     """平台 v6-1 取证（¥47/5.7h 白扔）：exit 1 = 平台不评分 = 0 分。
     验收是教练不是评判者——FAIL 也交付（exit 0），失败详情进交付摘要。"""

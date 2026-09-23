@@ -243,6 +243,7 @@ def ensure_selftests(project_dir: Path, requirement: str,
     部分覆盖 > 零覆盖。已存在 specs 不重写（修复轮只重跑纪律不变）。"""
     project_dir = Path(project_dir)
     specs_dir = project_dir / "tests" / "selftest"
+    from app.utils.budget import BudgetExceededError, TaskCancelledError
     from app.utils.model_client import ModelClient
     from app.utils.requirement_anchors import collect_anchors_from_text
 
@@ -296,6 +297,8 @@ def ensure_selftests(project_dir: Path, requirement: str,
                 specs_dir.mkdir(parents=True, exist_ok=True)
                 _write_specs(specs_dir, cleaned, batch_no)
                 return True
+            except (BudgetExceededError, TaskCancelledError):
+                raise  # 总闸不是「这条腿废了」：换腿续跑＝把中止改成多烧几腿
             except Exception as exc:  # 逐模型接力
                 last = exc
         ids = " ".join(nid for nid, _ in batch)

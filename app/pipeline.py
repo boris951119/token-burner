@@ -23,7 +23,7 @@ from app.agents.dev_loop import (
     ModelChainExhausted,
     ModuleStatus,
 )
-from app.agents.module_builder import ModuleBuilder, should_modularize
+from app.agents.module_builder import ModuleBuilder, SplitError, should_modularize
 from app.agents.researcher import (
     ResearchCache,
     Researcher,
@@ -60,7 +60,7 @@ def touch_progress() -> None:
     LAST_PROGRESS = time.time()
 
 
-from app.utils.model_client import ModelClient, _is_timeout, _is_transient
+from app.utils.model_client import ModelClient, _is_timeout, _is_transient, leg_chain
 from app.utils.untrusted import sanitize_untrusted
 
 
@@ -221,10 +221,7 @@ class Pipeline:
         流程有重试环与备胎链，直出一次网关超时就是异常直穿。缺密钥这类配置
         错误与预算/取消总闸不在此列，照旧直穿。
         """
-        chain: list[str] = []
-        for m in self.settings.models or []:
-            if m and m not in chain:
-                chain.append(m)
+        chain = leg_chain(None, self.settings.models)
         messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": requirement},
@@ -239,7 +236,8 @@ class Pipeline:
                 if not (_is_transient(exc) or _is_timeout(exc)):
                     raise
                 last = exc
-        raise last  # type: ignore[misc]  # 链非空由 Settings 校验保证
+        # 链非空由 Settings 校验保证（models 非空且无空名）
+        raise last  # type: ignore[misc]
 
     def _resolve_llm(self) -> ModelClient:
         """M8-1：任务开始时解析本任务的 ModelClient。
@@ -485,6 +483,12 @@ class Pipeline:
                     self._emit(
                         "research_skipped", reason=researcher.last_error
                     )
+            except TaskCancelledError:
+                # 取消必上抛。BudgetExceededError 不在此列：这里的守卫吃得到
+                # 两种来源——研究独立预算（4.4，设计上就该「跳过研究继续做」）
+                # 与任务总闸（llm.chat 内部检查点），按类型区分不开，
+                # 一律上抛会把「研究子预算花完」升级成整跑中止。
+                raise
             except Exception as exc:  # 研究失败不阻塞任务（方向单一）
                 self._emit(
                     "research_skipped",
@@ -527,17 +531,33 @@ class Pipeline:
             )
             if should_modularize(
                 route.difficulty_score, route.estimated_files, self.settings
-            ):
+            ) or route.fallback:
                 # 12.2：难度 ≥5 或预估文件数 ≥6 → 模块化拆分
                 # 规模工程：讨论吃 FOLDER 摘要，拆分补全量需求原文
                 # （原子验收细节/场景/夹具契约在此回到拆分视野）
-                plans = builder.split_spec(
-                    final_spec, project_id=team.project_id,
-                    requirement=requirement,
-                )
-                interfaces = builder.generate_interfaces(
-                    plans, project_id=team.project_id
-                )
+                # route.fallback（批次#24）：15.3 降级评估的分数与文件数都是
+                # 占位 0，should_modularize 必然判假——需求形状未知时按大做
+                # （多模块）比按小做（单模块吞整份 spec）更接近保守本意，
+                # 与「保守视作编程任务」是同一条取舍。
+                try:
+                    plans = builder.split_spec(
+                        final_spec, project_id=team.project_id,
+                        requirement=requirement,
+                    )
+                    interfaces = builder.generate_interfaces(
+                        plans, project_id=team.project_id
+                    )
+                except SplitError as exc:
+                    # 重试到腿数/轮数上限＝LLM 输出仍不可用（网关半瘫或反复
+                    # 解析失败）。原先 SplitError 直穿 run 的 except Exception
+                    # → 落盘现场后 re-raise = 整跑 rc=1 零交付；退回 12.2 既有
+                    # 的单模块直出（零额外调用）至少交出一份可跑的代码——
+                    # 少几层模块清晰度，好过零分。
+                    self._emit("split_fallback", error=f"{type(exc).__name__}: {exc}"[:200])
+                    plans = [builder.single_module_plan(
+                        final_spec, project_id=team.project_id
+                    )]
+                    interfaces = {}
             else:
                 # 12.2：单份 spec 直出（跳过拆分与接口契约，省 LLM 调用）
                 plans = [builder.single_module_plan(

@@ -20,7 +20,7 @@ from enum import Enum
 from pathlib import Path
 
 from app.config import Settings
-from app.utils.budget import BudgetExceededError
+from app.utils.budget import BudgetExceededError, TaskCancelledError
 from app.execution.executor import ExecutionResult, ExecutionStatus, Executor
 from app.tools.file_manager import FileManager
 from app.tools.prompt_templates import (
@@ -655,6 +655,11 @@ class DevLoopEngine:
 
         网关退化窗口内秒级退避重试会全部落窗；三角色按序各自独立
         受护尝试（主模型 ∈ 链尾兜底），全灭才上抛带全链信息的异常。
+
+        取消总闸与预算总闸同级：TaskCancelledError 是 RuntimeError 子类，
+        旧的兜底 `except RuntimeError` 会把它一并吞成 ModelChainExhausted
+        ——pipeline 那侧按「这条腿废了」冻结当前模块继续跑下一个，
+        用户点停止后仍在烧钱（BudgetGuard 检查点在此彻底失效）。
         """
         chain = [model]
         for candidate in (self.main_model, self.dev_model, self.test_model):
@@ -668,8 +673,8 @@ class DevLoopEngine:
         for candidate in chain:
             try:
                 return self.llm.chat(candidate, messages)
-            except BudgetExceededError:
-                raise                      # 总闸：预算超支绝不换模型续烧
+            except (BudgetExceededError, TaskCancelledError):
+                raise   # 总闸：预算超支/用户取消绝不换模型续烧
             except ValueError as exc:
                 # 未登记模型（脏台账/坏候选）＝这条腿废了，换下一腿
                 last_exc = exc

@@ -326,11 +326,36 @@ class TestGatewayResilience:
         assert [c["model"] for c in llm.calls] == ["m-main", "m-backup"]
 
     def test_split_all_legs_down_raises_with_call_reason(self, fm):
-        # 尝试数＝1+max_parse_retries，轮转腿序；耗尽后仍交用户介入
+        # 调用级失败的上界＝腿数（此链 3 腿），不再是尝试轮数：
+        # ModelClient 内部已对瞬态退避重试过 llm_max_retries 次，
+        # 外层同腿再转圈＝把整段 read timeout 重复烧掉
         llm = FlakyLLM([GATEWAY_DOWN] * 4)
         with pytest.raises(SplitError, match="网关瞬态"):
             make_chain_builder(llm, fm).split_spec("spec")
-        assert len(llm.calls) == 4
+        assert len(llm.calls) == 3, "每腿试一次即止"
+
+    def test_single_leg_chain_stops_at_one_call(self, fm):
+        # runner 形态（单模型 → 同模三元组，链长 1）：网关全废时评估环
+        # 最坏只烧一次墙钟，而不是 4 轮 × read timeout
+        llm = FlakyLLM([GATEWAY_DOWN] * 4)
+        with pytest.raises(SplitError, match="网关瞬态"):
+            make_chain_builder(llm, fm, models=("m-only",)).split_spec("spec")
+        assert [c["model"] for c in llm.calls] == ["m-only"]
+
+    def test_healthy_leg_is_sticky_across_modules(self, fm):
+        # 主腿撞废一次后钉在备胎上：接口契约逐模块生成，每模块的 attempt 0
+        # 都从主腿起步＝把已知死腿的 read timeout 乘上模块数
+        llm = FlakyLLM([
+            GATEWAY_DOWN, split_json(),
+            iface_json([]), iface_json([]), iface_json(["user", "data"]),
+        ])
+        builder = make_chain_builder(llm, fm)
+        plans = builder.split_spec("spec")
+        assert len(plans) == 3
+        assert builder.generate_interfaces(plans)
+        assert [c["model"] for c in llm.calls] == [
+            "m-main", "m-backup", "m-backup", "m-backup", "m-backup",
+        ]
 
     def test_split_budget_exhausted_propagates(self, fm):
         from app.utils.budget import BudgetExceededError
@@ -355,6 +380,15 @@ class TestGatewayResilience:
         assert built["a"]["dependencies"] == []
         assert [c["model"] for c in llm.calls] == ["m-main", "m-backup"]
         assert all(c["json_mode"] for c in llm.calls)
+
+    def test_interface_all_legs_down_stops_at_leg_count(self, fm):
+        # 接口环的调用级失败上界同 split：腿数而非轮数，措辞报实际尝试次数
+        plans = [ModulePlan(name="a", responsibility="r", dependencies=[],
+                            priority=1)]
+        llm = FlakyLLM([GATEWAY_DOWN] * 4)
+        with pytest.raises(SplitError, match="尝试 3 次"):
+            make_chain_builder(llm, fm).generate_interfaces(plans)
+        assert len(llm.calls) == 3
 
     def test_interface_parse_failure_retries_then_raises(self, fm):
         plans = [ModulePlan(name="a", responsibility="r", dependencies=[],

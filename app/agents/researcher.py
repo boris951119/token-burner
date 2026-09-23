@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from app.tools.prompt_templates import RESEARCH_BRIEF_SYSTEM, RESEARCH_BRIEF_USER
+from app.utils.budget import BudgetExceededError, TaskCancelledError
 from app.utils.parse import parse_json
 from app.utils.untrusted import sanitize_untrusted
 
@@ -279,6 +280,9 @@ class Researcher:
             if cached is not None:
                 return cached
 
+        # 这里抛的 BudgetExceededError 只可能来自研究独立预算（4.4：设计上
+        # 就该「跳过研究、任务继续」），故整段吞下换成 last_error——任务总闸
+        # 不走这条路（llm.chat 内部检查点在 _one_pass 直穿，见那里的守卫）。
         if self.budget_guard is not None:
             try:
                 self.budget_guard.ensure_allowed()
@@ -327,6 +331,8 @@ class Researcher:
                 ],
                 json_mode=True,
             )
+        except (BudgetExceededError, TaskCancelledError):
+            raise  # 总闸不转「跳过研究」
         except Exception as exc:
             self.last_error = f"研究调用失败：{type(exc).__name__}: {exc}"
             return None

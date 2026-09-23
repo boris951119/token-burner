@@ -40,7 +40,7 @@ from app.tools.prompt_templates import (
     TASK_ASSESSMENT_USER,
 )
 from app.utils.budget import BudgetExceededError, TaskCancelledError
-from app.utils.model_client import _is_timeout, _is_transient
+from app.utils.model_client import _is_timeout, _is_transient, leg_chain
 from app.utils.parse import parse_json
 from app.utils.similarity import LoopDetector
 from app.utils.untrusted import sanitize_untrusted
@@ -293,8 +293,15 @@ class TaskRouter:
     # 评估调用（含 15.3 重试与硬回退）
     # ------------------------------------------------------------------
 
-    def _call_json(self, model: str, messages: list[dict]):
+    def _leg_chain(self) -> list[str]:
+        """评估可用腿序：主模型打头，其余预设腿按序备胎（去重保序）。"""
+        return leg_chain(self.main_model, self.settings.models) or [self.main_model]
+
+    def _call_json(self, messages: list[dict], attempt: int = 0):
         """json_mode 单腿调用 → (响应, 失败原因)，瞬态故障时响应为 None。
+
+        按 attempt 轮转腿序（非「每次尝试遍历全链」）：一条腿超时最坏烧掉
+        一整段 read timeout，嵌套会把尝试上限放大成腿数倍。
 
         shape-keep 彩排（9/23）：一条腿的网关超时直穿 pipeline.run = 整跑
         零交付。评估/复核环节本就设计了「拿不到可用结论 → 降级」的硬回退，
@@ -303,6 +310,8 @@ class TaskRouter:
         垃圾交付，不如当场失败（/api/route 的 503 契约同样依赖这条区分）。
         预算/取消例外：必须直穿，降级续跑等于绕过中止继续烧。
         """
+        chain = self._leg_chain()
+        model = chain[attempt % len(chain)]
         try:
             return self.llm.chat(model, messages, json_mode=True), ""
         except (BudgetExceededError, TaskCancelledError):
@@ -310,7 +319,7 @@ class TaskRouter:
         except RuntimeError as exc:
             if not (_is_transient(exc) or _is_timeout(exc)):
                 raise
-            return None, f"{type(exc).__name__}: {exc}"[:200]
+            return None, f"{type(exc).__name__} {model}: {exc}"[:200]
 
     def _assess(self, requirement: str) -> dict | None:
         # M7-6：需求文本是不可信输入，注入提示词前包裹数据边界
@@ -328,16 +337,26 @@ class TaskRouter:
         ]
 
         # 首次尝试 + 最多 max_parse_retries 次严格重试（15.3）
+        # 调用级失败的上界是腿数，不是轮数：ModelClient.chat 内部已对瞬态
+        # 故障退避重试过 llm_max_retries 次，外层再同腿空转只是把一整段
+        # read timeout 重复烧掉（runner 形态单模型链＝1 条腿，网关全废时
+        # 4 轮 × 600s 会让评估环节吃掉半小时墙钟）。
         self._assess_error = None
+        legs = len(self._leg_chain())
+        call_fails = 0
         attempts = [messages] + [strict_messages] * self.settings.max_parse_retries
         for i, msgs in enumerate(attempts):
-            response, error = self._call_json(self.main_model, msgs)
+            response, error = self._call_json(msgs, attempt=i)
             if response is None:
                 self._assess_error = error
+                call_fails += 1
+                if call_fails >= legs:
+                    break
                 continue
             # 降级理由只反映「最后一次失败的真实成因」：本轮拿到了响应，
             # 之前那次网关故障就不再是兜底措辞的依据。
             self._assess_error = None
+            call_fails = 0
             value, _detail = parse_json(
                 response.content, location="difficulty_assessment"
             )
@@ -364,7 +383,13 @@ class TaskRouter:
                 ),
             },
         ]
-        response, _error = self._call_json(self.main_model, messages)
+        # 复核只有一问一答：调用级失败换下一条腿再问（拿到响应即停，
+        # 解析失败不重试——复核本就是「维持原判定」的护栏，不该吃墙钟）
+        response = None
+        for attempt in range(len(self._leg_chain())):
+            response = self._call_json(messages, attempt=attempt)[0]
+            if response is not None:
+                break
         value = (None if response is None
                  else parse_json(response.content, location="recheck_assessment")[0])
         if value is not None and self._valid(value):
@@ -627,7 +652,8 @@ class DiscussionEngine:
         return (
             f"（讨论阶段时间闸：{rounds} 轮已耗 "
             f"{(self._clock() - t0) / 60:.1f} 分钟 ≥ 上限 "
-            f"{self.settings.discussion_max_minutes:g} 分钟——网关过慢，"
+            f"{self.settings.discussion_max_minutes:g} 分钟——越闸的成因"
+            "（网关慢、模型慢、需求体量）在本阶段无从归因，一律先收手："
             "跳过剩余评审与修订，直接收敛出 spec）"
         )
 

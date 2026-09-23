@@ -83,6 +83,14 @@ class TestModels:
     def test_settings_models_default(self):
         assert list(Settings().models) == list(DEFAULT_MODELS)
 
+    def test_blank_model_name_rejected(self):
+        # 空名等于没有这条腿：换腿链（model_client.leg_chain）按真值过滤，
+        # 全空名的列表会把「无可用腿」退化成一串 TypeError
+        with pytest.raises(ValueError, match="空名称"):
+            Settings(models=[""])
+        with pytest.raises(ValueError, match="空名称"):
+            Settings(models=["gpt-4o", "   "])
+
     def test_projects_root_default_empty(self):
         # 产出目录配置：缺省空串 → 各入口回落「启动目录/projects」
         assert Settings().projects_root == ""

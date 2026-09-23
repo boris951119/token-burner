@@ -340,3 +340,64 @@ class TestDirectChatLegRelay:
         with pytest.raises(BudgetExceededError):
             self._pipeline(llm, fm)._direct_chat("s", "x")
         assert llm.calls == ["m-a"]
+
+
+class TestSplitDegradation:
+    """批次#24：拆分/接口环节的两种「形状未知」都不该谋杀整跑。
+
+    彩排取证：SplitError 直穿 run 的 except Exception 分支＝现场落盘后
+    继续上抛 = 整跑 rc=1 零交付；而 15.3 降级评估把分数与文件数都写成
+    占位 0，should_modularize 顺理成章判假——大需求被当成小任务塞进
+    单模块。两处同向修：形状未知按大做，实在拆不动退回单模块交一份能跑
+    的代码，好过零分。
+    """
+
+    def test_degraded_assessment_still_modularizes(self, fm, monkeypatch):
+        from app.agents.module_builder import ModuleBuilder
+
+        seen: list[str] = []
+        original = ModuleBuilder.split_spec
+
+        def spy(self, spec_md, project_id=None, requirement=""):
+            seen.append(spec_md)
+            return original(self, spec_md, project_id=project_id,
+                            requirement=requirement)
+
+        monkeypatch.setattr(ModuleBuilder, "split_spec", spy)
+        scripts = ["坏", "坏", "坏", "坏"] + team_scripts()[1:]
+        pipeline = make_pipeline(
+            ScriptedLLM(scripts), FakeExecutor(["SUCCESS"] * 3), fm
+        )
+        result = pipeline.run(
+            "含糊需求",
+            confirmed_as_coding=True,
+            models=("gpt-4o", "deepseek-chat", "claude-3-5-sonnet"),
+            mode="safe",
+            spec_confirm="确认",
+        )
+        assert result.kind == "team_flow"
+        assert seen, "降级评估（分数 0 是占位值）不该顺手判成单模块小任务"
+
+    def test_split_error_falls_back_to_single_module(self, fm, monkeypatch):
+        from app.agents.module_builder import ModuleBuilder, SplitError
+
+        def boom(self, spec_md, project_id=None, requirement=""):
+            raise SplitError("spec 拆分失败（重试 4 次）: 网关瞬态，请用户介入")
+
+        monkeypatch.setattr(ModuleBuilder, "split_spec", boom)
+        # 评估→方案→双评审→spec 照旧，拆分之后的脚本按单模块（码/测各一次）
+        scripts = team_scripts()[:5] + ["def core_fn():\n    return 1\n", "TEST"]
+        pipeline = make_pipeline(
+            ScriptedLLM(scripts), FakeExecutor(["SUCCESS"]), fm
+        )
+        result = pipeline.run(
+            "开发用户系统",
+            models=("gpt-4o", "deepseek-chat", "claude-3-5-sonnet"),
+            mode="safe",
+            spec_confirm="确认",
+        )
+        assert result.kind == "team_flow"
+        root = fm.get_project(result.project_id).root
+        assert (root / "code" / "main" / "main.py").is_file()
+        assert not (root / "interfaces.json").exists()
+        assert "main" in result.deliverable_summary  # 汇总如实报单模块

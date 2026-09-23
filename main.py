@@ -154,6 +154,21 @@ def _export_official_layout(workdir: Path, project_dir: Path | None,
         return False
 
 
+def _env_float(name: str, default: str) -> float:
+    """环境变量读浮点，脏值回退缺省并留痕。
+
+    这些读取发生在 pipeline.run 之前：裸 float() 遇 `DISCUSSION_MINUTES=35min`
+    这类笔误直接抛 ValueError＝整跑零交付，而看门狗/讨论闸本身都是
+    「保命用的」，不该成为最早的死因。env 由人填，按不可信输入处理。
+    """
+    raw = os.environ.get(name, default)
+    try:
+        return float(raw or 0)
+    except ValueError:
+        print(f"[config] {name}={raw!r} 非数值 → 回退 {default}", flush=True)
+        return float(default)
+
+
 def _apply_runner_model(settings) -> None:
     """平台 runner 注入 MODEL（OpenAI 兼容网关，litellm 需 openai/ 前缀）。
 
@@ -326,8 +341,7 @@ def main(argv: list[str] | None = None) -> int:
     # 一轮不缺的 3 轮讨论耗时 24 分钟——闸设在 20 分钟会把健康讨论拦腰砍掉。
     # DISCUSSION_MINUTES=0 显式关闭。
     if settings.discussion_max_minutes <= 0:
-        settings.discussion_max_minutes = float(
-            os.environ.get("DISCUSSION_MINUTES", "35") or 0)
+        settings.discussion_max_minutes = _env_float("DISCUSSION_MINUTES", "35")
     # 平台侧提交统一走 runtime.git（桥接层），双 git 会互相污染提交历史
     settings.enable_git = False
     print(f"[config] 最终编制: models={list(settings.models)} "
@@ -340,7 +354,7 @@ def main(argv: list[str] | None = None) -> int:
     # 看门狗线程（keep5 取证：进程楔死在墙钟保护之外 7.7h 零取证）——
     # 全局进度时间戳超阈值 → 全线程栈 dump 落盘 → 非零退出。
     # 阈值需覆盖合法长窗口（1200s 墙钟 × 3 重试 × 3 模型 ≈ 3h），故默认 200 分钟。
-    _watchdog_min = float(os.environ.get("WATCHDOG_MINUTES", "200") or 0)
+    _watchdog_min = _env_float("WATCHDOG_MINUTES", "200")
     if _watchdog_min > 0:
         import time as _time
         import traceback as _tb

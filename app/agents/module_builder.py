@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from app.config import Settings
 from app.tools.file_manager import FileManager
 from app.utils.budget import BudgetExceededError, TaskCancelledError
-from app.utils.model_client import _is_timeout, _is_transient
+from app.utils.model_client import _is_timeout, _is_transient, leg_chain
 from app.utils.untrusted import sanitize_untrusted
 from app.utils.requirement_anchors import collect_anchors_from_text
 from app.tools.prompt_templates import (
@@ -211,19 +211,22 @@ class ModuleBuilder:
         self.main_model = main_model
         self.settings = settings
         self.file_manager = file_manager
+        # 粘性健康腿（见 _leg_chain）：整轮拆分/接口生成共享一条已验证腿
+        self._healthy_leg: str | None = None
 
     # ------------------------------------------------------------------
 
     def _leg_chain(self) -> list[str]:
-        """尝试用模型链：主模型打头，其余预设腿按序备胎（去重保序）。"""
-        ordered = [self.main_model] + list(self.settings.models or [])
-        seen: set[str] = set()
-        chain = []
-        for m in ordered:
-            if m and m not in seen:
-                seen.add(m)
-                chain.append(m)
-        return chain or [self.main_model]
+        """尝试用模型链：主模型打头，其余预设腿按序备胎（去重保序）。
+
+        已验证可用的腿置顶（粘性）：接口契约按模块逐个生成，N 个模块各
+        自「从主腿重新撞一遍」＝把已知死腿的 read timeout 乘上模块数。
+        """
+        chain = leg_chain(self.main_model, self.settings.models) or [self.main_model]
+        if self._healthy_leg in chain:
+            chain.remove(self._healthy_leg)
+            chain.insert(0, self._healthy_leg)
+        return chain
 
     def _chat_json(self, attempt: int, messages: list[dict]) -> tuple[str | None, str]:
         """第 attempt 次 json 调用 → (内容, 失败原因)，瞬态故障时内容为 None。
@@ -242,6 +245,7 @@ class ModuleBuilder:
             if not (_is_transient(exc) or _is_timeout(exc)):
                 raise
             return None, f"调用失败（网关瞬态）{type(exc).__name__} {model}: {exc}"[:200]
+        self._healthy_leg = model
         return response.content, ""
 
     def split_spec(self, spec_md: str, project_id: str | None = None,
@@ -261,6 +265,10 @@ class ModuleBuilder:
             )
         attempts = 1 + self.settings.max_parse_retries
         last_error = "未知错误"
+        # 调用级失败只按腿数预算（ModelClient 内部已对瞬态退避重试过
+        # llm_max_retries 次，外层同腿再转圈＝把整段 read timeout 重复烧）
+        legs = len(self._leg_chain())
+        call_fails = 0
         for attempt in range(attempts):
             content, call_error = self._chat_json(attempt, [
                 {"role": "system", "content": SPLIT_SYSTEM},
@@ -270,7 +278,11 @@ class ModuleBuilder:
                 # shape-keep 彩排同族：拆分环一次网关超时曾直穿成 SplitError
                 # =零交付。这里本就有条带 last_error 的重试环，调用失败并进同一条口。
                 last_error = call_error
+                call_fails += 1
+                if call_fails >= legs:
+                    break
                 continue
+            call_fails = 0
             value, _detail = parse_json(content, location="module_split")
             if value is None or not isinstance(value, dict):
                 last_error = "拆分输出解析失败"
@@ -354,6 +366,9 @@ class ModuleBuilder:
         spec_deps = {p.name: set(p.dependencies) for p in plans}
         interfaces: dict[str, dict] = {}
         attempts = 1 + self.settings.max_parse_retries
+        # 调用级失败按腿数预算（同上，拆分环那道闸）：网关整体不可用时
+        # 每个模块最多烧 len(chain) 次，而不是 attempts × 模块数
+        legs = len(self._leg_chain())
         for plan in plans:
             messages = [
                 # M15-3：风格约束段按 contract_style 运行时拼接
@@ -374,13 +389,20 @@ class ModuleBuilder:
             ]
             value = None
             last_error = "未取得可用输出"
+            call_fails = 0
+            tried = 0
             for attempt in range(attempts):
                 content, call_error = self._chat_json(attempt, messages)
+                tried += 1
                 if content is None:
                     # 接口环原先一次调用定生死：网关瞬态在此重试/换腿，
                     # 不再直穿成 SplitError=零交付（批次#21 同族）。
                     last_error = call_error
+                    call_fails += 1
+                    if call_fails >= legs:
+                        break
                     continue
+                call_fails = 0
                 parsed, _detail = parse_json(
                     content, location=f"interface_{plan.name}"
                 )
@@ -392,7 +414,7 @@ class ModuleBuilder:
             if value is None:
                 raise SplitError(
                     f"模块 {plan.name} 接口契约未取得可用输出"
-                    f"（重试 {attempts} 次）: {last_error}"
+                    f"（尝试 {tried} 次）: {last_error}"
                 )
             if any(f not in value for f in _INTERFACE_FIELDS):
                 raise SplitError(

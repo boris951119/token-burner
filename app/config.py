@@ -249,6 +249,10 @@ class Settings:
     def _validate(self) -> None:
         if not self.models:
             raise ValueError("模型列表不能为空")
+        # 空名等于没有这条腿：换腿链（model_client.leg_chain）按真值过滤，
+        # 全空名的列表会让「无可用腿」退化成一串 TypeError
+        if any(not str(m).strip() for m in self.models):
+            raise ValueError(f"模型列表存在空名称: {self.models}")
         if len(set(self.models)) != len(self.models):
             raise ValueError(f"模型列表存在重复项: {self.models}")
 

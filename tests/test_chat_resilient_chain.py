@@ -70,3 +70,32 @@ def test_no_duplicate_calls_to_healthy_model():
     engine = _engine(set())
     engine._chat_resilient(engine.dev_model, "s", "u")
     assert engine.llm.calls == ["openai/minimax-m3"]
+
+
+class _GateLLM:
+    """每次都抛同一异常的桩（总闸形态：异常源于 BudgetGuard 检查点，
+    与模型无关，换腿只是换一条腿继续违反中止指令）。"""
+
+    def __init__(self, exc):
+        self.exc = exc
+        self.calls = []
+
+    def chat(self, model, messages):
+        self.calls.append(model)
+        raise self.exc
+
+
+def test_cancel_gate_is_not_a_dead_leg():
+    """批次#24：TaskCancelledError 是 RuntimeError 子类，旧兜底分支把它
+    一并吞成 ModelChainExhausted → pipeline 按「这条腿废了」冻结当前模块
+    继续跑下一个，用户点停止后仍在烧钱（取消检查点彻底失效）。"""
+    import pytest
+
+    from app.utils.budget import BudgetExceededError, TaskCancelledError
+
+    for exc in (TaskCancelledError("用户取消"), BudgetExceededError("总闸")):
+        engine = _engine(set())
+        engine.llm = _GateLLM(exc)
+        with pytest.raises(type(exc)):
+            engine._chat_resilient(engine.dev_model, "s", "u")
+        assert engine.llm.calls == ["openai/minimax-m3"], "总闸不换腿续烧"

@@ -78,6 +78,19 @@ def _is_transient(exc: Exception) -> bool:
     return any(marker in text for marker in _TRANSIENT_MARKERS)
 
 
+def leg_chain(primary: str | None, roster: Any) -> list[str]:
+    """尝试用腿序：主腿打头，预设名单按序备胎（去重保序）。
+
+    单模型形态（runner 同模补位）下返回 [primary]——链长即调用上界，
+    死网关只烧一次墙钟而不是「重试轮数 × 腿数」。
+    """
+    chain: list[str] = []
+    for model in [primary, *(roster or [])]:
+        if model and model not in chain:
+            chain.append(model)
+    return chain
+
+
 def _apply_connection_creds(model: str, kwargs: dict[str, Any]) -> bool:
     """v1.1 C1：按模型名查连接注册表,命中则注入 api_key/base_url。
 

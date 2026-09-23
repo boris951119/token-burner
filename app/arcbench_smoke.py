@@ -1125,6 +1125,7 @@ def _llm_from(settings):
     """平台侧验收 LLM。模型级备胎链（平台首单取证：验收修复阶段
     pro 超时×3 全灭且无备胎，RuntimeError 崩穿 main → 平台 exit 1）
     ——主模型失败后依 settings.models 逐备胎，全灭上抛由调用方容错。"""
+    from app.utils.budget import BudgetExceededError, TaskCancelledError
     from app.utils.model_client import ModelClient
 
     mc = ModelClient(settings)
@@ -1139,6 +1140,9 @@ def _llm_from(settings):
         for model in chain:
             try:
                 content = mc.chat(model, messages).content or ""
+            except (BudgetExceededError, TaskCancelledError):
+                # 总闸不是「这条腿废了」：换腿续跑＝把中止指令改成多烧几腿
+                raise
             except RuntimeError as exc:
                 last_exc = exc
                 continue
@@ -1820,6 +1824,7 @@ def auto_repair(
     以 extra_issue 为主体构造修复指令。
     """
     from app.agents.repo_fixer import RepoFixer
+    from app.utils.budget import BudgetExceededError, TaskCancelledError
     from app.utils.model_client import ModelClient
 
     project_dir = Path(project_dir).resolve()
@@ -1845,6 +1850,8 @@ def auto_repair(
             _beat(project_dir, f"验收-修复LLM-{m}")
             try:
                 content = mc.chat(m, messages).content or ""
+            except (BudgetExceededError, TaskCancelledError):
+                raise  # 总闸不换腿（见 _llm_from 同款守卫）
             except RuntimeError as exc:
                 last_exc = exc
                 continue

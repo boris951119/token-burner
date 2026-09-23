@@ -284,14 +284,48 @@ class TestCallFailureDegrades:
 
     def test_recheck_call_failure_keeps_original_judgement(self):
         # 复核环：调用抛错＝拿不到复核结论 → 维持原判（模型已给过结论）
+        # 复核会逐腿再问，剧本要让整条链都失败才落到降级措辞
         llm = FlakyRouterLLM([
             eval_json(score=2, task_type="基础", reason="看着像文本活"),
-            GATEWAY_DOWN,
+            GATEWAY_DOWN, GATEWAY_DOWN, GATEWAY_DOWN, GATEWAY_DOWN,
         ])
         result = make_router(llm).route("帮我写一个脚本运行 data.py 并输出结果")
         assert result.rechecked is True
         assert result.task_type == "基础"
         assert "复核调用失败" in result.reason
+
+    def test_recheck_relays_to_backup_leg(self):
+        # 主腿废一次不代表复核拿不到结论：换腿再问，结论以复核为准
+        llm = FlakyRouterLLM([
+            eval_json(score=2, task_type="基础", reason="看着像文本活"),
+            GATEWAY_DOWN,
+            eval_json(score=7, task_type="编程", reason="其实是执行类编程活"),
+        ])
+        result = make_router(llm).route("帮我写一个脚本运行 data.py 并输出结果")
+        assert result.rechecked is True
+        assert result.task_type == "编程"
+        assert [c[0] for c in llm.calls] == ["gpt-4o", "gpt-4o", "claude-3-5-sonnet"]
+
+    def test_assess_call_failures_capped_at_leg_count(self):
+        # 调用级失败的上界＝腿数：网关整体不可用时评估环节只烧两腿，
+        # 而不是「1 + max_parse_retries」轮同一条死腿（每轮一整段 read timeout）
+        from app.config import Settings
+        llm = FlakyRouterLLM([GATEWAY_DOWN] * 4)
+        router = make_router(llm, settings=Settings(models=["gpt-4o", "m-b"]))
+        result = router.route("任意需求")
+        assert result.fallback is True
+        assert "评估调用失败" in result.reason
+        assert [c[0] for c in llm.calls] == ["gpt-4o", "m-b"]
+
+    def test_parse_failures_still_get_full_retry_budget(self):
+        # 上界只管「调不通」：调得通但输出坏，仍走满 15.3 严格重试
+        from app.config import Settings
+        llm = FlakyRouterLLM(["坏的", "依旧坏的", "彻底坏的", "还是坏的"])
+        router = make_router(llm, settings=Settings(models=["gpt-4o", "m-b"]))
+        result = router.route("任意需求")
+        assert result.fallback is True
+        assert "评估输出解析失败" in result.reason
+        assert len(llm.calls) == 4
 
     def test_recheck_parse_failure_wording(self):
         # 同为维持原判，成因措辞要把「调不通」和「听不懂」分开
