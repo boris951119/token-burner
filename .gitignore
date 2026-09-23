@@ -114,3 +114,6 @@ scripts/official_grade/probe-*
 scripts/official_grade/app-boot.log
 scripts/official_grade/grade-run.log
 scripts/official_grade/scripts/
+
+# ARC 编译器独立 venv（本机工具链，随包既无意义也不合规）
+.venv-arc/

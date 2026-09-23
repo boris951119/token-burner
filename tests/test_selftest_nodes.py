@@ -257,6 +257,42 @@ class TestGenSystemLocatorPolicy:
         assert "必须精确出现在对应控件上" not in src
 
 
+class TestTallyCountsPerTest:
+    """报告解读器的计数口径：闸的 PASS/FAIL 与修复清单全从这里的数字来。"""
+
+    @staticmethod
+    def _spec(title, statuses):
+        return {"title": title,
+                "tests": [{"results": [{"status": s} for s in statuses]}]}
+
+    def test_flat_report_matches_official_shape(self):
+        """实测（真跑 Playwright，一文件两场景）：reporter 把场景摊平成
+        多条 spec，每条 1 个 test——按 test 计数与按 spec 计数同值。"""
+        data = {"suites": [{"specs": [self._spec("first ok", ["passed"]),
+                                      self._spec("second red", ["failed"])]}]}
+        assert sg._tally(data) == (1, 1, ["second red"])
+
+    def test_nested_suites_and_multi_run_results_counted(self):
+        """嵌套 suite 必须递归到位；一条场景有多个运行结果（重试/多项目
+        矩阵）时，任一非 passed 即判红——不得被先出现的 passed 掩盖。"""
+        data = {"suites": [{"suites": [{"specs": [
+            self._spec("a", ["passed", "failed"]),
+            self._spec("b", ["passed"])]}]}]}
+        p, f, fails = sg._tally(data)
+        assert (p, f) == (1, 1) and fails == ["a"]
+
+    def test_two_tests_in_one_spec_entry_not_swallowed(self):
+        """只看 tests[0] 的写法在场景摊平的同口径下是静默吞红通道，
+        逐 test 计数把它挡死。"""
+        spec = {"title": "combo", "tests": [
+            {"results": [{"status": "passed"}]},
+            {"results": [{"status": "timedOut"}]}]}
+        assert sg._tally({"suites": [{"specs": [spec]}]}) == (1, 1, ["combo"])
+
+    def test_empty_report_is_zero_signal(self):
+        assert sg._tally({"suites": []}) == (0, 0, [])
+
+
 class TestSpecRunWallClock:
     """一轮自测的墙钟预算直接决定修复环能跑几轮（9/23 实测 16 分钟/轮）。"""
 

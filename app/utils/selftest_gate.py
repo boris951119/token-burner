@@ -642,6 +642,34 @@ def _wait_health(url: str, deadline_s: float = HEALTH_DEADLINE_S,
     return False
 
 
+def _tally(data: dict) -> tuple[int, int, list[str]]:
+    """Playwright JSON 报告 → (passed, failed, 失败标题)。
+
+    口径按 test 计数，不按文件：JSON reporter 实测把一个文件里的多条
+    场景摊平成多条 spec（各带 1 个 test），只取 tests[0] 在将来加项目
+    矩阵/多场景时会静默吞红。
+    """
+    passed = failed = 0
+    failures: list[str] = []
+
+    def walk(suite: dict) -> None:
+        nonlocal passed, failed
+        for s in suite.get("suites", []):
+            walk(s)
+        for spec in suite.get("specs", []):
+            for t in (spec.get("tests") or [{}]):
+                results = t.get("results") or [{}]
+                if all(r.get("status") == "passed" for r in results):
+                    passed += 1
+                else:
+                    failed += 1
+                    failures.append(spec.get("title", "?"))
+
+    for s in data.get("suites", []):
+        walk(s)
+    return passed, failed, failures
+
+
 def run_selftests(project_dir: Path, specs_dir: Path,
                   port_hint: int = 3411,
                   requirements_dir: Path | None = None
@@ -757,23 +785,7 @@ def run_selftests(project_dir: Path, specs_dir: Path,
             return (cpassed, 1 + len(cfail),
                     ["无自测报告"] + cfail, (pt.stdout or "")[-800:])
         data = json.loads(report.read_text(encoding="utf-8"))
-        passed = failed = 0
-        failures: list[str] = []
-
-        def walk(suite):
-            nonlocal passed, failed
-            for s in suite.get("suites", []):
-                walk(s)
-            for spec in suite.get("specs", []):
-                t = (spec.get("tests") or [{}])[0]
-                results = (t.get("results") or [{}])
-                if all(r.get("status") == "passed" for r in results):
-                    passed += 1
-                else:
-                    failed += 1
-                    failures.append(spec.get("title", "?"))
-        for s in data.get("suites", []):
-            walk(s)
+        passed, failed, failures = _tally(data)
         if passed + failed == 0 and cpassed + len(cfail):
             # specs 零收集单独留信号——编译判分再绿也掩盖不了坏 spec 连坐
             failures = ["自测 specs 零收集（坏 spec 连坐？）"]
