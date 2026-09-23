@@ -1,0 +1,5 @@
+passed=28 failed=4
+Choose note color when created
+Assign default label when creating note
+View Reminders
+Pin note when creating it

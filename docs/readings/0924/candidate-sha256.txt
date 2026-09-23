@@ -1,0 +1,9 @@
+# 候选包指纹（.tmp 会被清理，这份 manifest 是重建后的对账凭据）
+# 重建配方（工作树必须处于对应提交；v37/v38 的唯一内容差异是 app/prompts/write_code_system.md）：
+#   git checkout <批次#52c 提交 a6e352a> -- app/agents/module_builder.py app/prompts/write_code_system.md
+#   ./.venv/bin/python scripts/build_submission.py --out .tmp/submission-pack/v37.zip
+# 重建后 sha256 必须与下面一致；不一致说明构建器或工作树状态漂了，先查漂因再上传。
+# 复验脚本：同目录 verify_v38.sh（官方形态容器内七读：compileall / 提示词条款 /
+# 契约随包 / 官方题面种子 / 包内测试）。
+1744690256efad044290c9ba3f935be34e46dd30e5a1c5d72681c049c33a948a  v37.zip  (批次#52c，#52~#53 契约)
+a5a7c5cb44fd4f92011bd18a696b3642b553d6bdf61f4b485038c9f38862ce3e  v38.zip  (v37 + 批次#54 射程收口，当前候选)

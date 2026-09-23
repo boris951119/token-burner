@@ -1,0 +1,10 @@
+passed=23 failed=9
+Choose note color when created
+Assign label to a note
+Remove label from a note
+Assign default label when creating note
+Edit labels
+View list filtered by label
+View all notes
+View Reminders
+Pin note when creating it
