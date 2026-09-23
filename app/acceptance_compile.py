@@ -80,6 +80,37 @@ _CREDENTIAL_HINT = re.compile(r"@|password|passwd|token|secret", re.I)
 _ENTRY_HINT = re.compile(
     r"entry\s*url|open\s+the\s+(application|app)|打开(应用|网站)", re.I)
 
+# ---- 官方题面的种子方言：存在句（9/23 官方 6 套 webapp 题面实测）-------------
+# 上面 `Seed data:` 标记是我们【自己生成题面】的写法。官方不这么写：6/6 套题面
+# 的 seed 事实实测为 0，它把"系统里已经有一条 X"写进各节点 description 的存在句
+# （The system contains a note titled "…"），而官方用例 getByText 等的那一行恰是
+# 它。判分环看不见 ⇒ 一份官方 0/32 的交付本地只凑出 6 条事实，连
+# 「界面未实现」归并通道（_WALL_MIN=10）都永远够不到，修复环收到的是抄文案指令。
+_EXIST_CLAUSE = re.compile(
+    r"(?:"
+    r"\b(?:system|app|application|database|backend|store|site|platform|page)s?\b"
+    r"[\s\w,.-]{0,40}?\bcontain(?:s|ed)?\b"                 # The system contains …
+    r"|\bthere\s+(?:is|are|was|were)\b"                      # There is a note …
+    r"|\b(?:pre-?existing|existing|seeded)\b"                # an existing note …
+    r"|\b(?:titled|named|called|labeled|labelled)\b"         # … titled "X"
+    r"|\b(?:title|name|content|body|label|text)\s+(?:is|:|of)\b"
+    r"|(?:包含|已有|预置|预设|内置|存在)"                       # 中文存在句
+    r"|(?:标题|名称|题目)\s*(?:为|是|叫|[:：])"
+    r")[\s\w,.:;'’\-()]{0,48}$", re.I)
+# 账号/凭据语境（A verified account named "x" with password "y"）里的引号串是
+# 评测登录时敲进输入框的值，界面不承诺预先显示——判红会教模型把用户名抄上首页
+# （12306/ctrip/prestashop 题面几乎每个实体都挂在这种账号下：整族必须不判）。
+_ACCOUNT_CTX = re.compile(
+    r"\baccounts?\b|\buser(?:name)?s?\b|\blog\s*ins?\b|\bsign\s*ins?\b"
+    r"|\bcredentials?\b|\bpasswords?\b|\bemails?\b|\bauthenticated\b|\bsessions?\b"
+    r"|账号|帐号|用户名|登录|登陆|凭据", re.I)
+# 否定存在句（watched tags do not include "python"）：题面承诺的是【不含】，
+# 判"页面必须出现它"方向正好相反。
+_NEG_CLAUSE = re.compile(
+    r"\bdoes\s+not\b|\bdo\s+not\b|\bdon['’]t\b|\bnever\b|\bwithout\b"
+    r"|\bnot\s+(?:be\s+)?(?:include|contain|present|shown|available)"
+    r"|\bno\s+longer\b|不包含|没有|不存在|未包含", re.I)
+
 
 @dataclass
 class NodeChecklist:
@@ -225,8 +256,35 @@ def _typed_quotes_in(text: str) -> set[str]:
     return out
 
 
+def _existence_seeds(text: str) -> list[str]:
+    """description 存在句里声明「系统里已经存在」的实体名（官方题面的种子写法）。
+
+    按引号左侧窗口逐条判定（与点击/输入通道同一手法），三条守卫缺一即假红：
+    账号语境（那是登录输入值）、否定语境（承诺的是不含）、非存在句引号
+    （WHEN 里的控件由控件通道承诺，这里不重复挂一条）。
+    """
+    out: list[str] = []
+    if not text:
+        return out
+    body = _MD_IMG.sub("", text)
+    for pat, bt in ((_QUOTED_D, False), (_QUOTED_CJK, False),
+                    (_QUOTED_S, False), (_QUOTED_BT, True)):
+        for m in pat.finditer(body):
+            q = _clean_quote(m.group(1))
+            if not q or (bt and not _ui_like(q)) or _CREDENTIAL_HINT.search(q):
+                continue
+            left = body[max(0, m.start() - 160):m.start()]
+            if _NEG_CLAUSE.search(left) or _ACCOUNT_CTX.search(left):
+                continue
+            if not _EXIST_CLAUSE.search(left):
+                continue
+            if q not in out:
+                out.append(q)
+    return out
+
+
 def _seed_entities_of(description: str) -> list[str]:
-    """description 内 Seed data: 子句之后的引号名（与 seed_contract 同法）。"""
+    """description 里的种子实体：`Seed data:` 子句 + 官方题面的存在句两种方言。"""
     out: list[str] = []
     for m in _SEED_LINE.finditer(description or ""):
         rest = description[m.end():]
@@ -239,6 +297,9 @@ def _seed_entities_of(description: str) -> list[str]:
                 n = _clean_quote(q.group(1))
                 if n and not (bt and not _ui_like(n)) and n not in out:
                     out.append(n)
+    for n in _existence_seeds(description or ""):
+        if n not in out:
+            out.append(n)
     return out
 
 
@@ -351,7 +412,11 @@ def _facts(req_id: str, name: str, desc: str, scenarios: list[dict],
                 for q in _quotes_in(content):
                     if q not in behavior:
                         behavior.append(q)
-    seeds = [s for s in _seed_entities_of(desc) if not _CREDENTIAL_HINT.search(s)]
+    seeds = [s for s in _seed_entities_of(desc)
+             if not _CREDENTIAL_HINT.search(s)
+             # 同一节点里既是种子名又是控件名的串只挂一条（官方题面实测 4/47）：
+             # 两处各判一次会凭空多一条红，还会把修复环 20 条指令的额度占掉。
+             and s not in controls]
     # THEN 里复述的种子名不算行为断言（它们由 seed 通道静态覆盖）
     behavior = [b for b in behavior if b not in seeds and b not in controls]
     # 可点击子集必须是控件全集的子集：控件通道另有剔除口径（整句中文提示、

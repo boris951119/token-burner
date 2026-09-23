@@ -502,3 +502,69 @@ def test_backtick_written_ui_labels_reach_the_click_channel():
         == ["New Shelf", "Save Shelf"]
     # 反引号里的端点与标识符不是界面文案，不得成为判分事实
     assert _click_quotes_in("clicks `/api/books` then `submit_form`") == []
+
+
+# ---- 官方题面的种子方言：description 里的存在句 -------------------------------
+# 9/23 官方 6 套 webapp 题面实测：`Seed data:` 标记通道 seed 事实 **0/6 全空**，
+# 而官方把已存在实体写成 "The system contains a note titled \"X\""。判分红叶
+# 那批 0/32 的交付因此本地只凑出 6 条事实，连「界面未实现」归并通道都够不到。
+
+def _one(tmp_path, desc: str, when: str = 'Click the "New note" button'):
+    yaml = ('id: ROOT\ntype: FOLDER\nchildren:\n'
+            '  - id: REQ-2\n    name: Notes\n    type: FOLDER\n'
+            '    children:\n'
+            '      - id: REQ-2.1\n        name: Listing\n        type: ATOMIC\n'
+            f'        description: {desc}\n        scenarios:\n'
+            '          - name: s\n            steps:\n'
+            '              - keyword: WHEN\n'
+            f'                content: {when}\n')
+    return compile_checklists(_write(tmp_path, yaml))[0]
+
+
+def test_existence_clause_in_description_is_seed_data(tmp_path):
+    """官方写法：存在句里的实体名必须逐字出现在页面上（官方用例的 getByText
+    等的就是它）。中文存在句同一条通道。"""
+    n = _one(tmp_path, '\'The home page lists notes. The system contains a '
+                       'pinned note titled "Alpha goal" and a regular note '
+                       'titled "Beta buy".\'')
+    assert n.seed_entities == ["Alpha goal", "Beta buy"]
+    zh = _one(tmp_path, "'首页列出笔记。系统已有一条标题为“置顶待办”的记录。'")
+    assert zh.seed_entities == ["置顶待办"]
+
+
+def test_existence_clause_guards_against_phantom_reds(tmp_path):
+    """两条守卫，缺一即假红（且假红会把修复环推向"把凭据抄上首页"）：
+    ① 账号语境里的引号串是评测登录时敲进输入框的值；② 否定存在句承诺的是
+    「不含」，判"必须出现"方向相反。"""
+    acct = _one(tmp_path, '\'A verified account named "reset_flow_user" with '
+                          'password "Pass1234!" can reset the password.\'')
+    assert acct.seed_entities == []
+    # 官方 12306 REQ-5.3.1 原句是复数（accounts named "x" and "y"）：`account`
+    # 带 \b 时单数形态漏判，登录输入值被当成页面必须有的一行文案 = 幻影红
+    accts = _one(tmp_path, '\'Separate verified accounts named "booking_confirm_user" '
+                           'and "booking_edit_user", each with password '
+                           '"Password123!", can book a train.\'')
+    assert accts.seed_entities == []
+    neg = _one(tmp_path, '\'The home page shows tags whose watched list does '
+                         'not include "cobol".\'')
+    assert neg.seed_entities == []
+    # 反例自检：同一句式去掉账号语境就该收到（证明守卫不是整段放弃）
+    assert _one(tmp_path, '\'The system contains a shelf named "Release 7.1".'
+                          '\'').seed_entities == ["Release 7.1"]
+
+
+def test_existence_seed_dedupes_against_control_label(tmp_path):
+    """同串既是种子名又是控件名时只挂一条（官方题面实测 4/47）：两处各判一次
+    凭空多一条红，还会占掉修复环 20 条指令的额度。"""
+    n = _one(tmp_path, '\'The home page has a button named "Save".\'',
+             when='Click the "Save" button')
+    assert "Save" in n.control_labels
+    assert n.seed_entities == []
+
+
+def test_both_seed_dialects_coexist_without_duplicates(tmp_path):
+    """自家题面方言（Seed data: 标记）与官方存在句同段共现时逐条一次，
+    标记通道既有口径不回退。"""
+    n = _one(tmp_path, '\'Seed data: note "Gamma three". The system contains '
+                       'a note titled "Delta four".\'')
+    assert n.seed_entities == ["Gamma three", "Delta four"]
