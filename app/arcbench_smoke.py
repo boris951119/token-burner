@@ -300,20 +300,36 @@ def _page_paths(_app):
 
 
 _bodies = []
+_server_errors = []
 for _p in sorted(_page_paths(app)):
     if "<" in _p or "{" in _p:            # 带参路由留给旅程脚本
-        continue
-    if _p.startswith("/api") or "static" in _p:
         continue
     if _p in ("/openapi.json", "/docs", "/redoc", "/docs/oauth2-redirect"):
         continue
     try:
         _r = client.get(_p)
+        if getattr(_r, "status_code", 200) >= 500:
+            _server_errors.append(f"{_p} -> {_r.status_code}")
+        if _p.startswith("/api") or "static" in _p:
+            continue
+        # 锚点/ARIA 语料只收页面正文：JSON 混进去会让判分面虚胖
         _bodies.append(_r.get_data(as_text=True)
                        if hasattr(_r, "get_data")
                        else getattr(_r, "text", ""))
-    except Exception:
-        pass
+    except Exception as _exc:
+        # 9/23 mini 彩排尸检：这里曾无条件 pass，且整段跳过 /api——交付的
+        # GET /api/links 把 db 路径字符串当句柄传给 create_blueprint，500
+        # 无人认领，本地冒烟全绿而评测列表步必死。异常＝崩溃（测试客户端
+        # 已开 PROPAGATE_EXCEPTIONS），不再静默吞。
+        _server_errors.append(f"{_p} -> {type(_exc).__name__}: {str(_exc)[:60]}")
+if _server_errors:
+    failures.append(
+        "无参 GET 出现 5xx/异常（评测的列表与查询步直接死）: "
+        + "; ".join(_server_errors[:8])
+        + "——高频成因是装配层跨模块传参错位（把路径/文件名字符串当成"
+          "连接或封装对象传给对端工厂）")
+    print("\\n".join(failures))
+    raise SystemExit(1)
 
 _fa = _FieldAnchors()
 for _h in _bodies:

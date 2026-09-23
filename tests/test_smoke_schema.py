@@ -290,3 +290,50 @@ class TestHomeNavAffordance:
             "<h1>Welcome</h1><p>Nothing here yet.</p>"))
         assert not ok
         assert "占位壳" in report
+
+
+def _app_src(extra_routes: str) -> str:
+    """健康+带导航入口的合规首页，附加路由由用例给（其余判据保持全绿）。"""
+    return (
+        "from flask import Flask, jsonify\n"
+        "def create_app():\n"
+        "    app = Flask(__name__)\n"
+        "    @app.route('/api/health')\n"
+        "    def h():\n        return jsonify(status='ok')\n"
+        "    @app.route('/')\n"
+        "    def home():\n        return \"<a href='/x'>X</a>\"\n"
+        + extra_routes
+        + "    return app\n"
+    )
+
+
+class TestApiGetCrashProbe:
+    """9/23 mini 彩排尸检：交付的 GET /api/links 500（装配层把 db 路径字符
+    串当成句柄传给 create_blueprint）——旧冒烟整段跳过 /api，页面异常还
+    无条件 pass，于是本地全绿、评测列表步必死。无参 GET 的 5xx/异常从此
+    硬判红；4xx 是按设计拒绝，不算病。"""
+
+    def test_parameterless_api_500_fails_smoke(self, tmp_path):
+        ok, report = _run(tmp_path, _app_src(
+            "    @app.route('/api/links')\n"
+            "    def links():\n"
+            "        raise AttributeError(\"'str' object has no attribute"
+            " 'list_links'\")\n"))
+        assert not ok
+        assert "无参 GET" in report, report
+        assert "/api/links" in report, report
+
+    def test_api_4xx_on_missing_args_still_passes(self, tmp_path):
+        ok, report = _run(tmp_path, _app_src(
+            "    @app.route('/api/links')\n"
+            "    def links():\n"
+            "        return jsonify(error='q required'), 400\n"))
+        assert ok, report
+
+    def test_page_exception_fails_smoke(self, tmp_path):
+        """页面段同修：视图抛异常＝评测必死，不再静默吞。"""
+        ok, report = _run(tmp_path, _app_src(
+            "    @app.route('/board')\n"
+            "    def board():\n        return 1 / 0\n"))
+        assert not ok
+        assert "/board" in report, report
