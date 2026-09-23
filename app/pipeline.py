@@ -611,7 +611,8 @@ class Pipeline:
             # 中断恢复（产品审计问题 4）：进入模块开发前落盘恢复快照——
             # 恢复所需的最小充分状态（order / plans / interfaces / 模式 / 模型）
             self._persist_pipeline_state(
-                team.project_id, plans, interfaces, order, mode, models
+                team.project_id, plans, interfaces, order, mode, models,
+                budget_tokens=guard.budget_tokens,
             )
 
             result = self._develop_and_deliver(
@@ -818,6 +819,7 @@ class Pipeline:
     def _persist_pipeline_state(
         self, project_id: str, plans, interfaces: dict,
         order: list[str], mode: str, models: tuple[str, str, str],
+        budget_tokens: int = 0,
     ) -> None:
         """进入模块开发前落盘恢复快照（resume 所需的最小充分状态）。"""
         import json as _json
@@ -835,6 +837,9 @@ class Pipeline:
             "interfaces": interfaces,
             "mode": mode,
             "models": list(models),
+            # 11.0 信封快照：题面折算出的 budget_override 只活在 run() 的
+            # 局部变量里，不落盘则续跑必然退回配置缺省（见 resume 侧注释）
+            "budget_tokens": int(budget_tokens) if budget_tokens else 0,
         }
         (handle.root / "sessions" / self._STATE_FILE).write_text(
             _json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -938,10 +943,19 @@ class Pipeline:
 
         # team 轻量重建（TeamConfig 字段子集）
         main_model, dev_model, test_model = _model_triplet(models)
+        # 信封继承快照：官方题面入口的预算是按 ATOMIC 条数折算的
+        # （main.py → budget_override），这份折算只存在于护栏里。快照没有
+        # budget_tokens 的旧项目/脏值退回配置口径——但绝不能让续跑拿到比
+        # 「跑完这道题的实测成本」更小的信封，那等于第二次付费跑开局即注定撞墙。
+        try:
+            snap_budget = int(state.get("budget_tokens") or 0)
+        except (TypeError, ValueError):
+            snap_budget = 0
         team = SimpleNamespace(
             project_id=project_id,
             main_model=main_model, dev_model=dev_model, test_model=test_model,
-            budget_tokens=self.settings.task_token_budget(mode),
+            budget_tokens=(snap_budget if snap_budget > 0
+                           else self.settings.task_token_budget(mode)),
         )
         self._bind_executor_project(project_id)
         _resume_handle = self.file_manager.get_project(project_id)

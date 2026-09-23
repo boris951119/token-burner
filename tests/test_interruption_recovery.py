@@ -278,3 +278,77 @@ class TestResume:
         assert resume_llm.calls == 0          # 两模块均不重跑
         assert result.frozen_modules == ["auth"]
         assert "auth" in result.deliverable_summary
+
+
+def _one_module_state(root, extra: dict | None = None) -> None:
+    (root / "sessions").mkdir(parents=True, exist_ok=True)
+    state = {
+        "order": ["main"], "plans": [
+            {"name": "main", "responsibility": "全部", "dependencies": [],
+             "priority": 1},
+        ],
+        "interfaces": {}, "mode": "safe",
+        "models": ["gpt-4o", "deepseek-chat", "claude-3-5-sonnet"],
+    }
+    state.update(extra or {})
+    (root / "sessions" / "pipeline_state.json").write_text(
+        json.dumps(state, ensure_ascii=False), encoding="utf-8")
+    (root / "changelog" / "main").mkdir(parents=True)
+    (root / "changelog" / "main" / "validation.md").write_text(
+        "# 模块 main 验证报告\n\n- 最终状态: SUCCESS\n- 修复次数: 0\n",
+        encoding="utf-8",
+    )
+
+
+class TestResumeBudgetEnvelope:
+    """续跑必须继承 run() 那次的信封（批次#30）。
+
+    官方题面入口的预算按 ATOMIC 条数折算后只活在护栏里；快照不带它，
+    resume 就退回配置缺省——那个缺省低于跑完一道题的实测成本，等于把
+    「靠 --resume  salvage 一次崩掉的付费跑」变成注定撞墙的第二跑。"""
+
+    def test_snapshot_carries_run_envelope(self, tmp_path):
+        fm = FileManager(projects_root=tmp_path / "projects")
+        llm = ScriptedLLM(_TWO_MODULE_SCRIPTS + ["auth code"],
+                          raise_at=11, exc=KeyboardInterrupt())
+        result = _pipeline(llm, fm).run(
+            "双模块系统", models=("gpt-4o", "deepseek-chat", "claude-3-5-sonnet"),
+            mode="safe", spec_confirm="确认", budget_override=1_234_567,
+        )
+        root = fm.get_project(result.project_id).root
+        state = json.loads(
+            (root / "sessions" / "pipeline_state.json").read_text(encoding="utf-8"))
+        assert state["budget_tokens"] == 1_234_567
+
+    def test_resume_inherits_snapshot_envelope(self, tmp_path):
+        from app.utils.budget import get_active_budget_guard
+
+        fm = FileManager(projects_root=tmp_path / "projects")
+        project_id = fm.create_project("信封继承").project_id
+        _one_module_state(fm.get_project(project_id).root,
+                          {"budget_tokens": 1_234_567})
+        _pipeline(ScriptedLLM([]), fm).resume(project_id)
+        guard = get_active_budget_guard()
+        assert guard is not None and guard.budget_tokens == 1_234_567
+
+    def test_legacy_snapshot_falls_back_to_config(self, tmp_path):
+        """旧项目快照没这一项：退回配置口径而不是报错。"""
+        from app.utils.budget import get_active_budget_guard
+
+        fm = FileManager(projects_root=tmp_path / "projects")
+        project_id = fm.create_project("旧快照").project_id
+        _one_module_state(fm.get_project(project_id).root)
+        _pipeline(ScriptedLLM([]), fm).resume(project_id)
+        guard = get_active_budget_guard()
+        assert guard.budget_tokens == Settings().task_token_budget("safe")
+
+    def test_dirty_snapshot_value_falls_back(self, tmp_path):
+        from app.utils.budget import get_active_budget_guard
+
+        fm = FileManager(projects_root=tmp_path / "projects")
+        project_id = fm.create_project("脏信封").project_id
+        _one_module_state(fm.get_project(project_id).root,
+                          {"budget_tokens": "not-a-number"})
+        _pipeline(ScriptedLLM([]), fm).resume(project_id)
+        assert get_active_budget_guard().budget_tokens == \
+            Settings().task_token_budget("safe")

@@ -536,6 +536,23 @@ class TestGatewayPreflight:
         assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 1
         assert "预检全灭" in _events_text(out)
 
+    def test_task_banner_survives_dead_gateway(
+            self, monkeypatch, tmp_path, req_dir, capsys):
+        """题面横幅打在预检之前：网关全灭那次跑也要在日志里留下「读到了
+        什么题面、给了多大信封」——官方容器只看得到 stdout，而上一行打印的
+        budget= 是配置口径，不代表这一跑真正用的信封。"""
+        from app.utils.budget import size_aware_budget
+
+        out = tmp_path / "wsP2"
+        _env(monkeypatch, out)
+        _patch_llm_paths(monkeypatch, _team_result(tmp_path / "dp2"))
+        monkeypatch.setattr(
+            entry, "_gateway_preflight",
+            lambda settings: (_ for _ in ()).throw(RuntimeError("全灭")))
+        assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 1
+        printed = capsys.readouterr().out
+        assert f"任务信封={size_aware_budget(1):,}" in printed, printed[-400:]
+
 
 # ---- 预算中止的手半成品：不导出 = 已经写出来的代码换 0 分 ----
 
