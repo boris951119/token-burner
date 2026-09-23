@@ -1,5 +1,8 @@
 """ArcBenchBridge：SDK 未安装时的 no-op 保证 + 事件映射（注入桩验证）。"""
 
+import sys
+import types
+
 from app.arcbench_bridge import ArcBenchBridge
 
 
@@ -20,6 +23,9 @@ class _FakeEvents:
 class _FakeTraceability:
     def __init__(self) -> None:
         self.calls: list[tuple] = []
+
+    def init_db(self, *, reset: bool = False) -> None:
+        self.calls.append(("init_db", {}))
 
     def store_requirement_tree(self, tree) -> None:
         self.calls.append(("store_requirement_tree", tree))
@@ -209,6 +215,116 @@ class TestModuleTestRegistration:
         assert tests[0][1]["passed"] is False
         assert [c for c in rt.traceability.calls
                 if c[0] == "set_interface_implemented"] == []
+
+
+class TestBootstrapWithoutGit:
+    """生产惰性装配：官方容器无 git 二进制时的 resilience。
+
+    runA/runB 彩排取证（9/23）：旧实现把 self._runtime 赋值排在
+    ensure_repo 之后，而 ensure_repo 要 subprocess 调 git ——
+    FileNotFoundError 一抛，单例永远立不起来，每次 _rt() 都重跑
+    from_env+init_db（runner-events.jsonl 只剩 7 条
+    traceability_store_initialized、零条业务事件），traceability 七张表
+    交付时全空 {}，平台的 feature_implementation_rate（靠接口/测试登记
+    激活）直接挂零。
+    """
+
+    class _Git:
+        def __init__(self, git_available: bool):
+            self.git_available = git_available
+            self.gitignore_writes = 0
+            self.commit_attempts = 0
+
+        def ensure_arc_gitignore(self):
+            self.gitignore_writes += 1
+
+        def ensure_repo(self, *, create_initial_commit: bool = True) -> None:
+            if not self.git_available:
+                raise FileNotFoundError(2, "No such file or directory: 'git'")
+
+        def commit(self, message: str) -> None:
+            self.commit_attempts += 1
+            if not self.git_available:
+                raise FileNotFoundError(2, "No such file or directory: 'git'")
+
+    class _Runtime:
+        def __init__(self, git_available: bool = False):
+            self.events = _FakeEvents()
+            self.traceability = _FakeTraceability()
+            self.git = TestBootstrapWithoutGit._Git(git_available)
+
+    def _install_fake_sdk(self, monkeypatch, runtime, calls: list):
+        class _AgentRuntime:
+            @staticmethod
+            def from_env():
+                calls.append("from_env")
+                return runtime
+
+        monkeypatch.setitem(
+            sys.modules, "arcbench_agent_runtime",
+            types.SimpleNamespace(AgentRuntime=_AgentRuntime))
+
+    def test_gitless_container_still_reports_and_bootstraps_once(self, monkeypatch):
+        rt = self._Runtime(git_available=False)
+        calls: list = []
+        self._install_fake_sdk(monkeypatch, rt, calls)
+        bridge = ArcBenchBridge()  # 不注入：走真惰性 import 分支
+        bridge.run_started("go")
+        bridge.handle("module_done", {"module": "auth", "status": "SUCCESS",
+                                      "fix_attempts": 0, "message": "ok"})
+        bridge.run_completed("done")
+        assert _names(rt.events) == [
+            "mark_run_started", "mark_implementation_done",
+            "mark_test_passed", "mark_run_completed",
+        ]
+        assert [c[0] for c in rt.traceability.calls] == [
+            "init_db", "upsert_test", "set_interface_implemented",
+            "set_interface_implemented",
+        ]
+        assert calls == ["from_env"]  # 旧行为：三个调用点各重装配一次
+        assert bridge._git_ready is False
+
+    def test_gitignore_written_even_without_git(self, monkeypatch):
+        """ensure_arc_gitignore 不调 git，且它才是「.env 不提交／
+        .arc/traceability 必须提交」的那份清单——旧顺序挂在 ensure_repo
+        同一个失败域后面，无 git 时从未落地。"""
+        rt = self._Runtime(git_available=False)
+        self._install_fake_sdk(monkeypatch, rt, [])
+        ArcBenchBridge().run_started("go")
+        assert rt.git.gitignore_writes == 1
+
+    def test_failed_git_repo_skips_per_module_commit(self, monkeypatch):
+        rt = self._Runtime(git_available=False)
+        self._install_fake_sdk(monkeypatch, rt, [])
+        bridge = ArcBenchBridge()
+        for module in ("auth", "booking"):
+            bridge.handle("module_done", {"module": module,
+                                          "status": "SUCCESS",
+                                          "fix_attempts": 0})
+        assert rt.git.commit_attempts == 0
+        assert len(_names(rt.events)) == 4  # 事件照报，只是没有提交历史
+
+    def test_git_available_keeps_commit_history(self, monkeypatch):
+        rt = self._Runtime(git_available=True)
+        self._install_fake_sdk(monkeypatch, rt, [])
+        bridge = ArcBenchBridge()
+        bridge.handle("module_done", {"module": "auth", "status": "SUCCESS",
+                                      "fix_attempts": 0})
+        assert bridge._git_ready is True
+        assert rt.git.commit_attempts == 1
+
+    def test_from_env_blowup_degrades_to_noop(self, monkeypatch):
+        class _AgentRuntime:
+            @staticmethod
+            def from_env():
+                raise RuntimeError("workspace 不存在")
+
+        monkeypatch.setitem(sys.modules, "arcbench_agent_runtime",
+                            types.SimpleNamespace(AgentRuntime=_AgentRuntime))
+        bridge = ArcBenchBridge()
+        bridge.run_started("go")  # 不上抛即可
+        bridge.handle("module_done", {"module": "x", "status": "SUCCESS"})
+        assert bridge._runtime is None
 
 
 def test_pipeline_emits_interfaces_ready(tmp_path):

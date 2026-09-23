@@ -48,6 +48,8 @@ class ArcBenchBridge:
         self._injected = runtime
         self._runtime = None
         self._emit_lock = threading.Lock()
+        # git 一路是否可用（首次装配算出，或注入桩默认给了 True）
+        self._git_ready = True
         # 模块名 → 平台 REQ 节点 id；显式映射优先，其余按 FOLDER 名模糊匹配
         self._node_map = dict(node_map or {})
         # store_tree 缓存的 FOLDER 索引（[{"id","name"}]）
@@ -56,7 +58,18 @@ class ArcBenchBridge:
     # ---- 内部 ----
 
     def _rt(self):
-        """惰性取 SDK 单例；未安装返回 None（本地 no-op）。"""
+        """惰性取 SDK 单例；未安装返回 None（本地 no-op）。
+
+        装配分三段、各自独立成败。runA/runB 两跑彩排取证（9/23，容器无
+        git）：旧实现把 self._runtime 的赋值排在 ensure_repo 之后，而
+        ensure_repo 要 subprocess 调 git——FileNotFoundError 一抛，单例永远
+        立不起来，于是每次 _rt() 都从 from_env 重装配一遍并再发一次
+        traceability_store_initialized（runner-events.jsonl 里 7 条这种、
+        零条业务事件），run_started/module_done/run_completed 全部原地蒸发，
+        traceability 七张表交付时仍是全空 {}。代价不止面板难看：平台的
+        feature_implementation_rate 靠接口/测试登记激活，登记没落地＝挂零。
+        git 只服务「提交历史 + 预览刷新」这一路，它缺阵不该带走整个上报层。
+        """
         with self._emit_lock:
             if self._runtime is not None:
                 return self._runtime
@@ -65,14 +78,38 @@ class ArcBenchBridge:
                 return self._runtime
             try:
                 from arcbench_agent_runtime import AgentRuntime
+                rt = AgentRuntime.from_env()
             except ImportError:
                 return None
-            rt = AgentRuntime.from_env()
-            rt.traceability.init_db()
-            rt.git.ensure_repo(create_initial_commit=True)
-            rt.git.ensure_arc_gitignore()
-            self._runtime = rt
+            except Exception as exc:
+                print(f"[platform] SDK 装配失败，本次运行不上报平台: {exc!r}"[:220])
+                return None
+            self._runtime = rt  # 先认单例：后面哪步缺依赖都不该再重装配一次
+            try:
+                rt.traceability.init_db()
+            except Exception as exc:
+                print(f"[platform] traceability 建表失败: {exc!r}"[:220])
+            self._git_ready = self._init_git(rt)
             return self._runtime
+
+    def _init_git(self, rt) -> bool:
+        """git 一路尽力而为：先用纯文件操作钉好 .gitignore，再试建库。
+
+        ensure_arc_gitignore 不调 git（只写 project_dir/.gitignore），排在
+        ensure_repo 之前才有意义——旧顺序下它跟 ensure_repo 同一个失败域，
+        无 git 时从未执行，而它正是「.env/*.db 不进提交、.arc/traceability
+        必须进提交」的那份清单。
+        """
+        try:
+            rt.git.ensure_arc_gitignore()
+        except Exception as exc:
+            print(f"[platform] .gitignore 写入失败: {exc!r}"[:220])
+        try:
+            rt.git.ensure_repo(create_initial_commit=True)
+            return True
+        except Exception as exc:
+            print(f"[platform] git 不可用，仅关闭提交历史，事件上报继续: {exc!r}"[:220])
+            return False
 
     def _node(self, module: str) -> str:
         if module in self._node_map:
@@ -186,10 +223,11 @@ class ArcBenchBridge:
         elif status == "FROZEN":
             rt.events.mark_test_failed(node, message)
         # AWAITING_FEEDBACK 仅出现在安全模式交互闭环，平台 headless 不触发
-        try:
-            rt.git.commit(f"module:{module} {status}")
-        except Exception:
-            pass
+        if self._git_ready:
+            try:
+                rt.git.commit(f"module:{module} {status}")
+            except Exception:
+                self._git_ready = False  # 撞一次即收手，不在每个模块上重撞
         self._register_module_test(rt, module, node, status)
 
     # ---- traceability 登记（失败静默，不影响事件主链路）----
