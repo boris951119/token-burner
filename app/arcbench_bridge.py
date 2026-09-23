@@ -233,17 +233,22 @@ class ArcBenchBridge:
     # ---- traceability 登记（失败静默，不影响事件主链路）----
 
     def _register_interfaces(self, interfaces: dict) -> None:
-        """契约快照 → interfaces 表（未实现态）+ 设计完成事件。"""
+        """契约快照 → interfaces 表（未实现态）+ node_contracts + 设计完成事件。
+
+        逐模块各自成败：旧写法整段一个 try，第一个模块抛错就把后面所有模块
+        的登记一起吞掉——而这批登记正是官方 avg_feature_implementation_rate
+        的数据来源，少一个模块就少一块分。
+        """
         try:
             rt = self._rt()
         except Exception:
             return
         if rt is None or not interfaces:
             return
-        try:
-            for module, contract in interfaces.items():
-                if not isinstance(contract, dict):
-                    continue
+        for module, contract in interfaces.items():
+            if not isinstance(contract, dict):
+                continue
+            try:
                 node = self._node(str(module))
                 exports = [
                     str(e).strip()
@@ -259,9 +264,19 @@ class ArcBenchBridge:
                         content=sym,
                         implemented=False,
                     )
+                rt.traceability.upsert_node_contract(node, {
+                    "module": str(module),
+                    "exports": exports,
+                    "public_api": [str(p).strip()
+                                   for p in (contract.get("public_api") or [])
+                                   if str(p).strip()],
+                    "dependencies": [str(d).strip()
+                                     for d in (contract.get("dependencies") or [])
+                                     if str(d).strip()],
+                })
                 rt.events.mark_design_done(node, "spec 与接口契约定稿")
-        except Exception:
-            pass
+            except Exception:
+                continue  # 一个模块的登记失败不该连坐其余模块
 
     def _register_module_test(self, rt, module: str, node: str, status: str) -> None:
         """模块终态 → tests 表登记（SUCCESS/FROZEN 才有确定通过态）。"""

@@ -36,6 +36,9 @@ class _FakeTraceability:
     def upsert_test(self, **kwargs) -> None:
         self.calls.append(("upsert_test", kwargs))
 
+    def upsert_node_contract(self, req_id, content) -> None:
+        self.calls.append(("upsert_node_contract", (req_id, content)))
+
     def list_interfaces(self, *, req_id=None):
         return [{"interface_id": f"{req_id}::sym_a"},
                 {"interface_id": f"{req_id}::sym_b"}]
@@ -185,6 +188,40 @@ class TestInterfacesReady:
         design_done = [c for c in rt.events.calls
                        if c[0] == "mark_design_done"]
         assert {c[1][0] for c in design_done} == {"F1", "F3"}
+
+    def test_node_contract_registered_verbatim(self):
+        """契约原文进 node_contracts：官方节点契约面板由此才有数据，
+        而 avg_feature_implementation_rate 的口径就是 traceability 登记。"""
+        rt = _FakeRuntime()
+        bridge = _tree_bridge(rt)
+        bridge.handle("interfaces_ready", {"interfaces": {
+            "auth": {"exports": ["login(u, p)"], "public_api": ["login(u, p)"],
+                     "dependencies": ["db"]}}})
+        contracts = [c for c in rt.traceability.calls
+                     if c[0] == "upsert_node_contract"]
+        assert contracts[0][1] == ("F1", {
+            "module": "auth", "exports": ["login(u, p)"],
+            "public_api": ["login(u, p)"], "dependencies": ["db"]})
+
+    def test_one_module_boom_does_not_erase_the_rest(self):
+        """旧写法整段一个 try：第一个模块抛错＝后面所有模块的登记一起没了。"""
+        class _PartialTrace(_FakeTraceability):
+            def upsert_interface(self, **kwargs):
+                if kwargs["interface_id"].startswith("auth::"):
+                    raise RuntimeError("auth 登记炸了")
+                super().upsert_interface(**kwargs)
+
+        rt = _FakeRuntime()
+        rt.traceability = _PartialTrace()
+        bridge = _tree_bridge(rt)
+        bridge.handle("interfaces_ready", {"interfaces": {
+            "auth": {"exports": ["login(u, p)"], "public_api": []},
+            "booking": {"exports": ["book(t)"], "public_api": []}}})
+        done = {c[1][0] for c in rt.events.calls
+                if c[0] == "mark_design_done"}
+        assert done == {"F3"}  # auth 那格没走到设计完成，booking 照登
+        assert [c[1]["interface_id"] for c in rt.traceability.calls
+                if c[0] == "upsert_interface"] == ["booking::book"]
 
 
 class TestModuleTestRegistration:
