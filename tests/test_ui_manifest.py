@@ -106,6 +106,18 @@ class TestAriaRoleContract:
         assert 'role="status"' in r and 'role="alert"' in r, "缺反馈实况区"
         assert "不能只有标题或正文文本" in r, "缺入口控件硬通道一行"
 
+    def test_same_name_must_not_also_sit_on_a_heading(self):
+        """9/23 官方 helpers.ts 真身取证（keep/ctrip/prestashop 三份同形）：
+        可访问名是按固定角色序逐个试的，firstVisible 取到第一个可见的就收手
+        ——heading 排在 label/placeholder 之前。当期交付 08 把入口短语同时
+        写成 <h2>Take a note</h2> 与输入框 placeholder，标题赢下点击：页面
+        正常、控件正常、用例就是点不到，与「控件缺失」是两种病。旧规则只
+        写了正向（入口要真控件），漏了反向（同一短语不得再长在标题上）。"""
+        r = self._inject()
+        assert "button→link→menuitem" in r, "缺可访问名的角色解析顺序"
+        assert "把点击从" in r, "缺「标题抢位」这一失效机理"
+        assert "placeholder/label 上时" in r, "缺反向约束（改写同页标题措辞）"
+
     def test_card_container_and_state_attribute(self):
         """9/23 官方 helpers 真身取证（判分工作区 specs/*/helpers.ts）：卡片
         解析器首选容器只有 getByRole('article')，之后每个行内操作都是
