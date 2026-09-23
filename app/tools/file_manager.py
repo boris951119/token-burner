@@ -37,6 +37,24 @@ if _CODE_DIR.is_dir() and str(_CODE_DIR) not in sys.path:
 '''
 
 
+# 包入口即实现模块本身（9/23 官方镜像彩排取证）：旧写法
+# `from <m>.<m> import *` 只是【副本绑定】——测试对被包名 patch 的模块级
+# 常量（DB_PATH 这类）打不着真身，一份 85 例的模块自测因此成片假红
+# （7 例红全源于此，修复环白烧轮次）；运行时「import <m>; <m>.CONST=…」
+# 的装配赋值同样静默失效。别名后包名与子模块是同一个对象，读写同源。
+# __path__ 与自引用保住 `import <m>.<m>`、`from <m>.<m> import x`、
+# `python -m <m>.<m>` 与 pkgutil 子模块检索（四形逐一试过）。
+_PKG_SHIM = '''"""{module} 包入口：包名即实现模块（属性读写与 {module}.{module} 同源）。"""
+import sys as _sys
+
+from . import {module} as _impl
+
+_impl.__path__ = __path__
+_impl.{module} = _impl
+_sys.modules[__name__] = _impl
+'''
+
+
 # v1.2 S0:并行开发下 _shared 写入串行化(模块级锁)
 _SHARED_WRITE_LOCK = threading.Lock()
 
@@ -167,13 +185,12 @@ class FileManager:
         path = handle.root / "code" / module / filename
         path.parent.mkdir(parents=True, exist_ok=True)
         _write_text(path, content)
-        # 交付物可运行性：约定文件名（<module>.py）时生成包级重导出 init，
-        # 使 `from <module> import <符号>` 与 python -m <module>.<module> 可用
+        # 交付物可运行性：约定文件名（<module>.py）时生成包入口 init
+        # （包名别名到实现模块，见 _PKG_SHIM），使 `from <module> import
+        # <符号>` 与 python -m <module>.<module> 可用且属性读写同源
         if filename == f"{module}.py":
-            _write_text(
-                path.parent / "__init__.py",
-                f"from {module}.{module} import *  # noqa: F401,F403  包级重导出\n",
-            )
+            _write_text(path.parent / "__init__.py",
+                        _PKG_SHIM.format(module=module))
         self._log(handle, "写入代码文件", path.relative_to(handle.root).as_posix())
         return path
 

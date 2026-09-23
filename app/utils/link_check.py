@@ -46,6 +46,35 @@ class LinkCheckResult:
     files_cached: int = 0
 
 
+def pkg_self_alias(tree: ast.AST) -> str | None:
+    """包入口是否把【包名本身】别名到同级模块，返回该同级模块的点分路径。
+
+    file_manager 的包入口约定（_PKG_SHIM）是 `from . import <m> as _impl`
+    + `sys.modules[__name__] = _impl`：运行时包名与实现模块是同一对象，
+    符号读写同源。静态符号索引必须认这个形，否则包键只剩 `_impl` 一个名，
+    整树跨模块引用全被误判断裂（实测 7 例流水线测试连环节——假红会白烧
+    修复轮次）。两形缺一不认：只写 `from . import helpers` 的普通包不暴露
+    helpers 的内容，认早了就是假绿。
+    """
+    bound: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and node.level >= 1:
+            for a in node.names:
+                path = f"{node.module}.{a.name}" if node.module else a.name
+                bound[a.asname or a.name] = path
+    for node in tree.body:
+        if not (isinstance(node, ast.Assign)
+                and isinstance(node.value, ast.Name)):
+            continue
+        if any(isinstance(t, ast.Subscript)
+               and isinstance(t.value, ast.Attribute)
+               and t.value.attr == "modules"
+               and isinstance(t.slice, ast.Name)
+               and t.slice.id == "__name__" for t in node.targets):
+            return bound.get(node.value.id)
+    return None
+
+
 class _SymbolIndex:
     """项目符号索引：模块名 → 顶层符号集（带 mtime/size 增量缓存）。"""
 
@@ -56,12 +85,18 @@ class _SymbolIndex:
         self._cache: dict[str, tuple[float, int, frozenset[str]]] = {}
 
     @staticmethod
-    def _top_names(source: str) -> frozenset[str] | None:
-        """顶层符号集；语法错误返回 None（由静态门禁负责语法报错）。"""
+    def _top_names(source: str, pkg: str | None = None
+                   ) -> frozenset[str] | None:
+        """顶层符号集；语法错误返回 None（由静态门禁负责语法报错）。
+
+        pkg 非空表示这是包入口（`code/<pkg>/__init__.py`）：额外的
+        包名别名形态按延迟标记展开（见 pkg_self_alias）。
+        """
         try:
             tree = ast.parse(source)
         except SyntaxError:
             return None
+        alias = pkg_self_alias(tree) if pkg else None
         names: set[str] = set()
         for node in tree.body:
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef,
@@ -79,11 +114,17 @@ class _SymbolIndex:
             elif isinstance(node, ast.ImportFrom):
                 # 包级 __init__ 的重导出（file_manager 约定：
                 # from <pkg>.<mod> import *）——符号 = 被引模块符号集
-                for alias in node.names:
-                    if alias.name == "*":
+                for alias_name in node.names:
+                    if alias_name.name == "*":
                         names.add(f"*{node.module}")   # 延迟展开标记
+                    elif (alias and node.level >= 1 and alias_name.name
+                          == alias):
+                        # 包名别名到同级实现模块：符号与该模块同源
+                        sub = (f"{node.module}.{alias_name.name}"
+                               if node.module else alias_name.name)
+                        names.add(f"*{pkg}.{sub}")
                     else:
-                        names.add(alias.name)
+                        names.add(alias_name.name)
         return frozenset(names)
 
     def _expand_stars(self, names: frozenset[str]) -> frozenset[str]:
@@ -119,7 +160,8 @@ class _SymbolIndex:
         if cached and cached[0] == stat.st_mtime and cached[1] == stat.st_size:
             return cached[2]
         names = self._top_names(
-            py.read_text(encoding="utf-8", errors="replace")
+            py.read_text(encoding="utf-8", errors="replace"),
+            pkg=module_key if py.name == _INIT_PY else None,
         )
         if names is None:
             return None

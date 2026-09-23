@@ -110,6 +110,8 @@ def generate_app_main(surfaces: list[ModuleSurface]) -> str:
             imports.append(f"import {s.name}  # noqa: F401  (保底导入)")
     imports = sorted(set(imports))
     return f'''"""机械装配的组装模块（mechanical_assembly 生成，勿手改）。"""
+__arcbench_assembled__ = True  # 保底壳标记：入口择优时永不让它压过作者入口
+
 import os
 
 from flask import Flask, jsonify
@@ -169,6 +171,8 @@ def generate_app_main_fastapi(surfaces: list[ModuleSurface]) -> str:
             imports.append(f"import {s.name}  # noqa: F401  (保底导入)")
     imports = sorted(set(imports))
     return f'''"""机械装配的组装模块（mechanical_assembly 生成，勿手改）。"""
+__arcbench_assembled__ = True  # 入口择优时让位作者入口
+
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 

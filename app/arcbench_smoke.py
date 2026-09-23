@@ -116,6 +116,9 @@ def _route_count(_c):
 # 9/22 stackoverflow 取证：候选全收集按【路由数最多】择优——业务包
 # 自带裸自测 app（有 health 无业务路由）迭代序抢先当选 → 冒烟加载
 # 的 app 与导出入口不一致。作者入口=路由面最广者，装配壳垫后。
+# 9/23 审计取证：导出启动器原先「模块级 app 非空即返回」，与本处口径
+# 不一致——本地测真应用、runner 起裸壳时冒烟全绿而平台首页 404。两处
+# 择优算法必须逐字同构（含保底壳让位规则），否则闸永远测不到判分面。
 _cands = []
 for mod in mods:
     cand = getattr(mod, "app", None) or getattr(mod, "application", None)
@@ -127,6 +130,9 @@ for mod in mods:
             _cands.append((mod.__name__, mod.create_app()))
         except Exception:
             continue
+_shell = {mod.__name__ for mod in mods
+          if getattr(mod, "__arcbench_assembled__", False)}
+_cands = [x for x in _cands if x[0] not in _shell] or _cands
 _CONVENTION = ("main", "app", "app_main", "project_main",
                 "server", "wsgi", "run")
 _pref = [x for x in _cands if x[0].lower() in _CONVENTION]
@@ -174,6 +180,21 @@ else:                                   # FastAPI
 # ① 首页渲染出未求值模板/被转义 HTML = 页面是死文本，评测全灭；
 # ② 首页没有 <a> 链接 = 占位壳页（评测从首页导航出发）；
 # ③ Flask 有登录路由但缺 secret_key = 登录 POST 必 500。
+def _has_nav(_b):
+    """首页有没有「评测点得动」的入口控件。
+
+    9/23 mini 彩排取证：需求只给一个 Enter Website 按钮 + JS 切区的落地页，
+    被旧判据「首页必须有 <a>」判成占位壳页——按钮与链接在评分器眼里是同一条
+    role 通道，判据比官方紧一寸就是白烧一轮修复（还可能把合规页改坏）。
+    占位按钮（有标签没接线）由 acceptance_judge 的逐页接线证据负责，这里
+    只拦「整页没有任何可点控件」这种真空壳。
+    """
+    _b = _b.lower().replace('"', '').replace("'", "")
+    return any(_t in _b for _t in (
+        "<a ", "<a>", "<button", "role=button", "role=link",
+        "type=submit", "type=button", "action="))
+
+
 if home.status_code == 200:
     _body = (home.get_data(as_text=True)
              if hasattr(home, "get_data") else getattr(home, "text", ""))
@@ -185,9 +206,10 @@ if home.status_code == 200:
         failures.append("GET / 渲染出被转义的 HTML（&lt;）——模板双重"
                         "转义：内层 HTML 传入外层模板必须加 |safe")
         ok = False
-    elif "<a " not in _body:
-        failures.append("GET / 页面没有任何 <a> 链接——占位壳页，"
-                        "首页必须渲染真实导航（评测全部用例从首页出发）")
+    elif not _has_nav(_body):
+        failures.append("GET / 页面没有任何可点控件（链接/按钮/提交/表单）"
+                        "——占位壳页，首页必须渲染真实导航（评测全部用例"
+                        "从首页出发）")
         ok = False
 if hasattr(app, "wsgi_app") and getattr(app, "secret_key", None) is None:
     _has_login = any(
@@ -874,7 +896,8 @@ _JOURNEY_USER = """根据需求摘要与真实路由表，生成该 Web 应用�
 
 硬性规则：
 1. 只走需求的主成功旅程（5-8 步，典型：注册→登录→核心查询→
-   提交业务→查记录），**禁止**逐个访问路由表里的所有路径，禁止测试
+   提交业务→查记录；需求没有账号概念时从首页/列表起步，**不要**
+   为了凑步数发明注册登录步），**禁止**逐个访问路由表里的所有路径，禁止测试
    内部/管理/基建类端点（如建表、初始化、路由注册类）；
 2. 路径、HTTP 方法与查询参数名必须逐字取自上方路由表，**禁止访问
    表中不存在的路径**，禁止发明任何端点或参数；
@@ -894,15 +917,17 @@ _JOURNEY_USER = """根据需求摘要与真实路由表，生成该 Web 应用�
    脚本直连数据库连错库报 `no such table`，从未走到业务断言）；
 8. 每步 resp = c.post(...)/c.get(...) 后立刻 assert，断言消息含步骤名。
 
-行为探针（除主旅程外必须包含，各 1-2 步即可）：
-A. 重复注册拒绝：用已注册成功的同一用户名再注册一次，断言
-   `resp.status_code in (400, 401, 403, 409)`——需求几乎总是要求
-   重复注册被拒绝，200/201 属于静默成功违约（r15 实证）；
-B. 种子字符串断言：需求给出的精确数据（如车次号、站点名、用户名）
+行为探针（除主旅程外必须包含，各 1-2 步即可；需求没有对应功能时
+该探针整条跳过，严禁为了凑探针而发明端点）：
+A. 唯一性冲突拒绝：需求点名的唯一字段（用户名、编码、标题、邮箱等）
+   重复提交一次，断言 `resp.status_code in (400, 401, 403, 409)`——
+   需求几乎总是要求重复提交被拒绝，200/201 属于静默成功违约（r15 实证）；
+B. 种子字符串断言：需求给出的精确数据（如编号、名称、标题）
    若出现在查询/列表响应中，用这些精确字符串断言存在性——这是
    评测方 e2e 夹具的断言方式；
-C. 错误密码登录：断言 `resp.status_code in (400, 401, 403)`，
-   不得放行 2xx。
+C. 非法输入拒绝：含登录的应用用错误密码登录，断言
+   `resp.status_code in (400, 401, 403)` 不得放行 2xx；无登录的应用
+   对必填字段留空提交，断言 4xx。
 """
 
 
@@ -1894,8 +1919,8 @@ def auto_repair(
             "页 + 隐藏文本塞串导致评测全盘落空）。"
             "保证所有模块可导入、create_app 可用、健康检查 200。\n"
             "硬性约束（r8 取证）：**禁止删除或绕过 create_app 中已有的业务"
-            "路由注册逻辑**（register/login/search/booking 等真实业务端点"
-            "一个都不能少）——import 缺失用补建别名/垫片模块解决，"
+            "路由注册逻辑**（需求点名的业务端点——列表、详情、创建、"
+            "更新、删除、查询——一个都不能少）——import 缺失用补建别名/垫片模块解决，"
             "而不是删减组装逻辑；修残应用的验收会被下游旅程门禁拒绝。"
             "禁止修改 tests/ 目录；禁止重构无关代码。"
         )

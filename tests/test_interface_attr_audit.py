@@ -5,6 +5,7 @@ from pathlib import Path
 
 from app.utils.interface_attr_audit import (
     audit_attr_calls,
+    module_symbols,
     audit_interface_drift,
     audit_interfaces_contract,
 )
@@ -95,3 +96,40 @@ def test_clean_project_silent(tmp_path: Path):
     assert audit_attr_calls(project / "code") == []
     assert audit_interfaces_contract(project) == []
     assert audit_interface_drift(project / "code", project) == []
+
+
+_SHIM_INIT = '''"""validator 包入口：包名即实现模块（属性读写与 validator.validator 同源）。"""
+import sys as _sys
+
+from . import validator as _impl
+
+_impl.__path__ = __path__
+_impl.validator = _impl
+_sys.modules[__name__] = _impl
+'''
+
+
+def _pkg(tmp_path: Path, init_src: str) -> Path:
+    """双形态包：实现模块有公开名 check，包入口按传入文本决定可见面。"""
+    code = tmp_path / "code"
+    pkg = code / "validator"
+    pkg.mkdir(parents=True)
+    (pkg / "validator.py").write_text(
+        "def check(x):\n    return bool(x)\n", encoding="utf-8")
+    (pkg / "__init__.py").write_text(init_src, encoding="utf-8")
+    return code
+
+
+def test_pkg_shim_symbols_come_from_impl(tmp_path):
+    """审计器认包名别名（file_manager _PKG_SHIM）：`from validator import
+    check` 在运行时成立，报幻觉导入就是假红——与链接门禁同一族。"""
+    assert "check" in module_symbols(_pkg(tmp_path, _SHIM_INIT))["validator"]
+
+
+def test_plain_relative_import_still_hides_impl_symbols(tmp_path):
+    """假绿防线：没有 sys.modules[__name__] 赋值时包名不等同实现模块，
+    其内容不可见——可见面不许凭空放大。"""
+    syms = module_symbols(
+        _pkg(tmp_path, "from . import validator  # 只挂子模块名\n"))["validator"]
+    assert "check" not in syms
+    assert "validator" in syms

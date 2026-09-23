@@ -30,21 +30,27 @@ from app.utils.auto_fixer import _py_files, _read
 _BACKEND_MAIN = '''\
 """官方 runner 启动入口：PORT 环境变量（默认 3301），/api/health 就绪。
 
-入口探测两遍（9/20 泛化取证：只认 create_app 会漏掉 FastAPI 风格的
-模块级 `app = FastAPI()` 入口——生成的项目两种风格都可能出现）：
-① 模块级 app/application 可调用属性（作者入口优先——pro 修好的
-  main.py 若能 import，必须压过机械装配的保底壳，否则修复被旁路）
-② 任意模块 create_app() 工厂（机械装配兜底）
+入口择优：模块级 `app`/`application` 与 `create_app()` 工厂【同池竞争】，
+池内按「约定入口名优先 → 路由数最多」择优（与本地冒烟闸同一套算法，
+9/23 审计取证：两套择优算法＝本地绿、平台 404 的错配温床）。
 两遍全空且探测期见过「缺三方依赖」时，原地按 backend/requirements.txt
 补装一次再探（官方容器不保证替产物装依赖）。
-起服：WSGI（有 wsgi_app，Flask）→ app.run；ASGI（FastAPI/Starlette）
-→ uvicorn。
+起服前保底挂 GET /api/health：runner 60 秒轮询这条路由，产物漏写 = 整跑
+不评分，而「有没有 health」是布局契约而不是业务功能，不该交给概率。
 """
 import importlib
 import os
 import pkgutil
 import sys
 from pathlib import Path
+
+try:
+    # 本启动器的日志有中文，runner 侧捕获 stdout：一次 UnicodeEncodeError
+    # 就能把起得来的服务换成崩服，编码问题按环境问题处理，不留给概率。
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
 
 _CODE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_CODE))
@@ -59,7 +65,7 @@ _missing: set[str] = set()          # 探测期缺失的顶层导入名
 
 def _iter_mods():
     for _m in pkgutil.walk_packages([str(_CODE)]):
-        if _m.name.startswith(("_", "main")):
+        if _m.name.startswith(("_", "main", "test")):
             continue
         try:
             yield importlib.import_module(_m.name)
@@ -82,21 +88,29 @@ def _route_count(_cand):
 
 
 def _discover():
+    """入口候选池：模块级 app 与 create_app() 工厂同池竞争。
+
+    9/20 泛化：只认 create_app 会漏掉 FastAPI 风格的模块级 `app = FastAPI()`；
+    9/23 审计取证：原来「①非空即返回」把工厂池整个丢掉，而本地冒烟闸是
+    同池择优——作者入口由 create_app() 提供、某个业务包又自带裸自测
+    `app = Flask()` 时，本地测真应用、runner 起空壳，冒烟全绿而平台首页 404。
+    闸与判分面只能有一套算法：此处与 arcbench_smoke 逐字对齐，择优规则
+    （约定名优先→路由数）也在下方共用同一份口径。
+    """
+    _mods = list(_iter_mods())              # 单次 walk：全树导入只做一遍
     _c = []
-    for _mod in _iter_mods():                   # ① 模块级 app/application
+    for _mod in _mods:                      # ① 模块级 app/application
         _cand = getattr(_mod, "app", None) or getattr(
             _mod, "application", None)
         if (_cand is not None and callable(_cand)
                 and not isinstance(_cand, type)):
             _c.append((_mod.__name__, _cand))
-    if _c:
-        return _c
-    for _mod in _iter_mods():                   # ② create_app 工厂兜底
+    for _mod in _mods:                      # ② create_app() 工厂同池并进
         if hasattr(_mod, "create_app"):
             try:
                 _cand = _mod.create_app()
             except Exception:
-                continue                        # 坏工厂跳过，找下一个
+                continue                    # 坏工厂跳过，找下一个
             if _cand is not None:
                 _c.append((_mod.__name__, _cand))
     return _c
@@ -183,13 +197,69 @@ if not _cands:
     raise SystemExit(_msg)
 # 9/22 stackoverflow 取证：业务包常自带裸自测 app（有 health 无业务
 # 路由），walk_packages 迭代序里抢先当选 → 首页 404 全场团灭。作者
-# 入口必须按【路由数最多】择优——装配保底壳路由更少，意图不变。
+# 入口必须按【路由数最多】择优。
 # 9/22 keep#2 取证：流氓演示模块路由更多时纯路由数会被击败——
 # 约定入口名（main/app/project_main/…）优先，池内再比路由数。
+# 9/23 审计取证：同池择优后「保底壳压过作者修好的入口」成了新风险
+# （旧的两遍探测天然不会），故壳自带 __arcbench_assembled__ 标记：
+# 壳只在其他候选全不在场时才登场，作者修复永不被旁路。
 _CONVENTION = ("main", "app", "app_main", "project_main",
                "server", "wsgi", "run")
-_pref = [_x for _x in _cands if _x[0].lower() in _CONVENTION]
-app = max(_pref or _cands, key=lambda _x: _route_count(_x[1]))[1]
+
+
+def _is_shell(_name):
+    try:
+        return bool(getattr(sys.modules.get(_name),
+                            "__arcbench_assembled__", False))
+    except Exception:
+        return False
+
+
+_pool = [x for x in _cands if not _is_shell(x[0])] or _cands
+_pref = [x for x in _pool if x[0].lower() in _CONVENTION]
+app = max(_pref or _pool, key=lambda _x: _route_count(_x[1]))[1]
+
+
+def _has_health(_a):
+    if hasattr(_a, "url_map"):                         # Flask/WSGI
+        _paths = [getattr(_r, "rule", "")
+                  for _r in _a.url_map.iter_rules()]
+    else:                                              # ASGI
+        _paths = [getattr(_r, "path", "")
+                  for _r in getattr(_a, "routes", []) or []]
+    return any(_p in ("/api/health", "/api/health/") for _p in _paths)
+
+
+def _ensure_health(_a):
+    """缺 /api/health 时机械补挂——runner 就绪探针只认这条路由。
+
+    产物漏写它 = 60 秒轮询必然超时 = 整跑不评分，而这条路由不承载任何
+    业务语义（应用自带的同名路由一律优先，本函数只在缺席时补位）。
+    """
+    try:
+        if _has_health(_a):
+            return
+        if hasattr(_a, "url_map"):                     # Flask/WSGI
+            _a.add_url_rule("/api/health", "arcbench_health",
+                            lambda: {"status": "ok"})
+        elif hasattr(_a, "routes"):                    # FastAPI/Starlette ASGI
+            def _endpoint(_request):
+                from starlette.responses import JSONResponse
+                return JSONResponse({"status": "ok"})
+            if hasattr(_a, "add_api_route"):
+                _a.add_api_route("/api/health", _endpoint, methods=["GET"])
+            else:
+                _a.router.add_route("/api/health", _endpoint,
+                                    methods=["GET"])
+        print("[backend] /api/health 缺失，已由启动入口补挂（就绪探针保活）",
+              flush=True)
+    except Exception as _exc:
+        # 保底层自己摔了不能带走应用：能起服就有分，判读留给日志。
+        print(f"[backend] /api/health 补挂失败（照常起服）: {_exc!r}"[:200],
+              flush=True)
+
+
+_ensure_health(app)
 
 if __name__ == "__main__":
     if hasattr(app, "wsgi_app"):                # Flask/WSGI
@@ -347,7 +417,11 @@ def export_platform_layout(output_dir: Path, project_dir: Path) -> dict:
     - backend/  = project code 全量（剥离 __pycache__/instance 数据）
                   + 通用启动入口 main.py + requirements.txt + package.json
     - frontend/ = 最小 Vite+React 壳（含 build 脚本）
-    幂等：重复导出先清后写。任何子步失败抛异常由调用方决定降级。
+    原子换入：新布局先落在 .export-*.new，全部步骤成功后才替换旧目录。
+    （9/23 审计取证：原先「先 rmtree 再写」把导出中途失败换成了「连上一轮
+    已经落地、能起服的产物也没了」，而调用方对导出失败照常 exit 0——
+    抢先交付那份成果就此无声消失。幂等性不变：重复导出仍整体覆盖。）
+    任何子步失败抛异常由调用方决定降级。
     """
     output_dir = Path(output_dir).resolve()
     code_dir = Path(project_dir).resolve() / "code"
@@ -356,10 +430,14 @@ def export_platform_layout(output_dir: Path, project_dir: Path) -> dict:
 
     backend = output_dir / "backend"
     frontend = output_dir / "frontend"
-    for d in (backend, frontend):
-        if d.exists():
-            shutil.rmtree(d)
-        d.mkdir(parents=True)
+    staged = {backend: output_dir / ".export-backend.new",
+              frontend: output_dir / ".export-frontend.new"}
+    for target in staged.values():
+        if target.exists():
+            shutil.rmtree(target)
+        target.mkdir(parents=True)
+    backend = staged[backend]
+    frontend = staged[frontend]
 
     # --- backend ---
     for src in _py_files(code_dir):
@@ -426,6 +504,13 @@ def export_platform_layout(output_dir: Path, project_dir: Path) -> dict:
         _FRONTEND_MAIN_TSX, encoding="utf-8")
     (frontend / "src" / "App.tsx").write_text(
         _FRONTEND_APP_TSX, encoding="utf-8")
+
+    # 全部步骤都已成功——此刻才动旧目录（换入前任何异常都不影响在位产物）
+    for final, target in staged.items():
+        if final.exists():
+            shutil.rmtree(final)
+        target.rename(final)
+    backend, frontend = (output_dir / "backend", output_dir / "frontend")
 
     return {
         "backend_files": sum(1 for _ in backend.rglob("*") if _.is_file()),

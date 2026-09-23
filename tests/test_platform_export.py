@@ -490,3 +490,116 @@ def test_312_only_stdlib_symbol_is_not_a_dep(tmp_path, installer):
         _exec_entry(be, "runner_main_312")
     assert installer.attempts() == []
     assert "missing imports" not in str(got.value)
+
+
+# ---- 就绪探针保底（9/23 交付路径审计取证 P0-1）------------------------------
+# runner 的 60 秒轮询只认 GET /api/health：产物漏写这一条路由，应用本身
+# 写得再对也是「无物就绪」→ 整跑不评分。健康检查是布局契约不是业务功能，
+# 因此由启动入口在缺位时机械补挂，而应用自带的同名路由一律优先。
+
+def test_health_backfilled_when_author_omits_it(tmp_path, capsys):
+    be = _plain_backend(tmp_path, (
+        "from flask import Flask, jsonify\n"
+        "app = Flask(__name__)\n"
+        "@app.route('/')\n"
+        "def home():\n    return jsonify(ok=True)\n"))
+    mod = _exec_entry(be, "runner_health_backfill")
+    rules = {r.rule for r in mod.app.url_map.iter_rules()}
+    assert "/api/health" in rules, f"缺 health 必须补挂: {rules}"
+    client = mod.app.test_client()
+    assert client.get("/api/health").status_code == 200
+    assert client.get("/").status_code == 200, "补挂不该动业务路由"
+    assert "补挂" in capsys.readouterr().out, "补挂必须留痕可 grep"
+
+
+def test_author_health_route_is_not_overwritten(tmp_path, capsys):
+    be = _plain_backend(tmp_path, (
+        "from flask import Flask, jsonify\n"
+        "app = Flask(__name__)\n"
+        "@app.route('/api/health')\n"
+        "def h():\n    return jsonify(status='ready')\n"))
+    mod = _exec_entry(be, "runner_health_keep")
+    assert mod.app.test_client().get("/api/health").get_json() \
+        == {"status": "ready"}
+    assert "补挂" not in capsys.readouterr().out
+
+
+# ---- 入口择优与本地冒烟闸同构（9/23 交付路径审计取证 P0-4）------------------
+# 旧启动器「模块级 app 非空即返回」把 create_app 工厂池整个丢掉，而本地
+# 冒烟闸是同池择优：作者入口由工厂提供、业务包又自带裸自测 app 时，
+# 闸测的是真应用、runner 起的是空壳——冒烟全绿而平台首页 404。
+
+def test_factory_entry_beats_stray_bare_app(tmp_path):
+    from app.platform_export import _BACKEND_MAIN
+
+    be = tmp_path / "backend"
+    (be / "notes").mkdir(parents=True)
+    (be / "notes" / "__init__.py").write_text("", encoding="utf-8")
+    (be / "notes" / "notes.py").write_text(
+        "from flask import Flask\n"
+        "app = Flask('notes')\n"
+        "@app.route('/ping')\n"
+        "def ping():\n    return 'pong'\n", encoding="utf-8")
+    (be / "assemble.py").write_text(
+        "from flask import Flask\n"
+        "def create_app():\n"
+        "    a = Flask('assembled')\n"
+        "    for i in range(6):\n"
+        "        a.add_url_rule('/r%d' % i, 'r%d' % i, lambda: '')\n"
+        "    return a\n", encoding="utf-8")
+    (be / "requirements.txt").write_text("flask\n", encoding="utf-8")
+    (be / "main.py").write_text(_BACKEND_MAIN, encoding="utf-8")
+    mod = _exec_entry(be, "runner_pool")
+    assert mod.app.name == "assembled", \
+        "工厂入口必须与裸自测 app 同池按路由数竞争"
+
+
+def test_assembled_shell_yields_to_author_entry_even_with_more_routes(
+        tmp_path):
+    """同池择优带来的新风险必须锁死：保底壳路由更多、名字也更「约定」，
+    但作者入口在场时它只能垫后（旧的两遍探测天然保住这条不变量）。"""
+    from app.platform_export import _BACKEND_MAIN
+
+    be = tmp_path / "backend"
+    be.mkdir()
+    (be / "app_main.py").write_text(
+        "__arcbench_assembled__ = True\n"
+        "from flask import Flask\n"
+        "app = Flask('shell')\n"
+        "for i in range(9):\n"
+        "    app.add_url_rule('/s%d' % i, 's%d' % i, lambda: '')\n",
+        encoding="utf-8")
+    (be / "project_main.py").write_text(
+        "from flask import Flask\n"
+        "app = Flask('authored')\n"
+        "@app.route('/notes')\n"
+        "def notes():\n    return 'ok'\n", encoding="utf-8")
+    (be / "requirements.txt").write_text("flask\n", encoding="utf-8")
+    (be / "main.py").write_text(_BACKEND_MAIN, encoding="utf-8")
+    mod = _exec_entry(be, "runner_shell_yields")
+    assert mod.app.name == "authored"
+
+
+# ---- 导出原子换入（9/23 交付路径审计取证 P0-2）------------------------------
+# 旧导出「先 rmtree 再写」：写失败时抢先交付那份能起服的产物也被带走，
+# 而调用方对导出失败照常 exit 0——尸检只看得到一次成功的跑。
+
+def test_export_failure_keeps_previous_backend(tmp_path, project,
+                                               monkeypatch):
+    out = tmp_path / "out"
+    export_platform_layout(out, project)
+    first = (out / "backend" / "main.py").read_text(encoding="utf-8")
+    (out / "backend" / "sentinel.txt").write_text("keep me",
+                                                  encoding="utf-8")
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("写到一半摔了")
+
+    monkeypatch.setattr("app.platform_export._requirements_for", boom)
+    with pytest.raises(RuntimeError):
+        export_platform_layout(out, project)
+    assert (out / "backend" / "main.py").read_text(encoding="utf-8") == first
+    assert (out / "backend" / "sentinel.txt").read_text(
+        encoding="utf-8") == "keep me", "在位产物必须整份活到换入那一刻"
+    # 换入前的中间态落在点前缀暂存目录里，不污染布局验证
+    assert (out / ".export-backend.new").is_dir()

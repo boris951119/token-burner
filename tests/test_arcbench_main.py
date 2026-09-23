@@ -556,8 +556,110 @@ class TestBudgetPartialDelivery:
         monkeypatch.setattr("app.platform_export.export_platform_layout", boom)
         assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 1
 
-    def test_declined_without_project_never_exports(
+    def test_interrupted_with_code_on_disk_also_ships(
             self, monkeypatch, tmp_path, req_dir):
+        """9/23 交付路径审计取证：此前只有 budget_exceeded 走尽力交付，
+        interrupted/declined 明明带着写完的模块回来，却因终态名不对 exit 1
+        = 不评分。判分是 avg_pass_rate，半成品有分。"""
+        from app.pipeline import PipelineResult
+
+        out = tmp_path / "wsI"
+        _env(monkeypatch, out)
+        proj = self._partial(tmp_path, "interrupted_proj")
+        _patch_llm_paths(monkeypatch, PipelineResult(
+            kind="interrupted", project_dir=proj))
+        called = []
+        monkeypatch.setattr(
+            "app.platform_export.export_platform_layout",
+            lambda workdir, pd: (called.append(str(pd))
+                                 or {"backend_files": 1, "frontend_files": 0}))
+        assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 0
+        assert called == [str(proj)]
+        events = _events_text(out)
+        assert "interrupted·部分交付" in events
+        assert "未走验收" in events
+
+    def test_stub_only_package_marker_does_not_ship(
+            self, monkeypatch, tmp_path, req_dir):
+        """盘上只剩包标记 __init__.py 不算交付物——仍按失败终态收口，
+        否则「尽力交」会退化成「无论多空都报完成」。"""
+        from app.pipeline import PipelineResult
+
+        out = tmp_path / "wsS"
+        _env(monkeypatch, out)
+        proj = tmp_path / "stub_only"
+        (proj / "code" / "notes").mkdir(parents=True)
+        (proj / "code" / "notes" / "__init__.py").write_text("",
+                                                             encoding="utf-8")
+        _patch_llm_paths(monkeypatch, PipelineResult(
+            kind="interrupted", project_dir=proj))
+        called = []
+        monkeypatch.setattr(
+            "app.platform_export.export_platform_layout",
+            lambda w, p: (called.append(str(p)) or {}))
+        assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 1
+        assert called == []
+
+
+class TestCrashSalvage:
+    """管线抛异常时的兜底交付（9/23 交付路径审计取证 P1-9）。"""
+
+    def test_pipeline_crash_exports_code_on_disk(self, monkeypatch, tmp_path,
+                                                 req_dir):
+        out = tmp_path / "wsC"
+        _env(monkeypatch, out)
+        monkeypatch.setattr(
+            entry, "load_settings",
+            lambda config_file=None, **kw: Settings(models=["openai/glm-5.3"]))
+        monkeypatch.setattr(entry, "_gateway_preflight", lambda settings: None)
+        proj = out / "projects" / "arcbench-app_crash"
+        (proj / "code" / "notes").mkdir(parents=True)
+        (proj / "code" / "notes" / "notes.py").write_text("x = 1\n",
+                                                          encoding="utf-8")
+
+        class _Boom:
+            def __init__(self, **kwargs):
+                pass
+
+            def run(self, *args, **kwargs):
+                raise RuntimeError("管线炸在半路")
+
+        monkeypatch.setattr(entry, "Pipeline", _Boom)
+        called = []
+        monkeypatch.setattr(
+            "app.platform_export.export_platform_layout",
+            lambda workdir, pd: (called.append(str(pd))
+                                 or {"backend_files": 1, "frontend_files": 0}))
+        assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 0
+        assert called == [str(proj)], "兜底取工作区里最新的项目目录"
+        events = _events_text(out)
+        assert "管线异常·部分交付" in events and "RuntimeError" in events
+
+    def test_crash_without_any_code_still_fails(self, monkeypatch, tmp_path,
+                                                req_dir):
+        out = tmp_path / "wsC2"
+        _env(monkeypatch, out)
+        monkeypatch.setattr(
+            entry, "load_settings",
+            lambda config_file=None, **kw: Settings(models=["openai/glm-5.3"]))
+        monkeypatch.setattr(entry, "_gateway_preflight", lambda settings: None)
+        (out / "projects" / "arcbench-app_empty").mkdir(parents=True)
+
+        class _Boom:
+            def __init__(self, **kwargs):
+                pass
+
+            def run(self, *args, **kwargs):
+                raise RuntimeError("启动即炸")
+
+        monkeypatch.setattr(entry, "Pipeline", _Boom)
+        called = []
+        monkeypatch.setattr(
+            "app.platform_export.export_platform_layout",
+            lambda w, p: (called.append(str(p)) or {}))
+        assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 1
+        assert called == []
+        assert "管线异常" in _events_text(out)
         """没产物就没得交付：不误导平台，仍按失败终态收口。"""
         from app.pipeline import PipelineResult
 

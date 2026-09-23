@@ -239,3 +239,45 @@ class TestSubmoduleImport:
         result = check_links(handle.root / "code")
         assert not result.passed
         assert any(i.symbol == "nonexistent_thing" for i in result.issues)
+
+
+class TestPkgSelfAlias:
+    """包入口别名形态（file_manager _PKG_SHIM）的符号同源判定。
+
+    9/23 彩排取证的连带：旧包入口 `from <m>.<m> import *` 是副本绑定，
+    测试 patch 包级常量打不着真身（85 例里 7 例假红）。改成 `sys.modules`
+    别名后，静态索引若不认这一形，包键只剩 `_impl` 一个名——整树跨模块
+    引用全判断链，流水线测试连环节、修复环白烧轮次。
+    """
+
+    def test_shim_pkg_symbols_come_from_impl(self, project):
+        """正向：FileManager 写出的包入口，符号集与实现模块同源。"""
+        fm, pid, code_root = project
+        idx = _SymbolIndex(code_root)
+        assert {"check", "validate_isbn"} <= idx.symbols_of("validator")
+
+    def test_plain_relative_import_does_not_leak_symbols(self, project):
+        """反向（假绿防线）：只挂子模块名、没有 sys.modules 别名赋值时，
+        实现模块的符号在运行时确实不可见——门禁不许放过。"""
+        fm, pid, code_root = project
+        (code_root / "validator" / "__init__.py").write_text(
+            "from . import validator  # 只挂名，包名未别名到实现模块\n",
+            encoding="utf-8")
+        caller = "from validator import check\n\n\ndef g():\n    return check('x')\n"
+        result = check_links(code_root, pending_module="caller",
+                             pending_code=caller)
+        assert not result.passed
+        assert any(i.symbol == "check" for i in result.issues)
+
+    def test_alias_without_relative_binding_does_not_leak(self, project):
+        """两形缺一不认：只有 sys.modules 赋值（别名对象来自绝对导入）
+        同样不展开——按名字猜会把外部模块的符号算进包里。"""
+        fm, pid, code_root = project
+        (code_root / "validator" / "__init__.py").write_text(
+            "import sys\n\n"
+            "from helper_lib import thing as _impl\n\n"
+            "sys.modules[__name__] = _impl\n",
+            encoding="utf-8")
+        caller = "from validator import check\n\n\ndef g():\n    return check('x')\n"
+        assert not check_links(code_root, pending_module="caller",
+                               pending_code=caller).passed

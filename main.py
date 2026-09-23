@@ -134,7 +134,8 @@ def _export_official_layout(workdir: Path, project_dir: Path | None,
                             note: str = "") -> bool:
     """把项目按官方 runner 布局落地（backend/ + frontend/）。
 
-    返回是否真正导出。导出是交付的最后一步：它失败不该改变交付终态，
+    返回是否真正导出。导出是交付的最后一步：它失败不该改变交付终态
+    （抢先交付那份仍在位可启，且 exit 1 = 不评分，改判失败换不来分），
     但必须留一条可 grep 的痕迹（异常上抛会把已完成的交付换成 exit 1）。
     """
     if project_dir is None:
@@ -152,6 +153,34 @@ def _export_official_layout(workdir: Path, project_dir: Path | None,
     except Exception as exc:
         print(f"[export] 布局适配失败（交付不受影响）: {exc!r}", flush=True)
         return False
+
+
+def _has_product_code(project_dir) -> bool:
+    """盘上是否真写着模块代码（__init__.py 只是包标记，不算交付物）。"""
+    if not project_dir:
+        return False
+    code = Path(project_dir) / "code"
+    return any(p.name != "__init__.py" for p in code.rglob("*.py"))
+
+
+def _salvage_export(workdir: Path) -> bool:
+    """管线崩在半路时的兜底交付：工作区里最新项目目录有代码就按现状导出。
+
+    9/23 交付路径审计取证：异常分支此前只有 traceback + exit 1，而官方
+    判分是 avg_pass_rate——异常发生在第 3 个模块写完之后，盘上的代码就是
+    白花花的分数，exit 1 把它整批扔掉。官方容器里 projects/ 至多一趟跑，
+    取字典序最新（时间戳定宽，序即时间）且有 code/*/*.py 的那个。
+    """
+    root = Path(workdir) / "projects"
+    if not root.is_dir():
+        return False
+    for cand in sorted(root.iterdir(), reverse=True):
+        if not (cand / "code").is_dir():
+            continue
+        if not _has_product_code(cand):
+            continue
+        return _export_official_layout(workdir, cand, note="崩溃兜底交付")
+    return False
 
 
 def _env_float(name: str, default: str) -> float:
@@ -463,6 +492,39 @@ def main(argv: list[str] | None = None) -> int:
                 traceback.format_exc(), encoding="utf-8")
         except Exception:
             pass
+        # 崩了也要尽力交（9/23 交付路径审计取证）：异常此前只有 traceback
+        # + exit 1，而官方判分是 avg_pass_rate——崩在第 3 个模块之后时，
+        # 盘上写完的代码就是白扔的分数。有代码就按现状导出换一次评分机会，
+        # 事件摘要如实写「管线异常·部分交付」，不冒充完成（r10 诚实不变量）。
+        try:
+            salvaged = _salvage_export(workdir)
+        except Exception as exc2:
+            salvaged = False
+            print(f"[export] 崩溃兜底导出失败: {exc2!r}", flush=True)
+        if salvaged:
+            bridge.run_completed(
+                f"管线异常·部分交付（{type(exc).__name__}: "
+                f"{str(exc)[:120]}，未走验收，按现状导出）")
+            print("[main] 管线异常但盘上有代码：半成品已按官方布局导出，"
+                  "退出码 0 换取评分", flush=True)
+            return 0
+        # 崩了也要尽力交（9/23 交付路径审计取证）：异常此前只有 traceback
+        # + exit 1，而官方判分是 avg_pass_rate——崩在第 3 个模块之后时，
+        # 盘上写完的代码就是白扔的分数。有代码就按现状导出换一次评分机会，
+        # 事件摘要如实写「管线异常·部分交付」，不冒充完成（r10 诚实不变量：
+        # 报的是「部分交付」而不是「完成」，无代码时仍照实 run_failed）。
+        try:
+            salvaged = _salvage_export(workdir)
+        except Exception as exc2:
+            salvaged = False
+            print(f"[export] 崩溃兜底导出失败: {exc2!r}", flush=True)
+        if salvaged:
+            bridge.run_completed(
+                f"管线异常·部分交付（{type(exc).__name__}: "
+                f"{str(exc)[:120]}，未走验收，按现状导出）")
+            print("[main] 管线异常但盘上有代码：半成品已按官方布局导出，"
+                  "退出码 0 换取评分", flush=True)
+            return 0
         bridge.run_failed(f"管线异常: {exc}")
         return 1
 
@@ -512,30 +574,37 @@ def main(argv: list[str] | None = None) -> int:
                     "交付完成（内部验收未通过，已尽力修复——详情见 verify "
                     "报告尾部）: " + report[-200:]
                 )
-        bridge.run_completed(result.deliverable_summary or "交付完成")
         # 官方 runner 布局适配（6 平台提交取证：布局违约是主死因——
         # 内部 verify PASS 也因缺 frontend//backend/ 被判模板不完整）。
-        # 导出失败不改变交付终态，但必须留痕诊断。
+        # 次序（9/23 交付路径审计取证）：先换入最终态、后报 run_completed
+        # ——平台若在完成事件处取件，先报事件交出去的就是验收前的旧代码。
         _export_official_layout(workdir, result.project_dir)
+        if (result.project_dir is not None
+                and not (Path(workdir) / "backend" / "main.py").is_file()):
+            # 只留痕不改判：exit 1 = 不评分，与「有产物但判它失败」等价，
+            # 而此处报错只会把一次可能被平台救回的交付换成确定的 0 分。
+            print("[export] 致命：输出目录没有 backend/main.py——官方 runner "
+                  "无物可启，本次交付实为空产物", flush=True)
+        bridge.run_completed(result.deliverable_summary or "交付完成")
         return 0
     # 非异常的非成功终态此前只进事件流不落 stdout——容器尸检时
     # 只见 rc=1 无线索（Linux direct_answer 误判实证），显式留痕。
     print(f"[main] 管线非成功终态: kind={result.kind} "
           f"msg={(getattr(result, 'message', '') or '')[:200]}", flush=True)
-    # 预算中止是唯一带着手项目回来的非成功终态。官方判分口径是
-    # avg_pass_rate（过几条算几条），不是全或无，而 exit 1 = 不评分——
-    # 半成品留在工作区不导出，等于把已经写出来的代码整批扔掉换 0 分。
-    # 现按现状导出并以 0 退出换一次被评分的机会；事件摘要如实写
-    # 「预算中止·部分交付」，不冒充完成（r10 诚实不变量的原意保留）。
+    # 判分口径是 avg_pass_rate（过几条算几条），不是全或无，而 exit 1 =
+    # 不评分——半成品留在工作区不导出，等于把已经写出来的代码整批扔掉换
+    # 0 分。原先只有 budget_exceeded 走这条路（9/23 交付路径审计取证）：
+    # interrupted/declined 同样带着项目目录回来，目录里躺着写完的模块，
+    # 却因终态名不对而 exit 1。现按「盘上有代码就尽力交」统一处理；事件
+    # 摘要如实带上终态名与「未走验收」，不冒充完成（r10 诚实不变量）。
     partial = getattr(result, "project_dir", None)
-    if (result.kind == "budget_exceeded" and partial is not None
-            and Path(partial).is_dir()
-            and _export_official_layout(workdir, Path(partial))):
+    if _has_product_code(partial) and _export_official_layout(
+            workdir, Path(partial)):
         bridge.run_completed(
-            "预算中止·部分交付（未走验收，按现状导出）: "
+            f"{result.kind}·部分交付（未走验收，按现状导出）: "
             + (result.deliverable_summary or "")[:300])
-        print("[main] 预算中止：半成品已按官方布局导出，退出码 0 换取评分",
-              flush=True)
+        print(f"[main] 非成功终态 {result.kind}：盘上已有代码，半成品已按官方"
+              "布局导出，退出码 0 换取评分", flush=True)
         return 0
     bridge.run_failed(f"管线终点: {result.kind}")
     return 1

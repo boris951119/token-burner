@@ -25,6 +25,8 @@ import ast
 import json
 from pathlib import Path
 
+from app.utils.link_check import pkg_self_alias
+
 _TOP_DEF = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
 
 
@@ -67,6 +69,10 @@ def _init_names(init_src: str, pkg_dir: Path | None = None,
         tree = ast.parse(init_src)
     except SyntaxError:
         return names
+    # 包入口别名到同级模块（file_manager _PKG_SHIM）：包名即实现模块，
+    # 可见名与该模块同源。不认这个形会把 `from validator import check`
+    # 误报成幻觉导入（与链接门禁同一假红族）。
+    self_alias = pkg_self_alias(tree) if pkg_dir else None
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom):
             continue
@@ -94,6 +100,14 @@ def _init_names(init_src: str, pkg_dir: Path | None = None,
             if a.name == "*":
                 if sibling_src:
                     names |= {n for n in _top_names(sibling_src)
+                              if not n.startswith("_")}
+            elif (self_alias and node.level >= 1
+                    and (f"{node.module}.{a.name}" if node.module
+                         else a.name) == self_alias
+                    and pkg_dir is not None):
+                sub = pkg_dir / f"{self_alias.replace('.', '/')}.py"
+                if sub.is_file():
+                    names |= {n for n in _top_names(_read(sub))
                               if not n.startswith("_")}
             else:
                 names.add(a.asname or a.name)

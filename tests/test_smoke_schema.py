@@ -257,3 +257,36 @@ class TestFastAPIPageCrawl:
         """/notes/{id} 与 POST / 都不该被 GET 探（405/422 页体会污染体检）。"""
         ok, report = _run(tmp_path, _fastapi_app("<a href='/x'>X</a>"))
         assert ok, report
+
+
+class TestHomeNavAffordance:
+    """首页入口控件判据按「评测点得动」算，不按标签名（9/23 mini 彩排取证）。
+
+    旧判据写死「首页必须有 <a>」：真需求「Enter Website 按钮 + JS 切区」的
+    落地页因此判成占位壳页——评分器用 role 通道定位，按钮与链接同权。
+    判据比官方紧一寸就是白烧一轮修复，还可能把合规页改坏。
+    """
+
+    def test_button_only_landing_page_passes(self, tmp_path):
+        ok, report = _run(tmp_path, _flask_app(
+            "<header><h1>ShortLink Desk</h1>"
+            '<button id="enter-website-btn" type="button">Enter Website'
+            "</button></header>"
+            '<main><section id="directory" hidden><table>'
+            "<thead><tr><th>Title</th></tr></thead><tbody id=\"rows\">"
+            "</tbody></table></section></main>"))
+        assert ok, report
+
+    def test_role_button_without_anchor_passes(self, tmp_path):
+        """无 <a> 无 <button>，只有 role 属性的 div：仍是同一条可点通道。"""
+        ok, report = _run(tmp_path, _flask_app(
+            '<div role="button" tabindex="0">Open board</div>'
+            "<p>Sprint goals</p>"))
+        assert ok, report
+
+    def test_plain_text_home_still_placeholder(self, tmp_path):
+        """反向：整页没有任何可点控件，仍旧判红（假绿防线）。"""
+        ok, report = _run(tmp_path, _flask_app(
+            "<h1>Welcome</h1><p>Nothing here yet.</p>"))
+        assert not ok
+        assert "占位壳" in report

@@ -6,8 +6,9 @@
 sys.path 上，交付物结构性跑不起来。
 
 修复约定（程序确定性生成，非 LLM）：
-- code/<module>/__init__.py：包级重导出（from <module>.<module> import *），
-  使 `from <module> import <符号>` 在 code/ 为工作目录时可解析；
+- code/<module>/__init__.py：包入口别名到实现模块（包名与 <module>.<module>
+  同一个对象），使 `from <module> import <符号>` 在 code/ 为工作目录时可解析，
+  且对被包名 patch 的模块级常量打到真身；
 - code/_shared/__init__.py：包标记（空文件）；
 - 项目根 conftest.py：把 code/ 插入 sys.path（pytest 可导入项目模块）。
 
@@ -82,12 +83,16 @@ class TestPathInfrastructure:
         assert "sys.path" in content and "code" in content
 
     def test_module_init_reexport_created(self, fm):
-        # 写入模块代码 → 同目录自动生成 __init__.py（包级重导出）
+        # 写入模块代码 → 同目录自动生成 __init__.py（包入口别名到实现模块）
         project_id = fm.create_project("demo").project_id
         fm.write_code_file(project_id, "user", "user.py", "def core_fn():\n    return 1\n")
         init = fm.get_project(project_id).root / "code" / "user" / "__init__.py"
         assert init.is_file()
-        assert "from user.user import" in init.read_text(encoding="utf-8")
+        content = init.read_text(encoding="utf-8")
+        assert "from . import user as _impl" in content
+        assert "_sys.modules[__name__] = _impl" in content
+        # 副本绑定回炉即假红复发：`import *` 让包名与被包名 patch 的常量脱钩
+        assert "import *" not in content
 
     def test_module_init_idempotent(self, fm):
         # 修复轮重写代码 → __init__.py 内容稳定（不堆积、不漂移）
@@ -96,7 +101,7 @@ class TestPathInfrastructure:
         fm.write_code_file(project_id, "user", "user.py", "def b():\n    return 2\n")
         init = fm.get_project(project_id).root / "code" / "user" / "__init__.py"
         content = init.read_text(encoding="utf-8")
-        assert content.count("from user.user import") == 1
+        assert content.count("from . import user as _impl") == 1
 
     def test_shared_init_created(self, fm):
         # 写入公共层文件 → _shared/__init__.py 包标记
@@ -119,6 +124,31 @@ class TestPathInfrastructure:
 
 
 class TestRealRunnability:
+    def test_package_attr_patch_reaches_impl(self, fm):
+        # 9/23 官方镜像彩排取证：包入口写 `import *` 是【副本绑定】，测试
+        # 对被包名 patch 的模块级常量（DB_PATH 一类）打不着真身——85 例
+        # 自测里 7 例假红全源于此。包名必须与实现模块读写同源。
+        project_id = fm.create_project("demo").project_id
+        fm.write_code_file(project_id, "cfg", "cfg.py", (
+            "CONST = 'orig'\n\n\ndef read():\n    return CONST\n"
+        ))
+        code = fm.get_project(project_id).root / "code"
+        script = (
+            "import cfg, cfg.cfg as deep\n"
+            "assert deep is cfg, '包名与实现模块应为同一对象'\n"
+            "assert cfg.read() == 'orig'\n"
+            "cfg.CONST = 'patched'\n"
+            "assert cfg.read() == 'patched'\n"
+            "from cfg.cfg import read as deep_read\n"
+            "assert deep_read() == 'patched'\n"
+            "import pkgutil\n"
+            "assert 'cfg' in [m.name for m in pkgutil.iter_modules(cfg.__path__)]\n"
+            "print('patch ok')\n"
+        )
+        result = _run(["-c", script], code)
+        assert result.returncode == 0, result.stderr
+        assert "patch ok" in result.stdout
+
     def test_cross_module_run(self, fm):
         # auth 引用 user → cd code && python -m auth.auth 正常运行
         handle = _build_two_module_project(fm)
