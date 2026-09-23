@@ -40,7 +40,8 @@ from app.tools.prompt_templates import (
     TASK_ASSESSMENT_USER,
 )
 from app.utils.budget import BudgetExceededError, TaskCancelledError
-from app.utils.model_client import _is_timeout, _is_transient, leg_chain
+from app.utils.model_client import (_content_empty, _is_timeout, _is_transient,
+                                    leg_chain)
 from app.utils.parse import parse_json
 from app.utils.similarity import LoopDetector
 from app.utils.untrusted import sanitize_untrusted
@@ -859,20 +860,30 @@ class DiscussionEngine:
         chat，测试模型一条腿的网关超时即整跑夭折（讨论阶段 rc=1、
         165k token 空烧、零交付）。评审与提案同属讨论必需步骤，一条腿
         废了换腿续跑才是正确姿势，全败才上抛。
+
+        彩排 A 同批修（dev_loop._chat_resilient 同款）：推理模型吃满
+        max_tokens 时返回 HTTP 200 + content 空，不是异常——旧实现原样返回，
+        评审环拿到空文本静默降级（parse_json 失败后 return content），而这一刻
+        ModelClient 内部的扩容阶梯已经把预算烧完。空腿按「这条腿废了」换下一
+        腿；全链皆空才把末次空响应交回调用方（下游降级形状不变）。
         """
-        try:
-            return self._call(model, messages, json_mode)
-        except (BudgetExceededError, TaskCancelledError):
-            raise  # 总闸/取消：换模型续烧＝把「立即中止」改成「多烧两腿」
-        except RuntimeError:
-            for fb in [m for m in (self.settings.models or []) if m != model]:
-                try:
-                    return self._call(fb, messages, json_mode)
-                except (BudgetExceededError, TaskCancelledError):
-                    raise
-                except RuntimeError:
-                    continue
-            raise
+        legs = [model] + [m for m in (self.settings.models or []) if m != model]
+        head_exc: RuntimeError | None = None
+        empty = None
+        for leg in legs:
+            try:
+                response = self._call(leg, messages, json_mode)
+            except (BudgetExceededError, TaskCancelledError):
+                raise  # 总闸/取消：换模型续烧＝把「立即中止」改成「多烧两腿」
+            except RuntimeError as exc:
+                head_exc = head_exc if head_exc is not None else exc
+                continue
+            if not _content_empty(response):
+                return response
+            empty = empty if empty is not None else response
+        if empty is not None:
+            return empty
+        raise head_exc
 
     def _call(self, model: str, messages: list[dict], json_mode: bool):
         """单腿调用：json_mode 只在真需要时传——保持 _chat 既有调用形状，

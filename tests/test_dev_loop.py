@@ -510,3 +510,53 @@ class TestChatResilient:
         resp = engine._chat_resilient("dev", "s", "u")
         assert resp.content == "fallback code"
         assert llm.called == ["dev", "test"]
+
+    def test_empty_content_hops_to_next_leg(self):
+        """彩排 A 取证（2026-09-23 mini）：glm-5.3 在 write_tests 上连发
+        HTTP 200 + content 空（推理吃满 max_tokens）——不是异常，旧实现原样
+        返回，空测试文本落进 _extract_code 后整节点再生、再烧一遍同样的空
+        阶梯（单腿 6 次、26.4 万 token 零产出）。空响应按「这条腿废了」接力。
+        """
+        class _EmptyThenGood(_FailingThenMainLLM):
+            def chat(self, model, messages, **kwargs):
+                self.called.append(model)
+
+                class _R:
+                    content = "" if model == "dev" else "hop code"
+
+                return _R()
+
+        llm = _EmptyThenGood()
+        engine = self._engine(llm)
+        resp = engine._chat_resilient("dev", "s", "u")
+        assert resp.content == "hop code"
+        assert llm.called == ["dev", "main"]
+
+    def test_all_legs_empty_returns_empty_instead_of_raising(self):
+        """全链皆空：仍返回空内容（下游既有降级形状不变），只是不再单腿硬扛。"""
+        class _AllEmpty(_FailingThenMainLLM):
+            def chat(self, model, messages, **kwargs):
+                self.called.append(model)
+
+                class _R:
+                    content = "   "
+
+                return _R()
+
+        llm = _AllEmpty()
+        engine = self._engine(llm)
+        resp = engine._chat_resilient("dev", "s", "u")
+        assert resp.content.strip() == ""
+        assert llm.called == ["dev", "main", "test"]
+
+    def test_budget_and_cancel_still_punch_through_on_empty_chain(self):
+        """总闸不变：预算超支绝不因「空内容换腿」被改写成多烧几腿。"""
+        from app.utils.budget import BudgetExceededError
+
+        class _Budget(_FailingThenMainLLM):
+            def chat(self, model, messages, **kwargs):
+                raise BudgetExceededError("超出任务预算")
+
+        engine = self._engine(_Budget())
+        with pytest.raises(BudgetExceededError):
+            engine._chat_resilient("dev", "s", "u")

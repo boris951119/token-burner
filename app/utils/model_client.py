@@ -46,8 +46,17 @@ _TRANSIENT_MARKERS: tuple[str, ...] = (
 
 # factory26 r7c：空内容扩容重试的生成预算天花板（tokens）。
 # 推理模型长推理吃满 max_tokens → finish=length + content 空，
-# 翻倍重试需上限防失控（12000 → 24000 → 放弃）。
-_EMPTY_CONTENT_MAX_TOKENS_CEILING = 24000
+# 翻倍重试需上限防失控（8000 → 16000 → 放弃）。
+_EMPTY_CONTENT_MAX_TOKENS_CEILING = 16000
+# 彩排 A 取证（2026-09-23，mini 四需求）：624k/880k 预算烧掉 71%，其中
+# 「测试」阶段 363k。按 (模型, 输入) 归组后看清空烧的形状：glm-5.3 在
+# write_tests 上走了 6 条 8000→16000→24000 阶梯，**全部以 content 仍空收场**
+# （约 26.4 万 token = 整跑 42% 买回零字符），最终可用的测试内容由换腿后的
+# deepseek-v4-pro 产出；而 deepseek-v4-pro 的翻倍 2/2 真的换回内容
+# （14017/14303，均在 16000 档以下）。结论：扩容只对「差一点就够」的模型
+# 对路，对吃满预算的推理模型是纯空烧。故每模型只陪一次扩容——扩容仍空即
+# 记死，此后直接返回空内容由调用方的换腿链接手；扩容换回内容则返还额度。
+_EMPTY_CONTENT_LADDER_BUDGET = 1
 
 
 def _is_timeout(exc: BaseException) -> bool:
@@ -220,6 +229,8 @@ class ModelClient:
         self.budget_guard: BudgetGuard | None = budget_guard
         # 11.0 可观测性：每步 token 累计
         self.total_tokens_used: int = 0
+        # 彩排 A：空内容扩容的每模型额度台账（已花掉了多少条阶梯）
+        self._empty_ladder_spent: dict[str, int] = {}
         # 第 5 章可审计：调用日志（模型、模式、用量）
         self.call_log: list[dict[str, Any]] = []
         # M8-4：任务进度钩子——每次调用结束后回调（entry 同 call_log 条目）；
@@ -386,30 +397,38 @@ class ModelClient:
 
         # factory26 r7c 取证：推理模型（glm-5.2/5.3）长推理可吃光 max_tokens，
         # 返回 finish=length + content 空（completion_tokens 全花在推理上）
-        # ——空内容走「续写」是死路，翻倍生成预算重试才对路（封顶 24k）。
-        for _ in range(2):
-            if (
-                result.content
-                or _get_finish_reason(response) != "length"
-                or not self.settings.max_output_continuations
-            ):
-                break
+        # ——空内容走「续写」是死路，翻倍生成预算重试才对路。
+        # 彩排 A 再取证：翻倍只对部分模型对路，且每模型最多值一次（额度见
+        # _EMPTY_CONTENT_LADDER_BUDGET），故阶梯只留一档、只陪一次；空到底就
+        # 照旧返回空内容——调用方的换腿链本就把空响应当腿故障，钱该花在那。
+        if _content_empty(result) and _get_finish_reason(response) == "length":
+            spent = self._empty_ladder_spent.get(model, 0)
             new_cap = min(
                 int(kwargs.get("max_tokens") or 0) * 2,
                 _EMPTY_CONTENT_MAX_TOKENS_CEILING,
             )
-            if new_cap <= int(kwargs.get("max_tokens") or 0):
-                break
-            kwargs["max_tokens"] = new_cap
-            result = self._call_with_retry(
-                _call_and_build, kwargs, model, "LLM 调用失败（空内容扩容重试）"
-            )
-            response = raw_holder[-1]
+            if (
+                spent < _EMPTY_CONTENT_LADDER_BUDGET
+                and new_cap > int(kwargs.get("max_tokens") or 0)
+                and self.settings.max_output_continuations
+            ):
+                self._empty_ladder_spent[model] = spent + 1
+                kwargs["max_tokens"] = new_cap
+                result = self._call_with_retry(
+                    _call_and_build, kwargs, model, "LLM 调用失败（空内容扩容重试）"
+                )
+                response = raw_holder[-1]
+                if not _content_empty(result):
+                    self._empty_ladder_spent[model] = spent  # 扩容换回了内容：返还额度
 
         # 11.2：截断（finish_reason=length）分块续写，不静默丢弃
+        # 彩排 A 同批修：content 为空时这条循环同样进得去——往空内容上接
+        # 「继续，从中断处接着输出剩余部分」是凭空续写，钱花了没有落点
+        # （扩容阶梯失败后 finish 仍是 length，正好走进这条死路）。
         continuations = 0
         while (
-            _get_finish_reason(response) == "length"
+            not _content_empty(result)
+            and _get_finish_reason(response) == "length"
             and continuations < self.settings.max_output_continuations
         ):
             continuations += 1
@@ -600,6 +619,16 @@ def _get_finish_reason(response: Any) -> str | None:
         return None
     reason = _index(choices[0], "finish_reason")
     return str(reason) if reason else None
+
+
+def _content_empty(result: "LLMResponse") -> bool:
+    """响应内容是否等于没有（空串/纯空白）。
+
+    彩排 A 取证：推理模型吃满 max_tokens 时 content 可为 ""（或一串空白），
+    HTTP 200、非异常——既有换腿链只看异常，于是把这种「成功但零产出」当
+    成功返回，调用方再整节点重来。这里给出统一的判定口径。
+    """
+    return not (getattr(result, "content", "") or "").strip()
 
 
 def _index(obj: Any, key: str) -> Any:

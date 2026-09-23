@@ -438,8 +438,23 @@ class TestContentlessResponse:
 
 
 # ---------------------------------------------------------------------------
-# factory26 r7c：推理模型吃满 max_tokens → finish=length + content 空 → 扩容重试
+# factory26 r7c + 彩排 A（2026-09-23）：推理模型吃满 max_tokens →
+# finish=length + content 空 → 扩容重试只陪一档、每模型一次，空到底交换腿链
 # ---------------------------------------------------------------------------
+
+
+class _LengthEmpty:
+    """恒定返回「推理吃满预算」形态（finish=length, content 空）。"""
+
+    def __init__(self):
+        self.calls: list[dict] = []
+
+    def __call__(self, **kwargs):
+        self.calls.append(kwargs)
+        return {"choices": [{"message": {"content": ""},
+                             "finish_reason": "length"}],
+                "usage": {"prompt_tokens": 10,
+                          "completion_tokens": kwargs["max_tokens"]}}
 
 
 class _LengthEmptyThenGood:
@@ -458,26 +473,88 @@ class _LengthEmptyThenGood:
 
 
 class TestEmptyContentBudgetExpansion:
-    def test_empty_length_doubles_max_tokens_and_recovers(self, gpt_key):
+    """旧口径（8000→16000→24000、同模型可翻两档）在 mini 彩排里被证伪：
+    glm-5.3 在 write_tests 上走了 6 条三档阶梯、全部空收场，26.4 万 token
+    （整跑 42%）买回零字符，可用的测试内容最后由换腿后的模型产出。
+    翻倍只对「差一点就够」的模型对路（deepseek-v4-pro 2/2 在 16000 档拿回
+    内容），故留一档、封顶 16000、每模型只陪一次。"""
+
+    def test_empty_length_doubles_only_one_rung(self, gpt_key):
         flaky = _LengthEmptyThenGood()
         client = _client(completion=flaky, sleep=SleepRecorder(),
                          max_response_tokens=3000, retry_backoff_base=0.01)
         result = client.chat("gpt-4o", _MSG)
-        assert result.content == "finally"
-        caps = [c["max_tokens"] for c in flaky.calls]
-        assert caps == [3000, 6000, 12000]  # 翻倍序列
-        assert flaky.calls[2]["max_tokens"] == 12000
+        # 只翻一档；第二档仍空即认赔——内容交给调用方的换腿链，不再同模型硬扛
+        assert [c["max_tokens"] for c in flaky.calls] == [3000, 6000]
+        assert result.content == ""
 
-    def test_ceiling_caps_expansion(self, gpt_key):
-        """预算已到天花板附近：不再翻倍，保留空内容结果交给上层。"""
+    def test_expansion_ceiling_is_16000(self, gpt_key):
         flaky = _LengthEmptyThenGood()
-        flaky.calls.append({"max_tokens": 24000})  # 预热：下次调用起全为坏
+        client = _client(completion=flaky, sleep=SleepRecorder(),
+                         max_response_tokens=12000, retry_backoff_base=0.01)
+        client.chat("gpt-4o", _MSG)
+        assert [c["max_tokens"] for c in flaky.calls] == [12000, 16000]
+
+    def test_ceiling_reached_means_no_expansion(self, gpt_key):
+        """预算已在天花板之上：不降反升是荒谬，故一次扩容都不发。"""
+        flaky = _LengthEmpty()
         client = _client(completion=flaky, sleep=SleepRecorder(),
                          max_response_tokens=24000, retry_backoff_base=0.01)
+        client.chat("gpt-4o", _MSG)
+        assert [c["max_tokens"] for c in flaky.calls] == [24000]
+
+    def test_failed_ladder_is_not_granted_again_for_same_model(self, gpt_key):
+        """扩容换回内容才返还额度；空到底的模型此后不再陪跑。"""
+        flaky = _LengthEmpty()
+        client = _client(completion=flaky, sleep=SleepRecorder(),
+                         max_response_tokens=3000, retry_backoff_base=0.01)
+        client.chat("gpt-4o", _MSG)          # 3000 → 6000，两档皆空
+        client.chat("gpt-4o", _MSG)          # 该模型已证明扩容无用
+        assert [c["max_tokens"] for c in flaky.calls] == [3000, 6000, 3000]
+
+    def test_ladder_that_paid_off_is_granted_again(self, gpt_key):
+        """deepseek 型：翻倍真拿回内容 → 额度返还，下次照样陪一档。"""
+        caps: list[int] = []
+
+        def needs_more_room(**kwargs):
+            cap = int(kwargs["max_tokens"])
+            caps.append(cap)
+            if cap <= 3000:
+                return {"choices": [{"message": {"content": ""},
+                                     "finish_reason": "length"}],
+                        "usage": {"prompt_tokens": 10, "completion_tokens": cap}}
+            return _resp("finally")
+
+        client = _client(completion=needs_more_room, sleep=SleepRecorder(),
+                         max_response_tokens=3000, retry_backoff_base=0.01)
+        assert client.chat("gpt-4o", _MSG).content == "finally"
+        assert client.chat("gpt-4o", _MSG).content == "finally"
+        assert caps == [3000, 6000, 3000, 6000]
+
+    def test_empty_content_never_enters_continuation(self, gpt_key):
+        """11.2 续写不得接在空内容上：往 "" 上发「继续」是凭空续写。
+        第二档已花掉扩容额度 → 第三次调用既不再扩容也不续写。"""
+        flaky = _LengthEmpty()
+        client = _client(completion=flaky, sleep=SleepRecorder(),
+                         max_response_tokens=3000, retry_backoff_base=0.01)
+        client.chat("gpt-4o", _MSG)
+        client.chat("gpt-4o", _MSG)
+        assert all("继续" not in str(c["messages"]) for c in flaky.calls)
+        assert len(flaky.calls) == 3   # 1+2（首条含一档扩容），第三条孤注
+
+    def test_truncated_content_still_continues(self, gpt_key):
+        """对照：有内容且 finish=length 时续写通道必须照旧（11.2 原语义）。"""
+        calls = []
+
+        def half_then_done(**kwargs):
+            calls.append(kwargs)
+            n = len(calls)
+            return _resp("part1" if n == 1 else "part2", finish="stop" if n > 1 else "length")
+
+        client = _client(completion=half_then_done, sleep=SleepRecorder(),
+                         max_response_tokens=3000, retry_backoff_base=0.01)
         result = client.chat("gpt-4o", _MSG)
-        # 24000 已达天花板 → 不扩容（new_cap <= cap → break）；
-        # 后续 finish=length 走既有续写通道救回内容
-        assert all(c["max_tokens"] <= 24000 for c in flaky.calls)
+        assert "part1" in result.content and "继续" in str(calls[1]["messages"])
 
     def test_normal_content_skips_expansion(self, gpt_key):
         flaky = FlakyCompletion(fail_times=0)

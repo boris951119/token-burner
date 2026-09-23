@@ -157,3 +157,67 @@ def test_budget_exhausted_never_switches_model():
     with pytest.raises(BudgetExceededError):
         _review(orch)
     assert llm.calls == ["openai/glm-5.3"], "超预算必须当场中止，不得换腿续烧"
+
+
+# ---------------------------------------------------------------------------
+# 彩排 A（2026-09-23 mini）：空内容不是异常，但同样是「这条腿废了」
+# 推理模型吃满 max_tokens → HTTP 200 + content 空。旧 _relay 只看见异常，
+# 于是评审拿到空文本静默降级（parse_json 失败 → return content 空串），
+# 而这一刻 ModelClient 内部的扩容阶梯已经把这腿的预算烧完了。
+# ---------------------------------------------------------------------------
+
+
+class _EmptyForLLM:
+    """指定模型返回空 content（其余正常），不抛异常。"""
+
+    MODELS = ["openai/glm-5.3", "openai/deepseek-v4-pro", "openai/minimax-m3"]
+
+    def __init__(self, empty_models: set[str]):
+        self.empty_models = empty_models
+        self.calls: list[str] = []
+
+    def chat(self, model, messages, **kwargs):
+        self.calls.append(model)
+        text = "" if model in self.empty_models else "ok"
+        return type("R", (), {"content": text})()
+
+
+def _orch2(empty_models: set[str]):
+    from app.config import Settings as _S
+
+    from app.orchestrator import DiscussionEngine
+
+    llm = _EmptyForLLM(empty_models)
+    orch = DiscussionEngine(
+        llm, "openai/glm-5.3", "openai/deepseek-v4-pro", "openai/minimax-m3",
+        _S(models=list(_EmptyForLLM.MODELS)))
+    return orch, llm
+
+
+def test_empty_review_leg_hops_to_next_model():
+    orch, llm = _orch2({"openai/glm-5.3"})
+    out = orch._chat("openai/glm-5.3", [{"role": "user", "content": "x"}])
+    assert out == "ok"
+    assert llm.calls == ["openai/glm-5.3", "openai/deepseek-v4-pro"]
+
+
+def test_all_legs_empty_returns_empty_instead_of_crashing():
+    """全链皆空：保持既有降级形状（调用方拿到空串自行处理），不新增崩溃面。"""
+    orch, llm = _orch2(set(_EmptyForLLM.MODELS))
+    out = orch._chat("openai/glm-5.3", [{"role": "user", "content": "x"}])
+    assert out == ""
+    assert len(llm.calls) == 3, "三腿都该被试过"
+
+
+def test_whitespace_only_content_counts_as_empty():
+    orch, llm = _orch2({"openai/glm-5.3"})
+    llm.empty_models = {"openai/glm-5.3"}
+
+    def _blank(model, messages, **kwargs):
+        llm.calls.append(model)
+        return type("R", (), {"content": "   \n" if model == "openai/glm-5.3"
+                              else "ok"})()
+
+    llm.chat = _blank                      # type: ignore[method-assign]
+    assert orch._chat("openai/glm-5.3", [{"role": "user", "content": "x"}]) == "ok"
+    assert llm.calls[-1] == "openai/deepseek-v4-pro"

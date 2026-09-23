@@ -21,6 +21,7 @@ from pathlib import Path
 
 from app.config import Settings
 from app.utils.budget import BudgetExceededError, TaskCancelledError
+from app.utils.model_client import _content_empty
 from app.execution.executor import ExecutionResult, ExecutionStatus, Executor
 from app.tools.file_manager import FileManager
 from app.tools.prompt_templates import (
@@ -670,9 +671,10 @@ class DevLoopEngine:
             {"role": "user", "content": user},
         ]
         last_exc: Exception | None = None
+        empty = None
         for candidate in chain:
             try:
-                return self.llm.chat(candidate, messages)
+                response = self.llm.chat(candidate, messages)
             except (BudgetExceededError, TaskCancelledError):
                 raise   # 总闸：预算超支/用户取消绝不换模型续烧
             except ValueError as exc:
@@ -682,6 +684,18 @@ class DevLoopEngine:
             except RuntimeError as exc:
                 last_exc = exc
                 continue
+            if _content_empty(response):
+                # 彩排 A 取证（2026-09-23 mini）：推理模型吃满 max_tokens 时
+                # 返回 HTTP 200 + content 空——非异常，既有换腿链看不见它，于是
+                # 空测试文本原样落进 _extract_code，整节点再生再烧一遍同样的
+                # 空阶梯（write_tests 一腿 6 次、26.4 万 token 零产出）。
+                # 空响应按「这条腿废了」接力下一腿：smoke 的 llm() 与自测闸
+                # 生成环早就这么判。全链皆空才照旧返回空内容（下游行为不变）。
+                empty = empty if empty is not None else response
+                continue
+            return response
+        if empty is not None:
+            return empty
         raise ModelChainExhausted(
             f"模型级全链失败（{' → '.join(chain)}）: {last_exc}"
         ) from last_exc
