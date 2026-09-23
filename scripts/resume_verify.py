@@ -9,6 +9,8 @@ keep7 取证：completed.json 在生成阶段末尾写入（pipeline.py:744）�
 用法:
     python scripts/resume_verify.py --output-dir .tmp/rehearsal-keep7
     python scripts/resume_verify.py --project-dir <projects/xxx 绝对路径>
+    python scripts/resume_verify.py --project-dir ... --report-only \\
+        --requirements-dir <题面目录>     # 零消费读数（含编译自评分环）
 
 终局落盘: <project>/sessions/verify_final.json  {ok, report, ts}
 退出码: 0=PASS, 1=FAIL（供接力脚本判别）
@@ -48,6 +50,11 @@ def main() -> int:
     ap.add_argument("--project-dir", default=None)
     ap.add_argument("--max-app-rounds", type=int, default=3)
     ap.add_argument("--max-verify-rounds", type=int, default=3)
+    ap.add_argument("--requirements-dir", default=None,
+                    help="题面目录：喂给编译自评分环当验收清单来源")
+    ap.add_argument("--report-only", action="store_true",
+                    help="只出确定性审计读数，零消费：装一把已耗尽的活动护栏，"
+                         "验收段所有 LLM 通道（修复／自测生成）据此自行跳过")
     args = ap.parse_args()
 
     if args.project_dir:
@@ -67,10 +74,22 @@ def main() -> int:
         encoding="utf-8", errors="replace")
 
     t0 = time.time()
+    if args.report_only:
+        # 复用交付闸自己的开工前体检：护栏既已耗尽，_repair_blocked() 对每个
+        # LLM 通道都返回不可开工 → 这份读数与真跑同口径，但不花一分钱
+        from app.utils.budget import BudgetGuard, set_active_budget_guard
+
+        g = BudgetGuard(budget_tokens=1_000, repair_reserve_ratio=0.25)
+        g.record(1_001)
+        set_active_budget_guard(g)
+        print("[resume-verify] report-only：护栏置为已耗尽 → "
+              "冒烟/锚点 LLM 修复与自测生成分支全部跳过", flush=True)
     ok, report = verify_delivery(
         project, requirement, settings,
         max_app_rounds=args.max_app_rounds,
         max_verify_rounds=args.max_verify_rounds,
+        requirements_dir=(Path(args.requirements_dir).resolve()
+                          if args.requirements_dir else None),
     )
     report_full = report if len(report) <= 4000 else report[:2000] + \
         "\n...\n" + report[-2000:]
