@@ -741,3 +741,35 @@ def test_export_precedes_verify_so_a_kill_still_ships(monkeypatch, tmp_path,
     assert rc == 0
     assert order == ["export", "verify", "export"], \
         "验收前必须已经落一份可运行产物，验收后再按最终态覆盖"
+
+
+class TestRingRequirementsDir:
+    """编译自评分环（零 LLM 判分层）的题面来源：单文件输入不得让它静默缺席。
+
+    批次#32 同族取证：这一层此前只在「位置参数是目录」时开工，官方侧若
+    以下发单文件形态出现，判分红叶就少一整层——而本地全绿看不见。
+    """
+
+    def test_dir_input_resolves_to_absolute(self, req_dir):
+        assert entry._ring_requirements_dir(req_dir) == req_dir.resolve()
+
+    def test_file_input_lands_on_its_parent(self, req_dir):
+        got = entry._ring_requirements_dir(req_dir / "requirements.yaml")
+        assert got == req_dir.resolve()
+
+    def test_missing_path_is_explicit_none(self, tmp_path):
+        assert entry._ring_requirements_dir(tmp_path / "nope") is None
+
+    def test_file_input_still_feeds_the_verify_ring(self, monkeypatch, tmp_path,
+                                                   req_dir):
+        out = tmp_path / "wsRing"
+        _env(monkeypatch, out)
+        seen = {}
+        _patch_llm_paths(monkeypatch, _team_result(tmp_path / "deliveryRing"))
+        monkeypatch.setattr(
+            "app.arcbench_smoke.verify_delivery",
+            lambda p, r, s, **kw: (seen.update(kw) or (True, "verify ok")))
+        rc = entry.main([str(req_dir / "requirements.yaml"),
+                         "-o", str(out), "--type", "web", "--mode", "auto"])
+        assert rc == 0
+        assert seen["requirements_dir"] == req_dir.resolve()

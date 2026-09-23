@@ -239,6 +239,22 @@ def _apply_runner_model(settings) -> None:
               flush=True)
 
 
+def _ring_requirements_dir(req_path: Path) -> Path | None:
+    """编译自评分环的题面来源目录（零 LLM 判分层读的就是这一跳）。
+
+    取证（批次#32 同族）：入口只认目录，官方侧若以单文件形态下发题面，
+    requirements_dir 传 None → 整段编译判分静默缺席，本地全绿而判分红叶
+    少一层。文件输入取其父目录即可——编译器按需求树形状自筛，不会被
+    目录里的其它 YAML 带偏。返回绝对路径：验收段会起服/换工作目录，
+    相对题面路径在那之后就不是我们读到的那一份了。
+    """
+    if req_path.is_dir():
+        return req_path.resolve()
+    if req_path.is_file():
+        return req_path.resolve().parent
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="token-burner-arcbench",
@@ -568,7 +584,7 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 ok, report = verify_delivery(
                     result.project_dir, requirement, settings,
-                    requirements_dir=(req_dir if req_dir.is_dir() else None),
+                    requirements_dir=_ring_requirements_dir(req_dir),
                 )
             except Exception as exc:
                 # 验收器崩溃吃掉的是「已经写完的整个项目」：此刻产物齐备，
