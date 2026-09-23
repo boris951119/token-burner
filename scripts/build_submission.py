@@ -34,6 +34,10 @@ DENY_ANYWHERE = (
     "__pycache__", ".venv", "node_modules", ".pytest_cache", ".git/",
     "release/", "projects/", "logs/", "media/", "_docgen/", ".tmp/",
     "tests/", "docs/", "assets/",
+    # runtime 包早已切到 package-dir={"":"src"}，这份 build/lib 是 legacy
+    # setuptools 构建的陈旧副本（与 src 逐字相同）：pip 永远不会读它，随包
+    # 提交只是在评审者眼里变成「同一模块两份源码」。
+    "arcbench-agent-runtime/build/",
 )
 # 合规红线：ARC 编译器与官方题面素材只许本地，不得随包提交
 DENY_COMPLIANCE = (
