@@ -259,7 +259,10 @@ def fix_import_drift(code_dir: Path) -> list[str]:
                     near_pkg = rp
                     break
             if near_pkg:
-                new_import = f"from {near_pkg} import"
+                # 被导入名必须原样带过去：只换模块名而丢掉名字清单，产出的
+                # 是 `from X import`——语法错让整棵树 import 全灭（启动器 0
+                # 候选 = 官方容器 exit 1 不评分），比它要修的漂移严重一个量级。
+                new_import = f"{m.group(1)}{near_pkg}{m.group(3)}{m.group(4)}"
                 new_src = new_src.replace(m.group(0), new_import)
                 fixes.append(f"{rel}: from {imported} → from {near_pkg}")
                 changed = True

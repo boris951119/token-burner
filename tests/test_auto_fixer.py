@@ -61,6 +61,27 @@ class TestImportDrift:
         assert fixes, "import 路径漂移必须被检测到"
         assert "f1_auth" in _read(f), "必须重写为实际包名"
 
+    def test_rewrite_keeps_imported_names(self, tmp_path):
+        """9/23 交付 05 尸检：旧实现重写时把名字清单整个丢掉，产出
+        `from link_creation import`——语法错让整棵 import 树全灭，启动器
+        0 候选 = 官方容器 exit 1（不评分），比它要修的漂移严重一个量级。
+        上一条测试只断言「包名换了」，所以这个自伤通道一路绿灯。"""
+        import ast
+
+        pkg = tmp_path / "f1_auth"
+        pkg.mkdir()
+        (pkg / "__init__.py").write_text("")
+        (pkg / "f1_auth.py").write_text("def register(): pass\n")
+        web = tmp_path / "web_ui"
+        web.mkdir()
+        _write(web / "__init__.py", "")
+        f = web / "web_ui.py"
+        _write(f, "from auth import register, login_url as lu\n")
+        fix_import_drift(tmp_path)
+        src = _read(f)
+        ast.parse(src)                       # 修完必须仍是合法 Python
+        assert "register" in src and "login_url as lu" in src
+
     def test_clean_imports_untouched(self, tmp_path):
         pkg = tmp_path / "auth"; pkg.mkdir()
         (pkg / "__init__.py").write_text("")
