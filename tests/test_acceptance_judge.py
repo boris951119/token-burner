@@ -415,6 +415,58 @@ def _url_for(body: str):
     return f"http://127.0.0.1:{srv.server_address[1]}"
 
 
+# ---- 隐藏控件与页内脚本（9/23 mini 彩排读数）----------------------------
+# SPA 的常态写法：二级视图整段 hidden，页内脚本在点击时摘掉 hidden。这类
+# 文案在源码里、也长在真控件上，评测点进那个区就是看得见——按「只存在于不
+# 可见位置」判红，修复环会围着一条改不动的指令烧掉整轮（彩排实测 2 红）。
+# 反向保险：脚本证据不能当免罪符，keep#2 的陈列式造假必须照旧逐条判红。
+
+_COPY = ('<p>This page shows your shelves and the books inside them, all in '
+         'one place for daily reading, and the archive opens with a click so '
+         'nothing you saved earlier is out of reach.</p>')
+
+
+def _hidden_page(controls: str, with_script: bool):
+    return {"/": ('<html><body><h1>Reading Desk</h1>' + _COPY +
+                  '<section id="archive" hidden>' + controls + '</section>'
+                  + ('<script>document.getElementById("archive").hidden = '
+                     'false</script>' if with_script else '')
+                  + '</body></html>')}
+
+
+class TestHiddenControlRevealable:
+    def _judge(self, controls: str, with_script: bool):
+        srv = _serve(_hidden_page(controls, with_script))
+        url = f"http://127.0.0.1:{srv.server_address[1]}"
+        r = judge_checklists(
+            [_ck(seed_entities=["Open handbook", "Conference slides"])], url)
+        srv.shutdown()
+        return r
+
+    def test_js_revealable_button_copy_is_out_of_scope(self):
+        r = self._judge('<button>Open handbook</button>'
+                        '<button>Conference slides</button>', True)
+        assert r["failed"] == 0 and r["passed"] == 0, r["failures"]
+        assert r["client_side"] == 2 and r["total"] == 2, r
+        assert "隐藏控件" in r["note"] and "不可见位置" not in r["note"]
+
+    def test_hidden_plain_text_on_script_page_is_still_red(self):
+        """页内有脚本不等于文案可见：hidden 块里的正文没有任何可点通道，
+        评测照样看不见，这条红是真缺陷。"""
+        r = self._judge('<span>Open handbook</span>'
+                        '<span>Conference slides</span>', True)
+        assert r["failed"] == 2 and r["client_side"] == 0, r
+        assert all("不可见位置" in f for f in r["failures"]), r["failures"]
+
+    def test_hidden_button_without_script_is_still_red(self):
+        """keep#2 口径：零脚本页上的哑按钮点了不会有任何反应，藏在 hidden
+        里更是死路——降级通道必须认那份接线证据。"""
+        r = self._judge('<button>Open handbook</button>'
+                        '<button>Conference slides</button>', False)
+        assert r["failed"] == 2 and r["client_side"] == 0, r
+        assert all("不可见位置" in f for f in r["failures"]), r["failures"]
+
+
 class TestClickControlChannel:
     def test_plain_text_control_is_red(self):
         r = judge_checklists(

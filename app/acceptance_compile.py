@@ -173,6 +173,44 @@ def _click_quotes_in(text: str) -> list[str]:
     return out
 
 
+# WHEN 里「输入类」动词引出的引号文案是**评测自己敲进控件的值**（type "kw"
+# into the box / 填写标题 "X"），界面并不预先显示它：按控件文案判「未出现在
+# 页面上」是假红，而模型最省事的"修法"恰是把它塞成 placeholder 或藏进隐藏块
+# ——9/23 mini 彩排实测：3 条事实里 1 条即此类，交付真把它塞进了 hidden 表单。
+# 与点击通道同法按引号左侧最近窗口判定；点击动词同样近身时让位（「点击 X」的
+# X 必须是真控件，不能因为同句里还有个 fill 就被放弃这条硬通道）。
+_TYPE_VERB = re.compile(
+    r"(?:\b(?:type|types|typing|enter|enters|entered|fill|fills|filled"
+    r"|write|writes|writing|paste|pastes)\b|输入|填写|键入|填入)"
+    r"[\s\w'’()/…\-]{0,40}$", re.I)
+# 但引号紧跟「字段类名词」时它是**输入框的名字**而不是值（fill in the
+# "Title" field）：评测按 getByLabel/getByPlaceholder("Title") 定位，这条必须
+# 留在控件通道。只允许夹一个词，否则 type "X" into the search box 会被误留。
+_FIELD_NOUN_AFTER = re.compile(
+    r"^\s{0,2}(?:[\w一-鿿]{1,12}\s+)?\s*"
+    r"(?:fields?|boxes|box|inputs?|text\s*fields?|textboxes?|areas?|columns?"
+    r"|fields?et|下拉|字段|输入框|文本框|框|栏)", re.I)
+
+
+def _typed_quotes_in(text: str) -> set[str]:
+    """WHEN 步骤里由输入类动词引出的引号文案（评测打进去的值，不判界面）。"""
+    out: set[str] = set()
+    if not text:
+        return out
+    body = _MD_FENCE.sub(" ", _MD_IMG.sub("", text))
+    for pat in (_QUOTED_D, _QUOTED_CJK, _QUOTED_S, _QUOTED_BT):
+        for m in pat.finditer(body):
+            left = body[:m.start()]
+            if not _TYPE_VERB.search(left) or _CLICK_VERB.search(left):
+                continue
+            if _FIELD_NOUN_AFTER.match(body[m.end():]):
+                continue          # 引号里是输入框的名字，不是要打的值
+            q = _clean_quote(m.group(1))
+            if q:
+                out.add(q)
+    return out
+
+
 def _seed_entities_of(description: str) -> list[str]:
     """description 内 Seed data: 子句之后的引号名（与 seed_contract 同法）。"""
     out: list[str] = []
@@ -286,7 +324,10 @@ def _facts(req_id: str, name: str, desc: str, scenarios: list[dict],
                 if _HOME_HINT.search(content) or _ENTRY_HINT.search(content):
                     home_visible = True
                 if kw == "WHEN":
+                    typed = _typed_quotes_in(content)
                     for q in _quotes_in(content, for_control=True):
+                        if q in typed:
+                            continue   # 输入值由评测自己敲，不承诺界面预先显示
                         if q not in controls:
                             controls.append(q)
                     for q in _click_quotes_in(content):

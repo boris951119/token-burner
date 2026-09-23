@@ -500,6 +500,22 @@ def _iter_click_facts(checklists: Iterable[NodeChecklist]):
             yield ck.req_id, lab
 
 
+def _hidden_control_revealable(crawl: _Crawl, e_norm: str) -> bool:
+    """文案挂在「同一页有脚本」的可点控件上，只是当前被 hidden 藏住。
+
+    SPA 常态：入口页把二级视图整段 hidden，点击后由页内脚本摘掉——这条文案
+    在源码里、也真长在控件标签上，静态可见性通道看不见它。9/23 mini 彩排
+    实证：列表区 hidden 时区间里的搜索按钮文案判「只存在于不可见位置」，
+    而评测点进该区就是能看见、点了就能用。
+
+    与 keep#2 的造假（零脚本页把需求文案塞进隐藏块当陈列）不同病，判别依据
+    就是那条脚本证据（require_wiring=True 只在页内有 <script> 时才认控件）。
+    这里只把判红降成射程外：不判绿，真不可见时官方那侧照样红。
+    """
+    return any(e_norm in _interactive_corpus(p, require_wiring=True)
+               for p in crawl.pages)
+
+
 def judge_checklists(checklists: list[NodeChecklist], base_url: str,
                      max_pages: int = 17,
                      timeout: float = 6.0) -> dict:
@@ -557,12 +573,18 @@ def judge_checklists(checklists: list[NodeChecklist], base_url: str,
             client_side.append(tag)
             src_kind[tag] = "接口返回值"
         elif e in raw_norm:
-            # 源码里有、页面上没有 = 塞在隐藏块/注释里（keep#2 的造假口径）。
-            # 这类绝不进归并：把它折成一条结构性根因等于给造假开脱。
-            failures.append(
-                f'{req_id} 编译清单[{kind}] "{ent}" 只存在于页面的不可见位置'
-                f'（隐藏元素/HTML 注释/属性）：评测按渲染后的可见性断言，'
-                f'必须让它就出现在对应控件上，删掉这种隐藏副本')
+            # 源码里有、页面上没有：先分「真造假」与「SPA 的隐藏二级视图」。
+            # 长在本页可点控件上的 hidden 文案由页内脚本自己摘掉，评测点得到
+            # ——静态通道判不了它的可见性，记射程外（keep#2 那种零脚本陈列
+            # 依旧逐条判红，这类绝不进归并：折成一条根因等于给造假开脱）。
+            if _hidden_control_revealable(crawl, e):
+                client_side.append(tag)
+                src_kind[tag] = "隐藏控件（页内脚本可展开）"
+            else:
+                failures.append(
+                    f'{req_id} 编译清单[{kind}] "{ent}" 只存在于页面的不可见位置'
+                    f'（隐藏元素/HTML 注释/属性）：评测按渲染后的可见性断言，'
+                    f'必须让它就出现在对应控件上，删掉这种隐藏副本')
         else:
             absent.append((req_id, kind, ent))
     total = len(facts)

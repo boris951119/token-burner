@@ -220,8 +220,11 @@ children:
 def test_cjk_quoted_labels_reach_controls(tmp_path):
     ck = {c.req_id: c for c in compile_checklists(_write(tmp_path, REQ_YAML_CJK))}["REQ-1.1"]
     assert "登录" in ck.control_labels
-    assert "张三" in ck.control_labels
     assert ck.home_visible is True, "首页提示应识别中文'首页'"
+    # 「输入 “张三”」的张三 是评测自己敲进输入框的值，不承诺界面预先显示；
+    # 它若真是种子数据，由 Seed data 通道负责可见性（本夹具即这一路）。
+    assert "张三" not in ck.control_labels
+    assert "张三" in ck.seed_entities
 
 
 def test_cjk_seed_names_reach_seed_channel(tmp_path):
@@ -235,6 +238,44 @@ def test_cjk_sentence_like_quotes_are_not_control_labels(tmp_path):
     ck = {c.req_id: c for c in compile_checklists(_write(tmp_path, REQ_YAML_CJK))}["REQ-1.1"]
     assert "用户名不存在，请核对" not in ck.control_labels
     assert "欢迎回来" in ck.behavior_expectations
+
+
+def test_typed_input_values_are_not_interface_copy(tmp_path):
+    """WHEN 里输入类动词引出的引号串是评测自己敲进控件的值：按「必须预先
+    出现在页面上」判红即假红，且模型最省事的满足方式恰是塞成 hidden 表单的
+    placeholder（9/23 mini 彩排实测）。点击动词引出的那条不受影响——它是
+    真控件，评测按 role+name 硬定位。"""
+    def ck(when: str):
+        yaml = ('id: ROOT\ntype: FOLDER\nchildren:\n'
+                '  - id: REQ-1\n    name: Links\n    type: FOLDER\n'
+                '    children:\n'
+                '      - id: REQ-1.1\n        name: Create\n        type: ATOMIC\n'
+                '        description: Home page of the app.\n        scenarios:\n'
+                '          - name: s\n            steps:\n'
+                '              - keyword: WHEN\n'
+                f'                content: {when}\n'
+                '              - keyword: THEN\n'
+                '                content: The row "Conference slides" appears\n')
+        return compile_checklists(_write(tmp_path, yaml))[0]
+
+    n = ck('Click the "New link" button, fill the form with title '
+           '"Conference slides" and URL "https://example.org/slides", '
+           'then submit')
+    assert n.control_labels == ["New link"]
+    assert n.click_controls == ["New link"]
+    # 值不承诺预先可见，但 THEN 里复述它仍是行为断言（通道没丢事实）
+    assert "Conference slides" in n.behavior_expectations
+
+    assert ck('Type "handbook" into the search box').control_labels == []
+    # 动词在引号之后不算数：填值动作发生在点击之后，X 仍是控件
+    assert ck('Click "Go" after typing the query').control_labels == ["Go"]
+    # 引号紧跟字段类名词时它是**输入框的名字**（评测按 label/placeholder 定位
+    # 的就是它），不是要打的值——这一条必须留在控件通道
+    assert ck('Fill in the "Title" field and click "Save"').control_labels \
+        == ["Title", "Save"]
+    zh = ck('输入 “关键词” 后点击 “搜索”')
+    assert zh.control_labels == ["搜索"] and zh.click_controls == ["搜索"]
+    assert ck('填写 “书名” 字段').control_labels == ["书名"]
 
 
 def test_cjk_and_ascii_quote_channels_are_parity(tmp_path):
