@@ -70,8 +70,8 @@ class TestL1RenderingContract:
     当时最大的死因簇不是模型能力，而是生成器把 UX 结构交给了「硬编码
     mockup」——库里种了 28 条，页面上手写 16 条不接库，官方 32 条用例从
     第一条定位就落空。单条「渲染层必须读库」契约赎回约 17 题。
-    其余四条同样是量出来的（getByText 子串兜底挑错元素、同名双卡、非幂等
-    种子、hover 才渲染的卡内入口），规则必须泛化到零题目内容（#46 口径）。"""
+    其余四条同样是量出来的（两种名字口径下互为子串即歧义、同名双卡、非幂等
+    种子、卡内入口常驻优于悬停才渲染），规则必须泛化到零题目内容（#46 口径）。"""
 
     REQ = '需求：首页含 "Search" 输入框与笔记列表。'
 
@@ -89,13 +89,15 @@ class TestL1RenderingContract:
         assert "静态样例" in r, "必须点名手写样例条目这一死法"
 
     def test_substring_locator_anti_contract(self):
-        """9/23 深夜复读官方 helpers.ts 更正口径：按钮定位普遍写 /^原文$/i
-        精确锚定，真正会撞名的是 noteCard 一类兜底——getByText(子串口径)
-        + .first() 挑中错元素，再往那个窄作用域里找控件全超时。契约必须
-        按这条真实通道说，而不是笼统说「name 是子串匹配」。"""
+        """9/23 深夜逐域统计官方定位写法（不是一次印象）：keep helpers 有
+        54 处 /^原文$/i 精确锚定，而 bookstack/stackoverflow 的 toPattern 是
+        `new RegExp(escapeRegExp(v), 'i')`——不锚定，等于子串+忽略大小写。
+        两种口径同时存在 ⇒ 词面互为子串在有的题上就是双向歧义；
+        noteCard 的兜底还带 .first()（挑错元素后窄作用域全超时）。"""
         r = self._inject()
-        assert "子串" in r and "/^原文$/i" in r
-        assert "getByText" in r and ".first()" in r
+        assert "/^原文$/i" in r and "子串" in r, "两种口径都要讲到"
+        assert "不锚定的正则" in r
+        assert ".first()" in r
         assert "公共定位面" in r, "内部/编辑态词面不得进侧栏与菜单"
 
     def test_duplicate_name_creation_is_ambiguity(self):
@@ -109,14 +111,14 @@ class TestL1RenderingContract:
         assert "不得自行加挂" in r, "条目归类只能来自需求原文"
 
     def test_card_actions_stay_in_dom(self):
-        """常驻 vs 按需渲染是实测两难（赎回 2 题 vs 判红 6 题），契约须写死
-        取向，否则模型每轮自己重新发明一次。理由要按官方 helpers 的两类路径
-        说：一类 hoverNamed 后再点卡内按钮、一类不悬停直接断言可见——
-        只说「评测不会悬停」是说过头了（9/23 复读 helpers.ts 更正）。"""
+        """常驻 vs 悬停渲染是实测两难（这侧多赎回 6 题），取向必须写死。
+        契约只声明「悬停链路任一环没对上就等不到按钮」这一层——官方卡内点击
+        确实先 hoverNamed（helpers.ts 六处同形），所以早先那句「评测不会悬停」
+        是说过头了，逐行对证后收回；再深的机理没有取证，就不写进契约。"""
         r = self._inject()
-        assert "常驻 DOM" in r
-        assert "悬停" in r and "不悬停" in r, "两类定位路径都得讲到"
-        assert "按常驻这侧取舍" in r
+        assert "常驻 DOM" in r and "悬停" in r
+        assert "净赎回更多用例" in r and "按常驻这侧取舍" in r
+        assert "评测不会去悬停" not in r and "不会去悬停" not in r
 
 
 class TestAriaRoleContract:
