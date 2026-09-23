@@ -43,7 +43,17 @@ def _free_port(prefer: int) -> int:
 
 
 def _pid_alive(pid: int) -> bool:
-    # Windows：OpenProcess 探活（无 psutil 依赖）；退出码即存活位
+    # Windows 走 OpenProcess（无 psutil 依赖），退出码即存活位；
+    # POSIX 用 signal 0 探活——Mac 上没有 ctypes.windll，缺这条分支时
+    # 陈旧 .grade.lock 会让评分器直接 AttributeError 崩在拿锁阶段。
+    if os.name != "nt":
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
     import ctypes
 
     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
