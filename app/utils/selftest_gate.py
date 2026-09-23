@@ -670,6 +670,44 @@ def _tally(data: dict) -> tuple[int, int, list[str]]:
     return passed, failed, failures
 
 
+# 未捕获异常的收尾行：Python 把 `模块.类名: 消息` 顶格打在 traceback 末尾
+# （runA 实测 jinja2.exceptions.TemplateNotFound: base.html）。帧行与源码
+# 回显行一律缩进，故只匹配顶格串即可与自然日志区分。
+_EXC_TAIL_RE = re.compile(
+    r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*(?::[ \t].*)?")
+_TRACEBACK_HEAD = "Traceback (most recent call last):"
+
+
+def _boot_exception(boot_log: Path, limit: int = 240) -> str:
+    """活服日志最后一段 traceback 的异常收尾行，没有则空串。
+
+    健康探针只盯 /api/health，页面级 5xx 的 traceback 唯一的去处就是本轮
+    判分请求写下的这份日志——runA 交付取证：首页 TemplateNotFound: base.html
+    让全部用例在导航一步落空，而编译判分能说的只有「首页必须 200 且渲染真实
+    内容」，修复环拿到泛化指令等于盲修，白烧一轮。探针通过后的崩溃必然出自
+    本轮请求，所以取最后一段 traceback 即归因到当下，不会翻出旧账。
+    """
+    try:
+        lines = boot_log.read_text(
+            encoding="utf-8", errors="replace").splitlines()
+    except Exception:
+        return ""
+    start = -1
+    for i in range(len(lines) - 1, -1, -1):
+        if lines[i].startswith(_TRACEBACK_HEAD):
+            start = i
+            break
+    if start < 0:
+        return ""
+    for line in lines[start + 1:]:
+        stripped = line.strip()
+        if not stripped or line[:1].isspace():
+            continue
+        if _EXC_TAIL_RE.fullmatch(stripped):
+            return stripped[:limit]
+    return ""
+
+
 def run_selftests(project_dir: Path, specs_dir: Path,
                   port_hint: int = 3411,
                   requirements_dir: Path | None = None
@@ -739,6 +777,15 @@ def run_selftests(project_dir: Path, specs_dir: Path,
                 csum.get("skipped") or csum.get("note") or "")
         cfail = list(csum.get("failures") or [])
         cpassed = int(csum.get("passed") or 0)
+        if cfail:
+            # 判分红字只能说到「页面没渲染出内容」这一层，本轮请求的真死因
+            # （traceback 收尾行）此刻已在活服日志里。追加到首条红字尾部、
+            # 不新增条目：纯归因既不虚红也不虚绿，且修复环赖以定向的 REQ id
+            # 前缀原样保留。
+            boot_fp.flush()
+            why_exc = _boot_exception(boot_log)
+            if why_exc:
+                cfail[0] = f"{cfail[0]}｜后端异常：{why_exc}"
         # 判分器的降级原因必须见于报告：否则「0/0 零信号」与「JS 壳射程外
         # 跳过」两种截然不同的结论在日志里长得一模一样。
         jnote = f"\n[compiled] {notes_c}" if notes_c else ""
