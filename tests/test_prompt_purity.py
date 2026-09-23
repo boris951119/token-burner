@@ -72,3 +72,59 @@ class TestPromptPurity:
         from app.tools import prompt_templates
         assert "本段刻意不给任何文案示例" in prompt_templates.WRITE_CODE_SYSTEM
         assert "Take a note" not in prompt_templates.WRITE_CODE_SYSTEM
+
+    def test_injected_ui_contract_is_also_noun_free(self):
+        """模型可见文本不止 prompts/*.md：inject_ui_manifest 把 ARIA 硬契约
+        拼进模块职责一起下发。规则只许写标签/属性（<button>、role="status"），
+        写内容串就是下一个 #46。"""
+        from app.agents.module_builder import ModulePlan, inject_ui_manifest
+        plans = [ModulePlan(name="view", responsibility="组装页面",
+                            dependencies=[], priority=1)]
+        inject_ui_manifest(plans, '需求：首页含 "Search" 输入框。')
+        text = plans[0].responsibility
+        low = text.lower()
+        hits = [n for n in TASK_PROPER_NOUNS if n.lower() in low]
+        assert not hits, hits
+        assert "ARIA 角色对照表" in text, "契约没拼上，本测试会空过"
+
+
+class TestGeneratedTemplatesNounFree:
+    """随包代码里的**落盘模板**（长字符串常量）同样零题目专名。
+
+    这些常量会被原样写进交付项目（backend/main.py、冒烟/探针脚本），模板里
+    的注释因此出现在送评产物源码中；且脚本异常时 traceback 会连源码行一起
+    回显，措辞会顺着冒烟报告流进修复提示词——c2ca6bc 烧过一次的同一条通道
+    （那次是「该措辞由自测闸带入修复提示词」）。取证注释留在仓库注释里，
+    不进模板。
+    """
+
+    def _templates(self):
+        import ast
+        out = []
+        for p in sorted((ROOT / "app").rglob("*.py")):
+            tree = ast.parse(p.read_text(encoding="utf-8"), filename=str(p))
+            for node in tree.body:
+                if isinstance(node, ast.Assign) and isinstance(
+                        node.value, ast.Constant) \
+                        and isinstance(node.value.value, str) \
+                        and len(node.value.value) > 300:
+                    name = getattr(node.targets[0], "id", "?")
+                    out.append((f"{p.relative_to(ROOT)}:{node.lineno}",
+                                name, node.value.value))
+        return out
+
+    def test_scan_set_is_not_empty(self):
+        """模板集为空=本测试空过（改名/搬目录即失效），必须先钉住。"""
+        names = {n for _, n, _ in self._templates()}
+        for must in ("_VERIFY_TEMPLATE", "_PROBE_TEMPLATE", "_BACKEND_MAIN"):
+            assert must in names, sorted(names)[:20]
+
+    def test_no_task_nouns_in_templates(self):
+        hits = []
+        for where, name, text in self._templates():
+            low = text.lower()
+            hits += [f"{where} {name}: {noun}" for noun in TASK_PROPER_NOUNS
+                     if noun.lower() in low]
+        assert not hits, hits
+
+

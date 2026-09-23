@@ -113,7 +113,7 @@ def _route_count(_c):
     except Exception:
         return 0
 
-# 9/22 stackoverflow 取证：候选全收集按【路由数最多】择优——业务包
+# 9/22 冷启动取证：候选全收集按【路由数最多】择优——业务包
 # 自带裸自测 app（有 health 无业务路由）迭代序抢先当选 → 冒烟加载
 # 的 app 与导出入口不一致。作者入口=路由面最广者，装配壳垫后。
 # 9/23 审计取证：导出启动器原先「模块级 app 非空即返回」，与本处口径
@@ -511,7 +511,7 @@ def _route_count(_c):
     except Exception:
         return 0
 
-# 9/22 stackoverflow 取证：同 VERIFY——候选全收集按路由数择优
+# 9/22 冷启动取证：同 VERIFY——候选全收集按路由数择优
 _cands = []
 for mod in mods:
     cand = getattr(mod, "app", None) or getattr(mod, "application", None)

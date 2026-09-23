@@ -195,7 +195,7 @@ if not _cands:
         if _third_party_missing():
             _msg += " [deps NOT bootstrapped: no install attempt succeeded]"
     raise SystemExit(_msg)
-# 9/22 stackoverflow 取证：业务包常自带裸自测 app（有 health 无业务
+# 9/22 冷启动取证：业务包常自带裸自测 app（有 health 无业务
 # 路由），walk_packages 迭代序里抢先当选 → 首页 404 全场团灭。作者
 # 入口必须按【路由数最多】择优。
 # 9/22 keep#2 取证：流氓演示模块路由更多时纯路由数会被击败——
