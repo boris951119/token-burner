@@ -65,6 +65,53 @@ class TestUxChecklistInjection:
         assert "验收节点逐字清单" not in plans[0].responsibility
 
 
+class TestL1RenderingContract:
+    """9/23 深夜 L1 赎回率测量取证（keep 域手工重写导出件，1/32 → 30/32）：
+    当时最大的死因簇不是模型能力，而是生成器把 UX 结构交给了「硬编码
+    mockup」——库里种了 28 条，页面上手写 16 条不接库，官方 32 条用例从
+    第一条定位就落空。单条「渲染层必须读库」契约赎回约 17 题。
+    其余四条同样是量出来的（子串匹配、同名双卡、非幂等种子、hover 才渲染
+    的卡内入口），规则必须泛化到零题目内容（#46 口径）。"""
+
+    REQ = '需求：首页含 "Search" 输入框与笔记列表。'
+
+    def _inject(self):
+        from app.agents.module_builder import ModulePlan, inject_ui_manifest
+        plans = [ModulePlan(name="view", responsibility="组装页面与静态资源",
+                            dependencies=[], priority=1)]
+        assert inject_ui_manifest(plans, self.REQ) == "view"
+        return plans[0].responsibility
+
+    def test_seed_must_be_rendered_from_storage(self):
+        r = self._inject()
+        assert "渲染层必须从库里读" in r, "只写「入库」不够，mockup 照样满分落空"
+        assert "首屏条目数等于库里该视图的条目数" in r
+        assert "静态样例" in r, "必须点名手写样例条目这一死法"
+
+    def test_substring_locator_anti_contract(self):
+        """getByRole 的 name 默认子串匹配——短词面撞长词面是双向判歧义。"""
+        r = self._inject()
+        assert "子串" in r and "而不是全等" in r
+        assert "公共定位面" in r, "内部/编辑态词面不得进侧栏与菜单"
+
+    def test_duplicate_name_creation_is_ambiguity(self):
+        r = self._inject()
+        assert "两张同名卡片" in r and "去重" in r
+
+    def test_seed_init_is_idempotent_and_facet_clean(self):
+        r = self._inject()
+        assert "必须幂等" in r and "旧关联要先清掉" in r
+        assert "渲染前必须去重" in r
+        assert "不得自行加挂" in r, "条目归类只能来自需求原文"
+
+    def test_card_actions_stay_in_dom(self):
+        """常驻 vs 按需渲染是实测两难（赎回 2 题 vs 判红 6 题），契约须写死
+        取向，否则模型每轮自己重新发明一次。"""
+        r = self._inject()
+        assert "常驻 DOM" in r and "悬停" in r
+        assert "按常驻这侧取舍" in r
+
+
 class TestAriaRoleContract:
     """9/23 取证：官方用例的断言几乎全走 getByRole/getByLabel/
     getByPlaceholder（button/textbox/cell/checkbox/dialog/placeholder…），
