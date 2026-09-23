@@ -17,6 +17,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -163,8 +164,73 @@ def _ensure_playwright_module(npx: str, cli_version: str = "") -> str:
     return f"@playwright/test 安装失败（rc={r.returncode}）: {err[:200]}"
 
 
+# 浏览器探针用的最小 spec：不碰被测应用，只证明 Chromium 真能起
+_PROBE_SPEC = (
+    "import { test, expect } from '@playwright/test';\n"
+    "test('environment probe', async ({ page }) => {\n"
+    "  await page.goto('data:text/html,<title>arcbench-probe</title>');\n"
+    "  expect(await page.title()).toBe('arcbench-probe');\n"
+    "});\n"
+)
+
+BROWSER_PROBE_TIMEOUT_S = 180
+
+
+def _probe_error_hint(blob: str) -> str:
+    """从 playwright 的报错里挑那条「环境级」证据。
+
+    判分红叶与本机噪音混在一起时，修复环拿到的是同一句话，而只有一半
+    的红色是代码能修的——把缺浏览器/缺共享库/沙箱这三类原文顶出来。
+    """
+    for line in blob.splitlines():
+        low = line.strip().lower()
+        if any(k in low for k in ("executable doesn't exist",
+                                  "cannot open shared object",
+                                  "shared libraries",
+                                  "no sandbox",
+                                  "--no-sandbox",
+                                  "browsertype.launch",
+                                  "please run the following")):
+            return line.strip()[:200]
+    tail = " ".join(blob.split())
+    return tail[-180:]
+
+
+def _browser_probe(npx: str) -> str:
+    """真起一次浏览器。""=可用，其余=不可用原因。
+
+    批次#32 把这一层从"结构性缺席"救回来后新暴露的风险：能 --list 收集
+    spec ≠ 能跑 spec。镜像里没烤浏览器（或版本对不上、root 沙箱被禁）时，
+    整轮自测会用同一条环境错误判红全部用例，再把这些红灌进修复环——
+    修复环为此烧掉的是真金白银与墙钟，而代码没有任何可修的缺陷。
+    所以开工前先花几秒自证：起不来就整段跳过，与旧行为的代价相同，
+    但原因进 notes（旧行为的原因那句"探测失败"是假的）。
+    """
+    with tempfile.TemporaryDirectory(prefix="arcbench-pw-probe-") as td:
+        d = Path(td)
+        (d / "arcbench_env_probe.spec.ts").write_text(_PROBE_SPEC,
+                                                      encoding="utf-8")
+        _ensure_node_modules_link(d)
+        env = dict(os.environ,
+                   PLAYWRIGHT_TEST_DIR=str(d),
+                   GRADE_REPORT=str(d / "probe-report.json"),
+                   PLAYWRIGHT_OUTPUT_DIR=str(d / "probe-results"),
+                   PLAYWRIGHT_ACTION_TIMEOUT="15000")
+        try:
+            r = subprocess.run([npx, "playwright", "test"],
+                               cwd=str(GRADE_DIR), env=env, capture_output=True,
+                               text=True, encoding="utf-8", errors="replace",
+                               timeout=BROWSER_PROBE_TIMEOUT_S)
+        except Exception as exc:
+            return f"浏览器探针无法启动 {exc!r}"[:200]
+        if r.returncode == 0:
+            return ""
+        return "浏览器不可用: " + _probe_error_hint(
+            (r.stderr or "") + "\n" + (r.stdout or ""))
+
+
 def node_unavailable_reason() -> str:
-    """node 侧依赖前置探测。
+    """node 侧依赖前置探测（CLI → 模块 → 浏览器，三档全过才算可用）。
 
     取证（2026-09-23 Linux 全真演练）：交付容器无 npx 时，本闸先生成
     specs（真金白银的 LLM 调用）再在 lint 处抛 FileNotFoundError，
@@ -188,8 +254,10 @@ def node_unavailable_reason() -> str:
             _node_probe = f"playwright CLI 不可用: {err[:120]}"
         else:
             # CLI 通了不等于能跑 spec：'@playwright/test' 的模块解析走
-            # GRADE_DIR/node_modules，随包工作区里那份得先就位
-            _node_probe = _ensure_playwright_module(npx, (r.stdout or "").strip())
+            # GRADE_DIR/node_modules，随包工作区里那份得先就位；模块就位
+            # 也不等于起得了浏览器——第三档不验，整轮自测会拿环境错误判红
+            _node_probe = (_ensure_playwright_module(npx, (r.stdout or "").strip())
+                           or _browser_probe(npx))
     except Exception as exc:
         _node_probe = f"playwright 探测失败 {exc!r}"[:160]
     return _node_probe

@@ -26,6 +26,8 @@ def _reset_probes(tmp_path, monkeypatch):
     sg._npm_root_cache = None
     monkeypatch.setattr(sg, "GRADE_DIR", tmp_path / "grade")
     (tmp_path / "grade").mkdir()
+    # 浏览器探针单列一组测试：本文件数的是"依赖探测花了几次 subprocess"
+    monkeypatch.setattr(sg, "_browser_probe", lambda _npx: "")
     yield
     sg._node_probe = None
     sg._npm_root_cache = None
@@ -189,3 +191,69 @@ def test_npm_root_query_is_cached(monkeypatch):
     assert sg._npm_global_root() == ""
     assert sg._npm_global_root() == ""
     assert len([c for c in calls if "root -g" in " ".join(c)]) == 1
+
+
+# ---------- 第三档：浏览器真起得来才算这一层活着 ----------
+
+class TestBrowserProbe:
+    # autouse 夹具把 _browser_probe 换成了空转，这里要拿原件
+    REAL = staticmethod(sg._browser_probe)
+
+    def _capture(self, monkeypatch, result):
+        seen = {}
+
+        def run(cmd, *a, **k):
+            seen["cmd"] = [str(c) for c in cmd]
+            seen["cwd"] = str(k.get("cwd"))
+            seen["env"] = k.get("env") or {}
+            return result
+
+        monkeypatch.setattr(sg.subprocess, "run", run)
+        return seen
+
+    def test_probe_launches_a_real_browser(self, monkeypatch):
+        seen = self._capture(monkeypatch, _R(0))
+        assert self.REAL("/usr/local/bin/npx") == ""
+        assert seen["cmd"][1:] == ["playwright", "test"]
+        assert seen["cwd"] == str(sg.GRADE_DIR)
+        assert seen["env"]["PLAYWRIGHT_TEST_DIR"]
+
+    def test_probe_reason_reaches_the_gate(self, monkeypatch):
+        """模块齐、浏览器起不来的容器：这一层必须整段跳过并说明原因。
+
+        否则全部 spec 用同一条环境错误判红，修复环拿到的信号是"代码有
+        N 个缺陷"，烧的是真金白银与墙钟，而缺陷根本不在代码里。
+        """
+        monkeypatch.setattr(sg, "_ensure_playwright_module", lambda *a, **k: "")
+        monkeypatch.setattr(sg, "_browser_probe",
+                            lambda _npx: "浏览器不可用: Executable doesn't exist")
+        calls = []
+        monkeypatch.setattr(sg.shutil, "which", lambda n: "/usr/local/bin/" + n)
+        monkeypatch.setattr(sg.subprocess, "run", _fake_run(calls))
+        reason = sg.node_unavailable_reason()
+        assert "浏览器不可用" in reason
+        assert sg.node_unavailable_reason() == reason, "原因同样进进程内缓存"
+
+    def test_hint_prefers_the_environment_line(self):
+        blob = ("Error: page.goto: net::ERR\n"
+                "Error: Executable doesn't exist at "
+                "/root/.cache/ms-playwright/chromium-1234/chrome\n"
+                "at Object.<anonymous> (runner.js:9)\n")
+        assert "Executable doesn't exist" in sg._probe_error_hint(blob)
+
+    def test_hint_covers_missing_shared_libraries(self):
+        """无 --with-deps 的镜像里最常见的一类：缺系统库，报错在 stderr 中段。"""
+        blob = ("log line one\n"
+                "libGBM.so.1: cannot open shared object file: No such file\n"
+                "log line three\n")
+        hint = sg._probe_error_hint(blob)
+        assert hint.startswith("libGBM"), "命中环境关键词时必须原样顶出那一行"
+
+    def test_hint_falls_back_to_flattened_tail(self):
+        """认不出环境关键词时原文照给（压成一行，别把 900 字符噪音灌进提示词）。"""
+        assert sg._probe_error_hint("a\nb\nc") == "a b c"
+        assert len(sg._probe_error_hint("x" * 900)) <= 180
+
+    def test_probe_timeout_is_bounded(self):
+        """探针自己不能变成新的墙钟黑洞：它跑在任何一次修复轮之前。"""
+        assert 0 < sg.BROWSER_PROBE_TIMEOUT_S <= 300
