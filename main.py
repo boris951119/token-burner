@@ -442,17 +442,23 @@ def main(argv: list[str] | None = None) -> int:
     task_budget = None
     if tree is not None:
         from app.arcbench_ingest import count_requirements
-        from app.utils.budget import size_aware_budget
+        from app.utils.budget import task_envelope
 
         n_atomic = count_requirements(tree)
         # 字数项与条数项并列：正式赛题面「条少字多」（github 每条 3,120 字符，
         # keep 的 5.6 倍），只按条数折算会反向给薄预算。渲染文本就是管线
         # 真正发出去的那份，故字数按它量，系数标定与判分口径同源
         req_chars = len(render_requirement_text(tree))
-        task_budget = size_aware_budget(n_atomic, req_chars)
+        # 只抬不砍（run 088dd22be41b 实证，见 budget.task_envelope 的注释）：
+        # 折算 1,621,440 覆盖掉配置的 2,000,000，验收+修复段因此零执行。
+        # 配置可能是字符串/脏值：脏值按「没有托底」处理，task_envelope 内已兜住
+        _floor = getattr(settings, "max_task_tokens", 0) or 0
+        task_budget = task_envelope(n_atomic, req_chars, _floor)
         print(f"[task] 原子需求={n_atomic} 条 题面={req_chars:,} 字符 → 任务信封"
-              f"={task_budget:,} token（条数/字数两式取大，覆盖配置 "
-              f"{settings.max_task_tokens:,}）", flush=True)
+              f"={task_budget:,} token（条数/字数两式取大，与配置 {_floor:,} "
+              f"取大＝只抬不砍"
+              f"{'，本次由配置托底' if int(_floor or 0) > 0 and task_budget == int(_floor) else ''}）",
+              flush=True)
     # 网关长挂防御：单请求实测可挂 25 分钟+（httpx read timeout 是字节
     # 间隙口径，滴字续命永不触发）；墙钟 600s 超时即刻换腿
     if settings.llm_wall_clock_seconds <= 0:

@@ -52,6 +52,24 @@ def get_active_budget_guard() -> "BudgetGuard | None":
     return _active_guard
 
 
+def task_envelope(n_requirements: int, text_chars: int,
+                  config_floor: int = 0) -> int:
+    """单任务实际信封：题面折算与配置预算**取大＝只抬不砍**。
+
+    run 088dd22be41b 实证：sheet 题折算 1,621,440 直接覆盖了配置里的
+    2,000,000，于是这一跑烧到 101.5% 断气、验收+修复段零执行，而账上还有
+    35 万 token 没用。折算口径的职责是给「条少字多」的题面加钱，从来不是
+    给一份健康配置减钱——把预算砍小这件事没有任何证据支持，实测反而说明
+    30k/千字偏薄。
+    """
+    try:
+        floor = int(config_floor or 0)
+    except (TypeError, ValueError):
+        # 配置里的脏值只允许被看成「没有托底」——启动折算不能换成一次崩溃
+        floor = 0
+    return max(size_aware_budget(n_requirements, text_chars), floor)
+
+
 def size_aware_budget(
     n_requirements: int,
     text_chars: int = 0,

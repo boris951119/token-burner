@@ -415,3 +415,39 @@ class TestRepairReserve:
         assert Settings().budget_repair_reserve == 0.25
         with pytest.raises(ValueError, match="budget_repair_reserve"):
             Settings(budget_repair_reserve=1.0)
+
+
+class TestTaskEnvelopeOnlyRaises:
+    """run 088dd22be41b 实证：折算 1,621,440 覆盖掉配置 2,000,000，这一跑
+    烧到 101.5% 断气、验收+修复段零执行，而账上还有约 35 万没用。折算的职责是
+    给「条少字多」的题面加钱，从来不是给健康配置减钱。"""
+
+    def test_config_floor_rescues_a_small_practice_task(self):
+        from app.utils.budget import task_envelope
+
+        # 初赛小任务：折算 1.44M，配置给 2M ⇒ 取配置（不砍）
+        assert task_envelope(32, 17_797, 2_000_000) == 2_000_000
+
+    def test_char_term_still_wins_when_it_is_the_larger_number(self):
+        from app.utils.budget import size_aware_budget, task_envelope
+
+        got = task_envelope(47, 146_637, 2_000_000)
+        assert got == size_aware_budget(47, 146_637) > 2_000_000
+
+    def test_sheet_task_gets_the_config_floor_it_actively_needed(self):
+        """官方那一跑死于 1,645,515 / 1,621,440：配置托底后同样的用量不会断气。"""
+        from app.utils.budget import task_envelope
+
+        assert task_envelope(24, 54_048, 2_000_000) == 2_000_000
+        assert task_envelope(24, 54_048, 2_000_000) > 1_645_515
+
+    @pytest.mark.parametrize("floor", [0, None, -5, "abc"])
+    def test_dirty_or_missing_floor_falls_back_to_the_size_term(self, floor):
+        from app.utils.budget import size_aware_budget, task_envelope
+
+        try:
+            expect = size_aware_budget(24, 54_048)
+            assert task_envelope(24, 54_048, floor) == expect
+        except (TypeError, ValueError):
+            # 脏值只允许被当成「没有托底」，不允许把启动折算换成一次异常
+            pytest.fail(f"脏配置值把信封折算炸了: {floor!r}")

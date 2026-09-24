@@ -1985,6 +1985,7 @@ def verify_delivery(
                     ok, report = auto_repair(
                         project_dir, settings, max_rounds=max_app_rounds,
                         requirement=requirement,
+                        priority_note=_home_route_priority_note(report),
                     )
                 except Exception as exc:
                     ok = False
@@ -2235,12 +2236,32 @@ def _package_layout_section(code_dir: Path) -> str:
         return ""
 
 
+def _home_route_priority_note(report: str) -> str:
+    """冒烟报告里出现「GET / -> 非 200」时，把首页接回修复队列的第一位。
+
+    run 088dd22be41b 实证：产物起服、`/api/health` 绿，但官方评测的
+    `GET / → 404` 刷到结束——UI 用例从第一条起全红，而修环当时正被预算
+    掐死，钱花在别的问题上。首页是所有旅程的入口，它的修复价值严格高于其他
+    任何单条冒烟失败，所以这条必须排在最前，而不是混在报告尾部等模型自己看见。
+    """
+    if "GET / ->" not in (report or ""):
+        return ""
+    return (
+        "【本轮唯一优先目标】首页路由 GET / 返回非 200：评测从首页进入再点控件"
+        "走旅程，首页没有路由＝所有页面类用例一起判红，优先级高于其他任何冒烟"
+        "失败。请把真实首页接上（渲染需求描述的功能 UI 与入口控件），并让需求"
+        "点名的每个页面都有一条真路由、且从首页有可点入口可达；禁止用占位页或"
+        "隐藏文本塞串充数。\n\n"
+    )
+
+
 def auto_repair(
     project_dir: Path, settings, max_rounds: int = 3,
     test_cmd: list[str] | None = None,
     extra_issue: str = "",
     verify_timeout: int | None = None,
     requirement: str = "",
+    priority_note: str = "",
 ) -> tuple[bool, str]:
     """冒烟失败后的定向自动修复（RepoFixer 通道）。
 
@@ -2304,7 +2325,8 @@ def auto_repair(
             return True, report
 
         issue = (
-            "集成冒烟失败（评测方以「import 全部模块 + create_app() + "
+            priority_note
+            + "集成冒烟失败（评测方以「import 全部模块 + create_app() + "
             "GET /api/health 返回 200」验收），失败报告如下：\n"
             + report[-1500:]
             + "\n"

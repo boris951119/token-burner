@@ -34,6 +34,15 @@ _MAX_FILE_CHARS = 60_000
 _SHRINK_RATIO = 0.5
 _SHRINK_MIN_CHARS = 1200
 
+# 语法拒收止损（run 088dd22be41b 实证：整跑的修复日志里「拒收语法非法的修复
+# 内容」出现 4 次，每次背后都是一整轮 LLM 调用，最后修环被预算掐死；本地 keep
+# 彩排也实测过同一文件反复重发同一份非法内容 views.py line 138 / line 116）。
+# RepoFixer 按次构造，跨轮次计数只能挂在进程上——按 (仓库, 文件) 记，
+# 到 _FREEZE_SYNTAX_AT 次就冻结该文件的整文件重写并提前收手。
+_SYNTAX_FAILS: dict[str, int] = {}
+_FROZEN: set[str] = set()
+_FREEZE_SYNTAX_AT = 2
+
 
 def _is_discarded_frontend(rel: str) -> bool:
     """仓库根 frontend/**：web 交付导出时被最小 Vite 壳整体覆盖的路径。
@@ -133,6 +142,19 @@ class RepoFixer:
                 changed[rel] = (
                     fp.read_text(encoding="utf-8", errors="replace")
                     [:_MAX_FILE_CHARS] if fp.exists() else "")
+            if (rejected and len(rejected) == len(changed)
+                    and all(f"{self.repo}::{rel}" in _FROZEN
+                            for rel, _ in rejected)):
+                # 整份草稿全被拒、且拒因全在冻结名单里：这一轮什么都没落盘，
+                # 再发一轮只会再拒一次。当场收手，把额度留给别的模块
+                # （run 088dd22be41b：4 轮全砸在语法拒收上，修环死于预算耗尽）。
+                # 只要还有一个文件成功落盘就必须继续——它可能恰好让测试转绿，
+                # 提前收手等于把已经修好的结果扔掉。
+                result.error = (
+                    f"修复目标文件连续语法非法已冻结，停止烧轮次："
+                    f"{[r for r, _ in rejected]}")
+                result.diff = self._diff()
+                return result
             passed, output = self._verify(self.test_cmd, test_files)
             result.test_output = output[:4000]
             if passed:
@@ -277,7 +299,19 @@ class RepoFixer:
                 try:
                     compile(content, str(target), "exec")
                 except SyntaxError as exc:
-                    msg = f"invalid syntax: {exc.msg} (line {exc.lineno})"
+                    key = f"{self.repo}::{rel}"
+                    n = _SYNTAX_FAILS.get(key, 0) + 1
+                    _SYNTAX_FAILS[key] = n
+                    if n >= _FREEZE_SYNTAX_AT:
+                        _FROZEN.add(key)
+                        msg = (f"invalid syntax ×{n}（整文件重写已冻结）：别再重发这个"
+                               "文件，把改动放到别的文件上——连续重发同一份非法整文件"
+                               "只会白烧额度")
+                        print(f"[repo_fix] 冻结 {rel} 的整文件修复"
+                              f"（连续 {n} 次语法非法，run 088dd22be41b 实证"
+                              "重发同一份非法整文件＝纯失血）", flush=True)
+                    else:
+                        msg = f"invalid syntax: {exc.msg} (line {exc.lineno})"
                     print(f"[repo_fix] 拒收语法非法的修复内容 {rel}: {exc}",
                           flush=True)
                     rejected.append((rel, msg))
