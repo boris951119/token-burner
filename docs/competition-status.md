@@ -1072,7 +1072,8 @@ JSON-only 首页仍 2 份。这两类不是起不来，是**页面族/表单出�
 | 题目 | Core Requirements for an Online Spreadsheet（本档内简称 sheet，24 条原子需求） |
 | 额度通道 | 勾选"使用比赛额度评测"（平台建临时 key，从队伍共享 ¥500 扣，进排行榜） |
 | Model / Visual Model | `deepseek-v4-flash` / `deepseek-v4-vision-exp`（包内会自动补备胎编制） |
-| 提交时间 | 2026-09-24 |
+| 提交时间 | 2026-09-24（页面显示名 `token-burner- v1`，**实为 v40**，以运行号为准） |
+| 平台侧计数 | Traceability 42 requirements + 48 scenarios（＝5 域+13 组+24 原子，与我们 ingest 的 24 条 ATOMIC 同树不同口径） |
 
 **这一跑要回答的三个未知数**（本地免费通道都给不出）：① v40 的生成器侧改动（契约八
 + 语义契约射程）在真实判分面上赎回多少题；②修复环是否第一次完整跑完（此前两次彩排
@@ -1081,3 +1082,11 @@ JSON-only 首页仍 2 份。这两类不是起不来，是**页面族/表单出�
 不是事故。
 
 **上传后不改包**：这一跑的归因要求 v40 是唯一变量，任何新改动都攒到读数回来再出 v41。
+
+**开跑 8 分钟的实时读数（02:37–02:39 UTC）**：`[agent] boot ok argv=None` →
+`[vision] 1/9 reference/workbook-home.png ok` → `2/9 ... ok`，两条间隔 1 秒。
+⇒ 两件以前只能推断的事被证实：① **官方通道的视觉转写真的在工作**（正式赛两题的
+视觉缓存本地是空的，这一跑现算，此前从未在官方容器里验过视觉链）；② 依赖自举把
+flask/fastapi/uvicorn/pillow 全装上了（`Successfully installed ... flask-3.1.3
+pillow-12.3.0`），agent 侧运行环境不缺件。此刻还没出现 `[config]`/`任务信封` 是
+**预期**：那两行打在 ingest+视觉之后（main.py 里那条"尸检锚点"注释说的就是这个顺序）。
