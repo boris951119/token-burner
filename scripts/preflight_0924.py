@@ -27,7 +27,8 @@ from app.arcbench_ingest import (  # noqa: E402
 )
 from app.utils.budget import size_aware_budget  # noqa: E402
 
-TASK_ROOT = Path.home() / "Developer" / "token-burner-taskdata" / "hackathon-req-0924"
+TASK_ROOT = Path(sys.argv[1]) if len(sys.argv) > 1 else (
+    Path.home() / "Developer" / "token-burner-taskdata" / "hackathon-req-0924")
 
 # 「换页」的判据：THEN 步里既出现目的地动词，又出现页面类名词。
 # 只看 behavior_expectations 会得到假 0（9/24 首版踩过）——正式赛题面的跳转
