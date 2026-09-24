@@ -7,3 +7,15 @@
 # 契约随包 / 官方题面种子 / 包内测试）。
 1744690256efad044290c9ba3f935be34e46dd30e5a1c5d72681c049c33a948a  v37.zip  (批次#52c，#52~#53 契约)
 a5a7c5cb44fd4f92011bd18a696b3642b553d6bdf61f4b485038c9f38862ce3e  v38.zip  (v37 + 批次#54 射程收口，当前候选)
+# 重建配方（v39：工作树 = 提交 2dc6745；构建器默认 --base token-burner-submission-v8.zip
+# --blank agent-blank-based.zip，两者都在仓库根且都不入库）：
+#   git status 必须干净（app/ 与 main.py 无未提交改动）
+#   ./.venv/bin/python scripts/build_submission.py --out .tmp/submission-pack/v39.zip
+#   → 202 文件 571,642 字节；与 v38 逐文件比对**只差 4 个**：
+#     main.py / app/pipeline.py / app/utils/budget.py / app/prompts/write_code_system.md
+#   （= 批次#58A 信封 + #58B 存活闸 + #60 契约八；tests/docs/scripts 一律不入包）
+# 复验：docs/readings/0924/verify_v39.sh（官方形态容器七读，py3.11 下包内 139 例测试全绿）
+#   docker run --rm -v $PWD/.tmp/x-v39:/pkg -v $PWD/tests:/t \
+#     -v $PWD/.tmp/arcbench-official:/off -v $PWD/docs/readings/0924/verify_v39.sh:/verify.sh:ro \
+#     tb-shape:runA-mini sh /verify.sh
+0cb8bdbc51d91b4f312b090cbcc9662a3b8186a8228b59c1149ba0b4149bfead  v39.zip  (v38 + #58A/#58B/#60，当前候选)
