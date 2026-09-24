@@ -19,3 +19,9 @@ a5a7c5cb44fd4f92011bd18a696b3642b553d6bdf61f4b485038c9f38862ce3e  v38.zip  (v37 
 #     -v $PWD/.tmp/arcbench-official:/off -v $PWD/docs/readings/0924/verify_v39.sh:/verify.sh:ro \
 #     tb-shape:runA-mini sh /verify.sh
 0cb8bdbc51d91b4f312b090cbcc9662a3b8186a8228b59c1149ba0b4149bfead  v39.zip  (v38 + #58A/#58B/#60，当前候选)
+# 重建配方（v40：工作树 = 批次#63 提交之上；相比 v39 只差 3 个文件 =
+# main.py / app/utils/mechanical_assembly.py / app/platform_export.py）：
+#   git status 干净 → ./.venv/bin/python scripts/build_submission.py --out .tmp/submission-pack/v40.zip
+#   → 202 文件 576928 字节；复验 docs/readings/0924/verify_v40.sh（容器七读，包内 180 例测试绿）
+#   主读数：40 份对照集起服即死 7/40 → 0/40（scripts/boot_floor_measure.py 重跑即可复现）
+90836d5b1b314492c2f002ac148a94622d6c84fa38ebee34e93418bb63e223c6  v40.zip  (v39 + 批次#63 存活加固，当前候选)
