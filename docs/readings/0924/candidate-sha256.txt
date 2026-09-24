@@ -25,3 +25,17 @@ a5a7c5cb44fd4f92011bd18a696b3642b553d6bdf61f4b485038c9f38862ce3e  v38.zip  (v37 
 #   → 202 文件 576928 字节；复验 docs/readings/0924/verify_v40.sh（容器七读，包内 180 例测试绿）
 #   主读数：40 份对照集起服即死 7/40 → 0/40（scripts/boot_floor_measure.py 重跑即可复现）
 90836d5b1b314492c2f002ac148a94622d6c84fa38ebee34e93418bb63e223c6  v40.zip  (v39 + 批次#63 存活加固，当前候选)
+# 重建配方（v41：工作树 = 批次#64 提交 2d92c2b；相比 v40 只差 4 个文件 =
+# main.py / app/utils/budget.py / app/arcbench_smoke.py / app/agents/repo_fixer.py）：
+#   git status 干净（app/ 与 main.py 无未提交改动）
+#   ./.venv/bin/python scripts/build_submission.py --out .tmp/submission-pack/v41.zip
+#   → 202 文件 578,906 字节；逐文件 sha256 与 v40 对账：only-in-v40 空、only-in-v41 空、
+#     changed 恰为上述 4 个（单变量位成立）
+#   构建器对 v8 参考包报「少了 7 个」= arcbench-agent-runtime/build/lib/**（setuptools
+#   临时构建目录，v39/v40 同样不含，本地目录存在与否决定，非内容漂移）
+# 复验 docs/readings/0924/verify_v41.sh（容器七读，py3.11 下包内 241 例测试全绿）
+#   docker run --rm -v $PWD/.tmp/x-v41:/pkg -v $PWD/tests:/t \
+#     -v $PWD/docs/readings/0924/verify_v41.sh:/verify.sh:ro tb-shape:runA-mini sh /verify.sh
+#   注意：第 7 节必须连 tests/test_pipeline.py 一起拷（test_budget.py 从它借桩，
+#   单拷会在容器里报 5 例 ModuleNotFoundError 假红）。
+02ac8967ed4857f9272900d3c28b1ad56a06712fd9beb37670146b7cadaa2cd7  v41.zip  (v40 + 批次#64 三条死因收口，当前候选)
