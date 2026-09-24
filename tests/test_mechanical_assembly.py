@@ -229,6 +229,76 @@ def test_ensure_entry_yields_to_author(tmp_path):
     pkg.mkdir(parents=True, exist_ok=True)
     (pkg / "__init__.py").write_text("", encoding="utf-8")
     (pkg / "notes.py").write_text(
-        "def create_app():\n    pass\n", encoding="utf-8")
+        "from flask import Flask\n\n"
+        "def create_app():\n"
+        "    return Flask(__name__)\n", encoding="utf-8")
     assert ensure_entry(pkg.parent) is None
     assert not (tmp_path / "code" / "app_main").exists()
+
+
+def test_ensure_entry_replaces_dead_factory(tmp_path):
+    """批次#63 的核心改判：作者入口**文字在场但跑不起来**时必须装配保底壳。
+
+    旧口径只看文本（`def create_app` 在不在），而对照集里 7/40 的全红死法正是
+    「文字在、导入炸/工厂返回 None/工厂是模块名」——保底壳没写、启动器
+    raise SystemExit、整跑不评分。这里用「工厂返回 None」代表那一类：
+    runner 拿不到应用，等同于没有入口。
+    """
+    from app.utils.mechanical_assembly import ensure_entry
+
+    pkg = tmp_path / "code" / "notes"
+    pkg.mkdir(parents=True, exist_ok=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "notes.py").write_text("def create_app():\n    pass\n",
+                                  encoding="utf-8")
+    fix = ensure_entry(pkg.parent)
+    assert fix and (tmp_path / "code" / "app_main" / "app_main.py").is_file(), \
+        "作者入口跑不起来时必须机械装配，换一次可评分的终态"
+
+
+def test_shell_survives_its_own_broken_import(tmp_path):
+    """保底壳逐条 import 容错（9/24 对照集 26 号实证）：壳装配出来了，却因为
+    壳里一句 `from view_mode import ...` 抛 TypeError 而整个壳一起死——
+    启动器仍然「找不到入口」→ exit 1。壳的全部价值就是「服务活着」。"""
+    import importlib.util
+    from app.utils.mechanical_assembly import ModuleSurface, generate_app_main
+
+    code = tmp_path / "code"
+    good = code / "home"
+    (good / "sub").mkdir(parents=True)
+    (good / "__init__.py").write_text("", encoding="utf-8")
+    (good / "sub" / "__init__.py").write_text("", encoding="utf-8")
+    (good / "sub" / "web.py").write_text(
+        "from flask import Blueprint\nbp = Blueprint('home', __name__)\n"
+        "@bp.route('/')\ndef home(): return 'ok'\n", encoding="utf-8")
+    surfaces = [
+        ModuleSurface(name="home.sub", blueprints=[("web", "bp")],
+                      routers=[], inits=[], path=good / "sub"),
+        # 作者入口被写成模块名（TypeError: 'module' object is not callable）
+        # 那一类：装配清单里引用它，壳必须跳过而不是陪它死
+        ModuleSurface(name="ghost", blueprints=[("x", "bp")], routers=[],
+                      inits=[], path=code),
+    ]
+    (code / "app_main").mkdir()
+    (code / "app_main" / "__init__.py").write_text("", encoding="utf-8")
+    src = generate_app_main(surfaces)
+    (code / "app_main" / "app_main.py").write_text(src, encoding="utf-8")
+    # 子进程里验：本用例造的包名叫 home/app_main，塞进本进程 sys.modules 会
+    # 连坐后面同名的用例（9/24 全量跑里就是这么把 test_package_layout 的自动
+    # 垫片用例打成 order-dependent 红的）。
+    import json
+    import subprocess
+    import sys as _sys
+
+    probe = (
+        "import sys, json; sys.path.insert(0, %r)\n"
+        "import app_main.app_main as m\n"
+        "a = m.create_app()\n"
+        "print(json.dumps(sorted(r.rule for r in a.url_map.iter_rules())))\n" % str(code)
+    )
+    res = subprocess.run([_sys.executable, "-c", probe], capture_output=True,
+                         text=True, timeout=60)
+    assert res.returncode == 0, res.stderr[-400:]
+    rules = json.loads(res.stdout.strip().splitlines()[-1])
+    assert "/api/health" in rules and "/" in rules, \
+        "坏包只能杀掉它自己的那条 import，好蓝图必须挂上"

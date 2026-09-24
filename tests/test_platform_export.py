@@ -250,11 +250,89 @@ def test_backfilled_artifact_boots_with_business_routes(tmp_path,
 
 
 def test_author_entry_is_never_shadowed(tmp_path, project):
+    """作者入口**跑得起来**时保底必须让位——修复成果不许被壳旁路。"""
+    (project / "code" / "view" / "view.py").write_text(
+        "from flask import Flask\n\n"
+        "def create_app():\n    return Flask(__name__)\n", encoding="utf-8")
     out = tmp_path / "out"
     summary = export_platform_layout(out, project)
     assert summary["entry"] == "author"
     assert not (out / "backend" / "app_main").exists(), \
         "作者入口在场时装配保底必须让位，不得旁路修复成果"
+
+
+def test_dead_author_entry_gets_a_shell_instead_of_exit1(tmp_path, project):
+    """批次#63 改判：`def create_app(): pass` 这种「文字在场、工厂返回 None」
+    的产物，runner 拿不到应用 → exit 1 → 整跑不评分。旧口径按文本判「有入口」
+    所以不兜底；现按真导入探测判，必须装配保底壳换一次可评分终态。"""
+    out = tmp_path / "out"
+    summary = export_platform_layout(out, project)
+    assert summary["entry"] == "mechanical", \
+        "跑不起来的作者入口不再被当成入口——否则交付出去还是 exit 1"
+    assert (out / "backend" / "app_main" / "app_main.py").is_file()
+    shell = (out / "backend" / "app_main" / "app_main.py").read_text(
+        encoding="utf-8")
+    assert "__arcbench_assembled__ = True" in shell, \
+        "壳必须带标记：作者把入口修好后它自动让位"
+
+
+def test_broken_package_cannot_abort_entry_discovery(tmp_path, project):
+    """walk-abort（批次#49 记过名，9/24 重测对照集仍有份这么死）：一个语法错的
+    包会把 `pkgutil.walk_packages` 的迭代器当场炸穿，好模块一起陪葬。
+    启动器改成自己走目录树（iter_modules 只列名不导入）后，坏包只能杀自己。"""
+    import os
+    import socket
+    import subprocess
+    import sys
+    import time
+    import urllib.request
+
+    bad = project / "code" / "brokentool"
+    bad.mkdir()
+    # 坏在 __init__.py 上：walk_packages 要 import 父包才能下潜，异常从迭代器
+    # 内部抛出、直接炸穿 for 循环——后面的好模块与保底壳一个字都扫不到。
+    (bad / "__init__.py").write_text("def oops(:\n    pass\n", encoding="utf-8")
+    (bad / "bad.py").write_text("X = 1\n", encoding="utf-8")
+    (project / "code" / "view" / "view.py").write_text(
+        "from flask import Blueprint, render_template_string\n"
+        "bp = Blueprint('view', __name__)\n"
+        "@bp.route('/')\n"
+        "def home():\n"
+        "    return '<html><body><button>Go</button></body></html>'\n",
+        encoding="utf-8")
+    out = tmp_path / "out"
+    export_platform_layout(out, project)
+    backend = out / "backend"
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    log = open(backend / "boot.log", "wb")
+    proc = subprocess.Popen([sys.executable, "main.py"],
+                            cwd=backend, env={**os.environ, "PORT": str(port)},
+                            stdout=log, stderr=subprocess.STDOUT)
+    try:
+        health = None
+        deadline = time.time() + 30
+        while time.time() < deadline and health is None:
+            if proc.poll() is not None:
+                break
+            try:
+                with urllib.request.urlopen(
+                        f"http://127.0.0.1:{port}/api/health", timeout=2) as r:
+                    health = r.status
+            except Exception:
+                time.sleep(0.4)
+        assert health == 200, "语法错的包拖垮了整棵树的入口发现（walk-abort）"
+        tmpl = (backend / "main.py").read_text(encoding="utf-8")
+        assert "pkgutil.walk_packages(" not in tmpl, \
+            "启动器又用回 walk_packages：它在下潜时 import 父包，坏包能连坐整棵树"
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        log.close()
 
 
 # ---- 产物依赖自举（9/23 官方 entrypoint 取证）------------------------------

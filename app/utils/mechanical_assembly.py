@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import ast
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -89,6 +90,30 @@ def _sub_import(surface: ModuleSurface, stem: str) -> str:
     return f"{surface.name}.{stem}"
 
 
+def _alias_part(surface: ModuleSurface) -> str:
+    """别名片段：包名带点时（嵌套包/脚手架给的子包）直接插进标识符会生成
+    `_bp_home.sub_web` 这种非法名字——装配产物本身就是 SyntaxError，
+    保底壳等于没写。"""
+    return surface.name.replace(".", "_")
+
+
+def _guarded(imp: str, alias: str) -> str:
+    """一条 import 配一个 try：坏模块只能杀掉它自己，杀不掉保底壳。
+
+    9/24 对照集实证（26 号）：保底壳已经装配出来了，却因为壳里一句
+    `from view_mode import ...` 抛 TypeError 而整个壳一起死——启动器仍然
+    「找不到入口」→ exit 1 → 整跑不评分。保底壳的全部价值就在于「服务活着」，
+    它自己绝不能被一个坏包带走。
+    """
+    return (
+        f"try:\n"
+        f"    {imp}\n"
+        f"except Exception as _e:\n"
+        f"    {alias} = None\n"
+        f"    print(f'[assemble] 跳过 {imp}: {{_e!r}}')"
+    )
+
+
 def generate_app_main(surfaces: list[ModuleSurface]) -> str:
     """生成 app_main/app_main.py 内容（确定性模板）。"""
     imports: list[str] = []
@@ -97,17 +122,26 @@ def generate_app_main(surfaces: list[ModuleSurface]) -> str:
     for s in surfaces:
         for stem, var in s.blueprints:
             imp = _sub_import(s, stem)
-            imports.append(f"from {imp} import {var} as _bp_{s.name}_{stem}")
+            alias = f"_bp_{_alias_part(s)}_{stem}"
+            imports.append(_guarded(f"from {imp} import {var} as {alias}",
+                                    alias))
             bp_reg.append(
-                f"    app.register_blueprint(_bp_{s.name}_{stem})")
+                f"    if {alias} is not None:\n"
+                f"        app.register_blueprint({alias})")
         for stem, fn, takes_app in s.inits:
             imp = _sub_import(s, stem)
-            alias = f"_init_{s.name}_{stem}_{fn}"
-            imports.append(f"from {imp} import {fn} as {alias}")
+            alias = f"_init_{_alias_part(s)}_{stem}_{fn}"
+            imports.append(_guarded(f"from {imp} import {fn} as {alias}",
+                                    alias))
             init_calls.append(
-                f"        {alias}({'app' if takes_app else ''})")
+                f"        if {alias} is not None:\n"
+                f"            try:\n"
+                f"                {alias}({'app' if takes_app else ''})\n"
+                f"            except Exception as _e:\n"
+                f"                print(f'[assemble] init {fn} 失败: {{_e!r}}')")
         if not s.blueprints and not s.inits:
-            imports.append(f"import {s.name}  # noqa: F401  (保底导入)")
+            imports.append(f"try:\n    import {s.name}\n"
+                           f"except Exception:\n    pass  # 保底导入：坏包不连坐")
     imports = sorted(set(imports))
     return f'''"""机械装配的组装模块（mechanical_assembly 生成，勿手改）。"""
 __arcbench_assembled__ = True  # 保底壳标记：入口择优时永不让它压过作者入口
@@ -154,21 +188,27 @@ def generate_app_main_fastapi(surfaces: list[ModuleSurface]) -> str:
     for s in surfaces:
         for stem, var in s.routers:
             imp = _sub_import(s, stem)
-            imports.append(f"from {imp} import {var} as _r_{s.name}_{stem}")
+            alias = f"_r_{_alias_part(s)}_{stem}"
+            imports.append(_guarded(f"from {imp} import {var} as {alias}",
+                                    alias))
             router_reg.append(
-                f"    app.include_router(_r_{s.name}_{stem})")
+                f"    if {alias} is not None:\n"
+                f"        app.include_router({alias})")
         for stem, fn, takes_app in s.inits:
             imp = _sub_import(s, stem)
-            alias = f"_init_{s.name}_{stem}_{fn}"
-            imports.append(f"from {imp} import {fn} as {alias}")
+            alias = f"_init_{_alias_part(s)}_{stem}_{fn}"
+            imports.append(_guarded(f"from {imp} import {fn} as {alias}",
+                                    alias))
             # init 失败不拖死组装：打印后继续（缺种子/建表由冒烟 DDL 比对兜底）
             init_calls.append(
-                f"    try:\n"
-                f"        {alias}({'app' if takes_app else ''})\n"
-                f"    except Exception as _e:\n"
-                f"        print(f'[assemble] init {fn} 失败: {{_e!r}}')")
+                f"    if {alias} is not None:\n"
+                f"        try:\n"
+                f"            {alias}({'app' if takes_app else ''})\n"
+                f"        except Exception as _e:\n"
+                f"            print(f'[assemble] init {fn} 失败: {{_e!r}}')")
         if not s.routers and not s.inits:
-            imports.append(f"import {s.name}  # noqa: F401  (保底导入)")
+            imports.append(f"try:\n    import {s.name}\n"
+                           f"except Exception:\n    pass  # 保底导入：坏包不连坐")
     imports = sorted(set(imports))
     return f'''"""机械装配的组装模块（mechanical_assembly 生成，勿手改）。"""
 __arcbench_assembled__ = True  # 入口择优时让位作者入口
@@ -266,7 +306,8 @@ def _package_importable(code_dir: Path, pkg: str) -> bool:
     return r.returncode == 0
 
 
-def assemble(code_dir: Path, scaffold: bool = False) -> dict:
+def assemble(code_dir: Path, scaffold: bool = False,
+             exclude: "tuple[str, ...] | list[str]" = ()) -> dict:
     """扫描 + 生成 app_main。返回摘要（幂等：重复调用覆盖同文件）。
 
     框架甄别：扫到 Blueprint → Flask 模板（现状）；只有 APIRouter →
@@ -274,12 +315,15 @@ def assemble(code_dir: Path, scaffold: bool = False) -> dict:
     register_blueprint 无法在 FastAPI 里落地，反之 include_router
     同理，取能接上更多模块的那个。
     scaffold=True 时先给冻结包补 Blueprint 存根再扫（契约层 v0）。
+    exclude=坏模块包名：把这些包从装配清单里剔除（批次#63「隔离病灶」——
+    保底壳若 import 同一个坏包，等于把 exit 1 换了个文件名重写一遍）。
     """
     code_dir = Path(code_dir)
     stubs: list[str] = []
     if scaffold:
         stubs = scaffold_frozen_modules(code_dir, scan_surfaces(code_dir))
-    surfaces = scan_surfaces(code_dir)
+    dropped = sorted({str(x) for x in exclude})
+    surfaces = [s for s in scan_surfaces(code_dir) if s.name not in dropped]
     n_bp = sum(len(s.blueprints) for s in surfaces)
     n_r = sum(len(s.routers) for s in surfaces)
     if n_bp == 0 and n_r > 0:
@@ -304,6 +348,7 @@ def assemble(code_dir: Path, scaffold: bool = False) -> dict:
         "routers": n_r,
         "inits": sum(len(s.inits) for s in surfaces),
         "scaffolded": stubs,
+        "excluded": dropped,
         "parse_errors": [f"{s.name}/{e}" for s in surfaces for e in s.parse_errors],
         "file": str(target / "app_main.py"),
     }
@@ -333,13 +378,116 @@ def has_importable_entry(code_dir: Path) -> bool:
     return False
 
 
+_PROBE_SRC = '''
+import importlib, json, pkgutil, sys
+from pathlib import Path
+
+_code = Path(sys.argv[1]).resolve()
+sys.path.insert(0, str(_code))
+_missing, _dead, _live = set(), {}, []
+_mods = []
+# 与通用启动器同一套枚举：iter_modules 只列名不导入，坏包杀不掉整棵树
+# （pkgutil.walk_packages 在迭代器内部 import，一个语法错的包会连坐全部入口）
+_stack, _seen = [(_code, "")], set()
+while _stack:
+    _base, _pkg = _stack.pop()
+    try:
+        for _mi in pkgutil.iter_modules([str(_base)]):
+            _nm = f"{_pkg}{_mi.name}"
+            if _nm in _seen or _nm.startswith(("_", "main", "test")):
+                continue
+            _seen.add(_nm)
+            _mods.append(_nm)
+            if _mi.ispkg:
+                _stack.append((Path(str(_base)) / _mi.name, _nm + "."))
+    except Exception as _exc:
+        _dead[f"<enumerate {Path(str(_base)).name}>"] = (
+            f"{type(_exc).__name__}: {_exc}")[:160]
+for _n in _mods:
+    try:
+        _mod = importlib.import_module(_n)
+    except ModuleNotFoundError as _exc:
+        _missing.add(str(getattr(_exc, "name", "") or "").split(".")[0])
+        _dead[_n] = f"ModuleNotFoundError: {_exc}"[:160]
+        continue
+    except Exception as _exc:
+        _dead[_n] = f"{type(_exc).__name__}: {_exc}"[:160]
+        continue
+    _cand = getattr(_mod, "app", None) or getattr(_mod, "application", None)
+    if _cand is not None and callable(_cand) and not isinstance(_cand, type):
+        _live.append(_n)
+    if hasattr(_mod, "create_app"):
+        try:
+            _made = _mod.create_app()
+        except Exception as _exc:
+            _dead[_n] = f"create_app(): {type(_exc).__name__}: {_exc}"[:160]
+        else:
+            if _made is not None:
+                _live.append(f"{_n}.create_app")
+print(json.dumps({"live": _live, "dead": _dead,
+                  "missing": sorted(_missing)}, ensure_ascii=False))
+'''
+
+
+def probe_entries(code_dir: Path, timeout: float = 45.0) -> dict | None:
+    """真导入探测：与通用启动器同一套发现规则，报「谁活着/谁炸/缺哪个包」。
+
+    返回 None＝探测本身不可信（超时/子进程炸/输出不合法），调用方按老口径走。
+    """
+    import json
+    import subprocess
+
+    code_dir = Path(code_dir)
+    try:
+        proc = subprocess.run([sys.executable, "-c", _PROBE_SRC, str(code_dir)],
+                              capture_output=True, text=True, timeout=timeout)
+    except Exception:
+        return None
+    lines = [ln for ln in (proc.stdout or "").strip().splitlines() if ln]
+    if not lines:
+        return None
+    try:
+        data = json.loads(lines[-1])
+    except Exception:
+        return None
+    if not isinstance(data, dict) or "live" not in data:
+        return None
+    return {"live": [str(x) for x in data.get("live") or []],
+            "dead": {str(k): str(v) for k, v in (data.get("dead") or {}).items()},
+            "missing": [str(x) for x in data.get("missing") or []]}
+
+
+def _stdlib_or_local(name: str) -> bool:
+    """缺失名是不是「装包也救不回来」的那一类（标准库/本项目自己的包）。"""
+    if name in set(getattr(sys, "stdlib_module_names", ())):
+        return True
+    return name in {"_shared"}            # 共享层缺失是产物缺陷，不是依赖缺陷
+
+
 def ensure_entry(code_dir: Path) -> dict | None:
-    """入口保底：树里查不到可导入入口时机械装配一个（返回 assemble 摘要）。
+    """入口保底：确认没有活入口时机械装配一个（返回 assemble 摘要）。
 
     只在最后一道出口调用，不在构建/修复轮次里调用——保底壳与作者入口在
     runner 的择优规则里会打架，作者入口在场时必须原样让位（返回 None）。
+
+    批次#63 改判口径：老版本用「文本里有没有 `def create_app` / `app = Flask(`」
+    决定要不要兜，而 40 份对照集里 7 份的全红死法是**文字在场、运行时导入炸**
+    （27 号实证：view/search 悬空 import `_shared.notes_store`）——文本扫描看不见
+    这件事，于是保底壳没写、启动器 raise SystemExit、整跑不评分。现按真导入探测
+    判三种终态：
+      ① 探到活入口 → 不动（作者修复永不被旁路）；
+      ② 探不到活入口、但缺失名里有第三方包 → 判「依赖没装」的不确定态，沿用旧
+         文本口径（`_bootstrap_deps` 那条腿不能被抢：装上就能起来）；
+      ③ 探不到活入口也没缺包 → 作者入口确实是坏的，装配保底壳，并把探测到的
+         坏包从装配清单里剔除（隔离病灶，不是造内容：壳只挂真能 import 的蓝图）。
     """
     code_dir = Path(code_dir)
-    if has_importable_entry(code_dir):
+    text_entry = has_importable_entry(code_dir)
+    probe = probe_entries(code_dir)
+    if probe and probe["live"]:
         return None
-    return assemble(code_dir)
+    if text_entry and (probe is None or any(
+            not _stdlib_or_local(m) for m in probe["missing"])):
+        return None
+    dead_roots = sorted({k.split(".")[0] for k in (probe or {}).get("dead", {})})
+    return assemble(code_dir, exclude=dead_roots)

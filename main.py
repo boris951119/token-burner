@@ -529,6 +529,13 @@ def main(argv: list[str] | None = None) -> int:
                         os._exit(0)
                 except BaseException as exc:  # 兜底导出自己也不能拦下退出
                     print(f"[watchdog] 兜底导出失败: {exc!r}", flush=True)
+                # 连半成品都没有的一档（批次#63B，用户拍板"交"）：交诚实标注的
+                # 保底骨架换一次运行记录。楔死线程里同步写完再退，不指望主流程。
+                try:
+                    if _skeleton_or_fail(workdir, "看门狗判定楔死且盘上无代码"):
+                        os._exit(0)
+                except BaseException as exc:
+                    print(f"[watchdog] 保底骨架也失败: {exc!r}", flush=True)
                 os._exit(75)
 
         threading.Thread(target=_watchdog, daemon=True).start()
@@ -558,7 +565,7 @@ def main(argv: list[str] | None = None) -> int:
         # 看到的是"进程炸了"而不是"预检全灭：逐模型原因"。
         print(f"[gateway] 预检失败，快速止损: {exc}", flush=True)
         bridge.run_failed(f"网关预检失败: {exc}"[:280])
-        return 1
+        return _skeleton_or_fail(Path(workdir), f"网关预检全灭: {exc}"[:200])
     pipeline = Pipeline(
         llm=None,
         llm_factory=ModelClientFactory(settings),
@@ -647,6 +654,10 @@ def main(argv: list[str] | None = None) -> int:
                   "退出码 0 换取评分", flush=True)
             return 0
         bridge.run_failed(f"管线异常: {exc}")
+        # 这里刻意不交骨架：管线自己抛崩且盘上无代码，多半是任务输入或我们
+        # 自己的缺陷（批次#63B 的边界＝只兜「外部单点故障」：网关全灭、取题面
+        # 与视觉段崩穿、楔死与信号打断那几条——见网关预检、看门狗与末级救件）。
+        # 把自家缺陷也刷成可评分终态，下次排障就看不见它了。
         return 1
 
     if result.kind in _SUCCESS_KINDS:
@@ -728,6 +739,30 @@ def main(argv: list[str] | None = None) -> int:
               "布局导出，退出码 0 换取评分", flush=True)
         return 0
     bridge.run_failed(f"管线终点: {result.kind}")
+    # 刻意不交骨架（批次#63B 的边界）：走到这里说明管线**自己判定**这单不该
+    # 交付（declined/终态矛盾/无代码的失败终态），那是决定不是故障。骨架只服务
+    # 「单点故障把整跑换成不评分」的那几条路——见网关预检、管线异常与末级救件。
+    return 1
+
+
+def _skeleton_or_fail(workdir: Path, reason: str) -> int:
+    """尽力交付的最后一档（批次#63B，用户拍板"交"）：盘上什么都没有时，
+    交一份**诚实标注**的保底骨架，退出码 0。
+
+    为什么值得交：官方口径 exit 1 = 不评分，而规则要求两个任务都有运行记录才有
+    排名——「一次接近 0 的分」严格优于「那道题没有记录」。为什么只挂 health 与
+    一段说明：编造业务内容换不来分，只会把「这次没生成」伪装成「生成对了」，
+    那是我们自己的报告先被骗（批次#6 的造假判绿通道）。已有真产物时一律不覆盖。
+    """
+    try:
+        from app.platform_export import export_skeleton_layout
+
+        if export_skeleton_layout(Path(workdir), reason):
+            print("[main] 无业务代码可交：已按官方布局交出保底骨架，"
+                  "退出码 0 换一次运行记录（终态仍如实报失败）", flush=True)
+            return 0
+    except Exception as exc:
+        print(f"[main] 保底骨架导出失败: {exc!r}", flush=True)
     return 1
 
 
@@ -744,7 +779,8 @@ def _emergency_salvage(reason: str) -> int:
         out = os.environ.get("ARCBENCH_OUTPUT_DIR", "").strip()
         workdir = Path(out).resolve() if out else None
     if workdir is None:
-        print("[main] 工作区未解析，无从兜底导出（进程按失败退出）", flush=True)
+        print("[main] 工作区未解析，无从兜底导出（也交不出骨架：不知道往哪写）",
+              flush=True)
         return 1
     try:
         if _salvage_export(workdir):
@@ -752,7 +788,7 @@ def _emergency_salvage(reason: str) -> int:
             return 0
     except Exception as exc:
         print(f"[main] 末级救件导出失败: {exc!r}", flush=True)
-    return 1
+    return _skeleton_or_fail(Path(workdir), f"末级救件: {reason}"[:200])
 
 
 if __name__ == "__main__":

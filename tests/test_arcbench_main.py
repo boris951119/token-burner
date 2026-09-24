@@ -524,7 +524,10 @@ class TestGatewayPreflight:
 
     def test_preflight_failure_reports_clean_terminal(
             self, monkeypatch, tmp_path, req_dir):
-        """全灭仍快速失败，但终态经桥接层报出：裸崩只剩一行 traceback。"""
+        """全灭仍快速失败：终态经桥接层报出（裸崩只剩一行 traceback），
+        退出码换 0 + 保底骨架（批次#63B，用户拍板"交"）——exit 1 = 不评分，
+        而两个任务都要有运行记录才有排名；骨架不含任何业务路由，也不冒充成功。
+        """
         out = tmp_path / "wsP"
         _env(monkeypatch, out)
         _patch_llm_paths(monkeypatch, _team_result(tmp_path / "dp"))
@@ -533,8 +536,11 @@ class TestGatewayPreflight:
             raise RuntimeError("网关预检全灭（无一模型可通）: openai/dead-a")
 
         monkeypatch.setattr(entry, "_gateway_preflight", boom)
-        assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 1
-        assert "预检全灭" in _events_text(out)
+        assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 0
+        assert "预检全灭" in _events_text(out), "终态仍要如实报失败，不许改口成功"
+        assert (out / "backend" / "ARCBENCH_SKELETON.txt").is_file(), \
+            "网关全灭这一档必须交出骨架换运行记录"
+        assert not (out / "backend" / "app_main").exists()
 
     def test_task_banner_survives_dead_gateway(
             self, monkeypatch, tmp_path, req_dir, capsys):
@@ -549,7 +555,7 @@ class TestGatewayPreflight:
         monkeypatch.setattr(
             entry, "_gateway_preflight",
             lambda settings: (_ for _ in ()).throw(RuntimeError("全灭")))
-        assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 1
+        assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 0
         printed = capsys.readouterr().out
         assert f"任务信封={size_aware_budget(1):,}" in printed, printed[-400:]
 

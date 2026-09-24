@@ -63,12 +63,34 @@ for _child in sorted(_CODE.iterdir()):
 _missing: set[str] = set()          # 探测期缺失的顶层导入名
 
 
-def _iter_mods():
-    for _m in pkgutil.walk_packages([str(_CODE)]):
-        if _m.name.startswith(("_", "main", "test")):
-            continue
+def _modnames():
+    """自己走目录树取模块名，不用 pkgutil.walk_packages。
+
+    walk_packages 在迭代器【内部】import 包：一个语法错的包会当场从 for
+    循环抛出，把整棵树的入口探测一起带走（批次#49 记为 walk-abort；9/24 重测
+    对照集 40 份，05 号仍是这么死的——那时保底壳已经写出来了，还是被连坐）。
+    iter_modules 只列名不导入，坏包就只能杀掉它自己。
+    """
+    _stack, _seen = [(_CODE, "")], set()
+    while _stack:
+        _base, _pkg = _stack.pop()
         try:
-            yield importlib.import_module(_m.name)
+            for _mi in pkgutil.iter_modules([str(_base)]):
+                _name = f"{_pkg}{_mi.name}"
+                if _name in _seen or _name.startswith(("_", "main", "test")):
+                    continue
+                _seen.add(_name)
+                yield _name
+                if _mi.ispkg:
+                    _stack.append((Path(str(_base)) / _mi.name, _name + "."))
+        except Exception:
+            continue
+
+
+def _iter_mods():
+    for _name in _modnames():
+        try:
+            yield importlib.import_module(_name)
         except ModuleNotFoundError as _exc:
             # 缺依赖与代码写坏是两种病：前者记下来交给依赖自举，后者
             # 照旧静默跳过（坏模块不得拖累整棵树的入口探测——9/23 walk
@@ -477,6 +499,15 @@ def export_platform_layout(output_dir: Path, project_dir: Path) -> dict:
         entry_fix = ensure_entry(backend)
     except Exception:
         entry_fix = None
+    if entry_fix:
+        # 留痕是硬要求：保底壳换的是「不评分 → 可评分」，但它同时让本地闸看到
+        # 「服务活着」。没有这一行，下次排障会把「作者入口导入炸」读成「产品正常」。
+        print("[export] 入口由机械装配补挂（作者入口不可用）："
+              f"框架={entry_fix['framework']} "
+              f"挂载模块={len(entry_fix['modules'])} "
+              f"Blueprint={entry_fix['blueprints']} APIRouter={entry_fix['routers']}"
+              f"{' 已隔离坏模块=' + str(entry_fix.get('excluded')) if entry_fix.get('excluded') else ''}",
+              flush=True)
     req_text = _requirements_for(code_dir)
     if entry_fix:
         import re
@@ -523,3 +554,97 @@ def export_platform_layout(output_dir: Path, project_dir: Path) -> dict:
         # 剥除的运行库清单：产物数据不在这几枚文件里，只在启动播种里
         "runtime_data_stripped": stripped_data,
     }
+
+
+# ---- 零代码保底骨架（批次#63B，用户拍板"交"）--------------------------------
+# 官方口径：exit 1 = 不评分；规则又要求「两个任务都有运行记录才有排名」。于是
+# 网关把所有模型都探不通、盘上一个字节业务代码都没有的那种跑，交出去的不是
+# 「一次低分」而是「没有记录」。这份骨架换的就是这一档：只挂就绪探针与一个
+# 如实说明状态的首页，不含任何编造的业务内容——判分面照实全红，但记录在位。
+# 铁律：只在盘上没有真产物时写，绝不覆盖任何一份已经生成的交付（有则拒绝）。
+
+_SKELETON_MARKER = "ARCBENCH_SKELETON.txt"
+
+_SKELETON_MAIN = '''\
+"""保底骨架服务（token-burner 交付兜底，非业务产物）。
+
+本次运行没有产出任何业务代码（原因见同目录 ARCBENCH_SKELETON.txt）。
+本文件只提供官方 runner 需要的最小契约：监听 $PORT、GET /api/health 返回 200、
+首页返回一段如实说明状态的 HTML。业务路由一条都没有——那是有意的：
+拿假页面骗过按名定位换不来分，只会把「这次没生成」伪装成「生成对了」。
+"""
+import os
+
+from flask import Flask, jsonify
+
+app = Flask(__name__)
+
+
+@app.route("/api/health")
+def health():
+    return jsonify(status="ok", artifact="skeleton")
+
+
+@app.route("/")
+def home():
+    return ("<html><body><h1>No application was generated</h1>"
+            "<p>This delivery is the run's fallback skeleton. See "
+            "ARCBENCH_SKELETON.txt for why.</p></body></html>"), 200, {
+                "Content-Type": "text/html; charset=utf-8"}
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "3301")),
+            threaded=True)
+'''
+
+
+def export_skeleton_layout(output_dir: Path, reason: str = "") -> bool:
+    """盘上没有真产物时，交一份诚实标注的保底骨架；已有产物一律不覆盖。"""
+    output_dir = Path(output_dir)
+    backend = output_dir / "backend"
+    frontend = output_dir / "frontend"
+    if backend.exists() and not (backend / _SKELETON_MARKER).exists():
+        print("[skeleton] backend 已有产物，保底骨架不覆盖", flush=True)
+        return False
+    staged_backend = output_dir / ".export-skeleton-backend"
+    staged_frontend = output_dir / ".export-skeleton-frontend"
+    for target in (staged_backend, staged_frontend):
+        if target.exists():
+            shutil.rmtree(target)
+    staged_backend.mkdir(parents=True)
+    staged_frontend.mkdir(parents=True)
+    try:
+        (staged_backend / "main.py").write_text(_SKELETON_MAIN, encoding="utf-8")
+        (staged_backend / "requirements.txt").write_text("flask\n",
+                                                         encoding="utf-8")
+        (staged_backend / "package.json").write_text(
+            json.dumps(_BACKEND_PACKAGE_JSON, indent=2), encoding="utf-8")
+        (staged_backend / _SKELETON_MARKER).write_text(
+            f"fallback skeleton delivered because no product code existed on disk\n"
+            f"reason: {reason or 'unspecified'}\n"
+            f"this package contains no business routes by design\n",
+            encoding="utf-8")
+        (staged_frontend / "package.json").write_text(
+            json.dumps(_FRONTEND_PACKAGE_JSON, indent=2), encoding="utf-8")
+        (staged_frontend / "vite.config.js").write_text(
+            _FRONTEND_VITE_CONFIG, encoding="utf-8")
+        (staged_frontend / "index.html").write_text(
+            _FRONTEND_INDEX_HTML, encoding="utf-8")
+        (staged_frontend / "src").mkdir()
+        (staged_frontend / "src" / "main.tsx").write_text(
+            _FRONTEND_MAIN_TSX, encoding="utf-8")
+        (staged_frontend / "src" / "App.tsx").write_text(
+            _FRONTEND_APP_TSX, encoding="utf-8")
+    except Exception as exc:
+        for target in (staged_backend, staged_frontend):
+            shutil.rmtree(target, ignore_errors=True)
+        print(f"[skeleton] 骨架导出失败（不改交付终态）: {exc!r}", flush=True)
+        return False
+    for final, target in ((backend, staged_backend), (frontend, staged_frontend)):
+        if final.exists():
+            shutil.rmtree(final)
+        target.rename(final)
+    print("[skeleton] 保底骨架已按官方布局落地"
+          f"（原因: {(reason or '未记录')[:120]}）", flush=True)
+    return True

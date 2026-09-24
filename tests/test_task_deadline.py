@@ -242,13 +242,36 @@ class TestEntrySurvival:
             lambda workdir, pd: {"backend_files": 1, "frontend_files": 0})
         assert entry._emergency_salvage("测试") == 0
 
-    def test_emergency_salvage_fails_honestly_when_nothing_on_disk(
+    def test_emergency_salvage_falls_to_honest_skeleton(
             self, monkeypatch, tmp_path):
+        """批次#63B（用户拍板"交"）：盘上什么都没有也要换一次运行记录。
+
+        官方 exit 1 = 不评分，而规则要求两个任务都有运行记录才有排名 ⇒
+        「一次接近 0 的分」严格优于「那道题没有记录」。工作区完全无法解析的
+        那一档仍然照实返回 1——骨架也不知道往哪写，不假装成功。
+        """
         monkeypatch.delenv("ARCBENCH_OUTPUT_DIR", raising=False)
         monkeypatch.setattr(entry, "_SALVAGE_WORKDIR", None)
         assert entry._emergency_salvage("测试") == 1     # 工作区未知
-        monkeypatch.setattr(entry, "_SALVAGE_WORKDIR", tmp_path / "nope")
-        assert entry._emergency_salvage("测试") == 1     # 盘上无代码
+        empty = tmp_path / "nope"
+        monkeypatch.setattr(entry, "_SALVAGE_WORKDIR", empty)
+        assert entry._emergency_salvage("测试") == 0     # 骨架换记录
+        backend = empty / "backend"
+        assert (backend / "main.py").is_file()
+        assert "def create_app" not in (backend / "main.py").read_text(
+            encoding="utf-8")
+        assert (backend / "ARCBENCH_SKELETON.txt").is_file(), \
+            "骨架必须自带尸检标记：分不清「产物活着」与「靠骨架活着」就是自欺"
+
+    def test_skeleton_never_overwrites_a_real_delivery(self, tmp_path):
+        from app.platform_export import export_skeleton_layout
+
+        out = tmp_path / "ws"
+        (out / "backend").mkdir(parents=True)
+        (out / "backend" / "app.py").write_text("x = 1\n", encoding="utf-8")
+        assert export_skeleton_layout(out, "不该覆盖真产物") is False
+        assert (out / "backend" / "app.py").is_file(), "真产物被骨架抹掉了"
+        assert not (out / "backend" / "main.py").exists()
 
     def test_emergency_salvage_reads_env_when_workdir_unparsed(
             self, monkeypatch, tmp_path):
