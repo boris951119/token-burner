@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import sys
 import threading
 from pathlib import Path
@@ -35,6 +36,10 @@ from app.utils.model_client import ModelClientFactory
 
 # 交付型终点（可运行代码）；declined / budget_exceeded / needs_confirm 均视为失败
 _SUCCESS_KINDS = frozenset({"team_flow", "direct_code"})
+
+# 工作区锚点（批次#58B）：main() 一解析出 --output-dir 就写这里，
+# __main__ 的末级救件靠它找到该往哪儿导出（见 _emergency_salvage）
+_SALVAGE_WORKDIR: Path | None = None
 
 
 def _find_resumable_project(file_manager) -> str | None:
@@ -140,6 +145,8 @@ def _export_official_layout(workdir: Path, project_dir: Path | None,
     """
     if project_dir is None:
         return False
+    global _export_busy
+    _export_busy = True
     try:
         from app.platform_export import export_platform_layout
 
@@ -153,6 +160,8 @@ def _export_official_layout(workdir: Path, project_dir: Path | None,
     except Exception as exc:
         print(f"[export] 布局适配失败（交付不受影响）: {exc!r}", flush=True)
         return False
+    finally:
+        _export_busy = False
 
 
 def _has_product_code(project_dir) -> bool:
@@ -181,6 +190,58 @@ def _salvage_export(workdir: Path) -> bool:
             continue
         return _export_official_layout(workdir, cand, note="崩溃兜底交付")
     return False
+
+
+# ----------------------------------------------------------------------
+# 终止信号接管（批次#58B）：让「跑一半被杀」走上已验证的尽力交付出口
+#
+# Python 对 SIGTERM 的缺省处置是立刻终结进程——没有 finally、没有 except、
+# 没有导出，输出目录里只剩生成中间态；而判分口径是 avg_pass_rate、
+# exit 1 = 不评分，一次架构正确的中止被换成了确定的 0 分。挂成异常后
+# 管线已有的 `except KeyboardInterrupt` 分支接得住（落盘中断现场 + 带回
+# project_dir），main 的非成功出口按现状导出换一次评分机会。
+# SIGKILL（OOM/硬超时）确实接不住，那一路靠的是验收前的「抢先导出」落盘。
+
+_export_busy = False
+
+
+def _termination_handler(signum, frame) -> None:
+    """终止信号 → 主线程抛 KeyboardInterrupt（Ctrl+C 同款出口）。
+
+    导出临界区内不抛：导出是「先清后写」，正清完还没写完时被斩，交出去
+    的目录比不交还糟（上一份完整产物已被清掉）。此时改为让路并留痕——
+    发 SIGTERM 的容器管理器随后必补 SIGKILL，而那时盘上是一份可运行产物，
+    正是「抢先交付」已经买下的结局。
+    """
+    try:
+        name = signal.Signals(signum).name
+    except ValueError:  # 平台自定义信号号
+        name = f"signal#{signum}"
+    reason = f"收到终止信号 {name}"
+    if _export_busy:
+        print(f"[signal] {reason}：导出进行中，本次信号让路（容器随后 SIGKILL，"
+              "盘上产物按抢先交付口径已完整）", flush=True)
+        return
+    raise KeyboardInterrupt(f"{reason}（按中断处理，尽力交付）")
+
+
+def _install_death_signals() -> str:
+    """接管终止信号，返回实际挂上的信号名（启动横幅留痕，静默失败不留痕）。
+
+    只在主线程可用（signal.signal 在非主线程抛 ValueError），Windows 无
+    SIGHUP、POSIX 无 SIGBREAK——按平台有的挂，缺一个都不报错。
+    """
+    taken = []
+    for name in ("SIGTERM", "SIGINT", "SIGHUP", "SIGBREAK"):
+        sig = getattr(signal, name, None)
+        if sig is None:
+            continue
+        try:
+            signal.signal(sig, _termination_handler)
+        except (ValueError, OSError, RuntimeError):
+            continue
+        taken.append(name)
+    return ",".join(taken) or "（无，仍在缺省处置）"
 
 
 def _env_float(name: str, default: str) -> float:
@@ -340,6 +401,12 @@ def main(argv: list[str] | None = None) -> int:
     # 桥接层 SDK 以 ARCBENCH_OUTPUT_DIR 定位 workspace（.arc/ 事件流与
     # traceability 落点）；runner 只传 --output-dir 时兜底对齐，事件不落错目录
     os.environ.setdefault("ARCBENCH_OUTPUT_DIR", str(workdir))
+    # 终止信号接管（批次#58B）：越早越好——取题面/视觉转写/预检都在
+    # 管线的 try 之外，那几段被斩时原先连 traceback 都留不下。
+    _signals = _install_death_signals()
+    # 兜底导出认这个目录（__main__ 的末级救件用，见 _emergency_salvage）
+    global _SALVAGE_WORKDIR
+    _SALVAGE_WORKDIR = workdir
     # r10 取证：stdout 重定向到文件时全程打印滞留缓冲，进程终局后日志
     # 只剩两行——平台排障与本地复盘都依赖 stdout，行缓冲必须打开
     for _stream in (sys.stdout, sys.stderr):
@@ -378,10 +445,14 @@ def main(argv: list[str] | None = None) -> int:
         from app.utils.budget import size_aware_budget
 
         n_atomic = count_requirements(tree)
-        task_budget = size_aware_budget(n_atomic)
-        print(f"[task] 原子需求={n_atomic} 条 → 任务信封={task_budget:,} token"
-              f"（11.0 按题面折算，覆盖配置 {settings.max_task_tokens:,}）",
-              flush=True)
+        # 字数项与条数项并列：正式赛题面「条少字多」（github 每条 3,120 字符，
+        # keep 的 5.6 倍），只按条数折算会反向给薄预算。渲染文本就是管线
+        # 真正发出去的那份，故字数按它量，系数标定与判分口径同源
+        req_chars = len(render_requirement_text(tree))
+        task_budget = size_aware_budget(n_atomic, req_chars)
+        print(f"[task] 原子需求={n_atomic} 条 题面={req_chars:,} 字符 → 任务信封"
+              f"={task_budget:,} token（条数/字数两式取大，覆盖配置 "
+              f"{settings.max_task_tokens:,}）", flush=True)
     # 网关长挂防御：单请求实测可挂 25 分钟+（httpx read timeout 是字节
     # 间隙口径，滴字续命永不触发）；墙钟 600s 超时即刻换腿
     if settings.llm_wall_clock_seconds <= 0:
@@ -437,10 +508,41 @@ def main(argv: list[str] | None = None) -> int:
                     pass
                 print(f"[watchdog] {idle/60:.0f} 分钟无进展，楔死强制退出"
                       f"（现场: {dump_path}）", flush=True)
+                # 兜底导出必须是 os._exit 之前的最后一步（批次#58B 顺手补）：
+                # 这一路原先直接裸退，盘上写完的模块一个字都没交出去——
+                # 而 keep5 实证过这条路径真会走到（7.7h 零取证楔死）。
+                # 导出只在「盘上确有代码」时才把退出码换成 0（换评分机会），
+                # 无代码仍按 75 如实报失败，不冒充完成。
+                try:
+                    if _salvage_export(workdir):
+                        print("[watchdog] 半成品已按官方布局导出，"
+                              "退出码 0 换取评分", flush=True)
+                        try:
+                            # bridge 在主流程里晚于本线程创建，闭包按晚绑定
+                            # 取用；创建前就楔死的那一趟拿不到事件通道，
+                            # 哑巴交付也胜过没有交付（exit 0 已足够取件）
+                            bridge.run_completed(
+                                "看门狗超时（无进展）·部分交付"
+                                "（未走验收，按现状导出）")
+                        except Exception:
+                            pass
+                        os._exit(0)
+                except BaseException as exc:  # 兜底导出自己也不能拦下退出
+                    print(f"[watchdog] 兜底导出失败: {exc!r}", flush=True)
                 os._exit(75)
 
         threading.Thread(target=_watchdog, daemon=True).start()
         print(f"[watchdog] 已启动（阈值 {_watchdog_min:.0f} 分钟）", flush=True)
+
+    # 运行墙钟起表（批次#58B）：48h 到点是强杀而不是暂停，闸门必须自己
+    # 先收手。看门狗管「没有进展」，这条管「进展太慢也来不及」——同一把
+    # 刀落下之前，主动收手换来的是按现状交付的部分分。
+    from app.utils.budget import arm_task_deadline, deadline_brief
+
+    _wall_total = arm_task_deadline()
+    print(f"[deadline] 总时长={_wall_total / 3600:.2f}h · {deadline_brief()} · "
+          f"信号接管={_signals}（余量不足收尾窗口即停新调用，走尽力交付）",
+          flush=True)
 
     bridge = ArcBenchBridge()
     # 诊断信息走 SDK 事件流（runner_event_lines 可见；stdout 采集不全）
@@ -510,7 +612,11 @@ def main(argv: list[str] | None = None) -> int:
                 route=preset_route,
                 budget_override=task_budget,
             )
-    except Exception as exc:  # 平台需要明确的失败终态
+    except (Exception, KeyboardInterrupt) as exc:  # 平台需要明确的失败终态
+        # KeyboardInterrupt 一并接住（批次#58B）：这是 SIGTERM/SIGINT 经
+        # _termination_handler 变出来的异常，也是本地 Ctrl+C 的来路。
+        # 原先只有 except Exception 接得住 ⇒ 终止信号穿过 main，sys.exit
+        # 不执行、兜底导出不执行，一次「架构正确的中止」换成 rc≠0 的 0 分。
         import traceback
 
         traceback.print_exc()  # 平台侧也需可追溯；本地调试靠 stderr
@@ -523,22 +629,6 @@ def main(argv: list[str] | None = None) -> int:
                 traceback.format_exc(), encoding="utf-8")
         except Exception:
             pass
-        # 崩了也要尽力交（9/23 交付路径审计取证）：异常此前只有 traceback
-        # + exit 1，而官方判分是 avg_pass_rate——崩在第 3 个模块之后时，
-        # 盘上写完的代码就是白扔的分数。有代码就按现状导出换一次评分机会，
-        # 事件摘要如实写「管线异常·部分交付」，不冒充完成（r10 诚实不变量）。
-        try:
-            salvaged = _salvage_export(workdir)
-        except Exception as exc2:
-            salvaged = False
-            print(f"[export] 崩溃兜底导出失败: {exc2!r}", flush=True)
-        if salvaged:
-            bridge.run_completed(
-                f"管线异常·部分交付（{type(exc).__name__}: "
-                f"{str(exc)[:120]}，未走验收，按现状导出）")
-            print("[main] 管线异常但盘上有代码：半成品已按官方布局导出，"
-                  "退出码 0 换取评分", flush=True)
-            return 0
         # 崩了也要尽力交（9/23 交付路径审计取证）：异常此前只有 traceback
         # + exit 1，而官方判分是 avg_pass_rate——崩在第 3 个模块之后时，
         # 盘上写完的代码就是白扔的分数。有代码就按现状导出换一次评分机会，
@@ -641,5 +731,36 @@ def main(argv: list[str] | None = None) -> int:
     return 1
 
 
+def _emergency_salvage(reason: str) -> int:
+    """末级救件（批次#58B）：main() 之外的崩溃/中断也要留下尽力交付。
+
+    取题面、视觉转写、配置装载、预检全在管线那个 try 之外——原先终止
+    信号落在这些窗口里等于裸崩：没有导出、没有终态事件、退出码非 0。
+    盘上有代码就导出一份（判分是 avg_pass_rate，半成品也是分）。
+    """
+    print(f"[main] 末级救件: {reason}", flush=True)
+    workdir = _SALVAGE_WORKDIR
+    if workdir is None:
+        out = os.environ.get("ARCBENCH_OUTPUT_DIR", "").strip()
+        workdir = Path(out).resolve() if out else None
+    if workdir is None:
+        print("[main] 工作区未解析，无从兜底导出（进程按失败退出）", flush=True)
+        return 1
+    try:
+        if _salvage_export(workdir):
+            print("[main] 末级救件已按现状导出，退出码 0 换取评分", flush=True)
+            return 0
+    except Exception as exc:
+        print(f"[main] 末级救件导出失败: {exc!r}", flush=True)
+    return 1
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        rc = main()
+    except (KeyboardInterrupt, Exception) as exc:  # 末级救件，不裸崩
+        import traceback
+
+        traceback.print_exc()
+        rc = _emergency_salvage(f"{type(exc).__name__}: {str(exc)[:200]}")
+    sys.exit(rc)

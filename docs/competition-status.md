@@ -810,3 +810,67 @@ R2 的假绿与 R3 的真绿同题（5.2.1），说明补页族顺带把假绿�
 不是模型选型问题（"用哪个模型你看着定"这一项无法执行）。
 后续收 key 一律走终端盲贴 `read -rs`，不经我转录（本轮我转录过一次的教训见 #56 后的记录）。
 
+
+---
+
+## 批次#58（2026-09-24 凌晨）：信封改「读字」＋ 48h 强杀不再等于 0 分
+
+正式赛真题面（sheet 24 条 / 54,048 字符，github 47 条 / 146,637 字符）到手后
+的两处改动。**都不改提示词、不改生成逻辑**，只改「给多少钱」与「钱和时间花完
+时怎么收场」，所以 v37/v38 的单变量位仍然干净。
+
+### 58A 题面感知的 token 信封（`size_aware_budget` 加字数项）
+
+- 死因：条数口径隐含「每条需求的文字量差不多」。初赛六道实测每条 450~750 字符，
+  全在窄带内所以一直好用；正式赛出带——sheet 每条 2,252、github 每条 3,120 字符
+  （keep 的 5.6 倍）。按条数折算 github 47 条只分到 1.74M，而按实测
+  「每千字题面 ≈30k token」（keep 完成跑 537k / 17.8k 字）它需要 4.40M
+  ⇒ **条数口径在正式赛反向给薄预算**，撞墙的不是质量而是修复段。
+- 改法：`count_term` 与 `char_term` 取大，字数项**不加 base**（30k/千字 这个数
+  本身就是从含固定开销的总用量除出来的，再加 base 等于算两遍）；cap 3.5M→5.0M。
+- 配比（用户要的「两个试题的比重」，由题面体量自动得出，不靠拍脑袋）：
+  **sheet 1,621,440 : github 4,399,110 = 27% : 73%**，合计 6.02M。
+- 安全性质（测试逐条钉死）：初赛六道信封**数值一字不变**（keep 1.44M /
+  bookstack 1.48M / stackoverflow 2.12M / ctrip 3.30M），因为带内字数项永远低于
+  条数项 ⇒ 冷启动读数仍可归因到 #52~#55，本批改动的效果只在正式赛显现。
+- 脏值口径：`text_chars` 为 None/负/字符串一律按 0 算（入口在生成前量体量，
+  一道预算闸不该成为最早的死因）。
+
+### 58B 存活闸：终止信号接管 + 运行墙钟（`app/utils/budget.py` + `main.py`）
+
+判分口径 avg_pass_rate、**exit 1 = 不评分** ⇒ 存活 > 通过率 > 成本。四处接线：
+
+1. **SIGTERM/SIGINT/SIGHUP/SIGBREAK → 主线程抛 KeyboardInterrupt**
+   （`_install_death_signals`）。Python 对 SIGTERM 的缺省处置是立刻终结进程：
+   没有 finally、没有导出，输出目录里只剩生成中间态。导出临界区
+   （`_export_busy`，先清后写）内改为让路——正清完就被斩，交出去的目录
+   比不交还糟；随后容器补 SIGKILL，那时盘上是「抢先交付」那份完整产物。
+2. **入口的 `except Exception` 扩为 `except (Exception, KeyboardInterrupt)`**
+   ——否则信号变出来的异常穿过 main，兜底导出不执行。
+   顺手删掉一处**重复块**：兜底导出（`_salvage_export` + 事件 + return 0）在同一个
+   except 里被写了两遍，第一遍就 return，第二遍永不执行（git diff 可查）。
+3. **运行墙钟起表 + 收尾窗口**：`arm_task_deadline()` 读
+   `TASK_MAX_SECONDS`/`ARCBENCH_TASK_SECONDS`/`ARC_TASK_SECONDS`/`TASK_TIMEOUT_SECONDS`，
+   都没有则按《参赛须知》48h；`BudgetGuard.ensure_allowed()` 在每个 LLM 调用前的
+   既有检查点上加一条时间判据，抛 `TaskDeadlineError`（是 `TaskCancelledError`
+   的子类 ⇒ 老的中止分支照旧认）。窗口 **1800s** 的口径不是导出耗时而是
+   **在飞调用的最坏尾巴**：检查点只能拦「还没发出去的调用」，已发出去那次仍要
+   跑完 600s 墙钟 ×3 条备胎腿。管线两处 `except TaskDeadlineError` → 走
+   `interrupted` 出口（报告写「运行墙钟」不写「预算中止」：死因写错会把下一次
+   排障带到调预算的错误方向）。
+4. **末级救件**：取题面/视觉转写/预检都在管线那个 try 之外，`__main__` 兜住
+   main() 抛出的任何异常并尽力导出；看门狗 `os._exit` 之前也补了一次导出
+   （楔死那一路原先直接裸退，盘上写完的模块一个字都没交出去）。
+
+**负读数（要说清的事）**：SIGKILL 确实接不住，OOM/硬超时那一刀仍只能靠
+「抢先交付」买——本批改的是「可捕获的终止」与「来得及主动收手」两类。
+
+**读数**：全量 `1820 passed, 2 skipped`；新增 `tests/test_task_deadline.py` 31 例
+（起表 env 口径与脏值兜底 / 收尾窗口算术 / 信号端到端 `os.kill(self)` 真触发 /
+入口被中断仍导出 exit 0 / 接线防回归），`test_interruption_recovery.py` +1 例
+（墙钟收手不被模块环的 `except Exception` 吞掉，收手后 `llm.calls` 不再增长）。
+
+**凭证更新**：`.env` 新增 `BAILIAN_LIVE_KEY`（len=117 sha8=f8a74f81，终端盲贴
+零转录），dashscope compatible-mode 下 qwen-plus / qwen-turbo / qwen3-max /
+deepseek-v3 / qwen3-coder-plus / qwen-max **六模型全 200** ⇒ #57 末段「冷启动无
+可用凭证」的读数已解除（平台正式评测仍用内置 key，这条只服务我们自己的测试跑）。

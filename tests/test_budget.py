@@ -315,6 +315,51 @@ class TestSizeAwareBudget:
         assert size_aware_budget(-5) == size_aware_budget(0)
         assert size_aware_budget(None) == size_aware_budget(0)
         assert size_aware_budget("32") == size_aware_budget(32)
+        assert size_aware_budget(32, None) == size_aware_budget(32)
+        assert size_aware_budget(32, -1) == size_aware_budget(32)
+        assert size_aware_budget(32, "17797") == size_aware_budget(32, 17797)
+
+    # ---------------- 字数项（9/24 正式赛真题面逼出来的第二折算口径） ----------------
+
+    def test_char_term_never_shrinks_a_count_based_envelope(self):
+        """两式取大 ⇒ 加字数项只会抬不会压：老题面不可能因此次跑比上次更早撞墙。"""
+        from app.utils.budget import size_aware_budget
+
+        for n, chars in ((32, 17_797), (34, 19_096), (66, 44_275), (117, 86_237),
+                         (125, 58_223), (86, 40_235)):
+            assert size_aware_budget(n, chars) >= size_aware_budget(n)
+
+    def test_practice_tasks_envelopes_unchanged_by_char_term(self):
+        """初赛六道实测数值逐条钉死：它们的每条需求 450~750 字符，字数项在带内
+        永远低于条数项 ⇒ 本次改动对初赛任何一跑都是数值零变化（可归因）。"""
+        from app.utils.budget import size_aware_budget
+
+        measured = {32: (17_797, 1_440_000), 34: (19_096, 1_480_000),
+                    66: (44_275, 2_120_000), 86: (40_235, 2_520_000),
+                    117: (86_237, 3_140_000), 125: (58_223, 3_300_000)}
+        for n, (chars, expect) in measured.items():
+            assert size_aware_budget(n, chars) == expect, f"{n} 条/{chars} 字"
+
+    def test_formal_tasks_get_char_driven_envelope(self):
+        """正式赛两道「条少字多」出带题面：github 每条 3,120 字符（keep 的 5.6
+        倍），条数口径只给 1.74M，按实测 30k token/千字它需要 4.40M。"""
+        from app.utils.budget import size_aware_budget
+
+        sheet, gh = size_aware_budget(24, 54_048), size_aware_budget(47, 146_637)
+        assert sheet > size_aware_budget(24)
+        assert gh > size_aware_budget(47)
+        assert gh == 4_399_110 and sheet == 1_621_440
+        # 两题都要做完才有分 ⇒ 配比按题面文字量，github 拿大头但不吃掉另一题
+        assert 0.70 <= gh / (gh + sheet) <= 0.76
+
+    def test_char_term_does_not_double_count_fixed_overhead(self):
+        """30k/千字 是从含固定开销的总用量除出来的，字数项不再加 base，
+        否则小体量题面会被虚高一档。"""
+        from app.utils.budget import size_aware_budget
+
+        assert size_aware_budget(0, 1_000) == 800_000          # 千字=30k < base
+        assert size_aware_budget(0, 30_000) == 900_000          # 纯字数项
+        assert size_aware_budget(10**9) == size_aware_budget(10**12) == 5_000_000
 
     def test_count_requirements_covers_root_level_atomics(self):
         """根级 ATOMIC（官方题面 REQ-0「打开首页」那一形）也计入体量。"""

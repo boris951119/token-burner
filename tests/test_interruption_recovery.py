@@ -119,6 +119,33 @@ class TestInterruptionSnapshot:
         assert "user" in report         # 已完成部分
         assert "auth" in report         # 未完成清单
 
+    def test_wall_clock_wind_down_uses_the_same_exit(self, tmp_path):
+        """批次#58B：墙钟收手（TaskDeadlineError）走同一个中断出口。
+
+        两条判据缺一不可：①中断异常在模块环里不被 `except Exception`
+        吞成「这个模块失败了」——被吞掉的话时间闸就只是白抖一下，48h
+        到点仍然会被斩；②报告里不能写「预算中止」，死因写错会把下一次
+        排障带到「去调预算」的错误方向上。
+        """
+        from app.utils.budget import TaskDeadlineError
+
+        fm = FileManager(projects_root=tmp_path / "projects")
+        llm = ScriptedLLM(
+            _TWO_MODULE_SCRIPTS + ["auth code"], raise_at=11,
+            exc=TaskDeadlineError("运行墙钟仅剩 30s（收尾窗口 1800s），"
+                                  "主动收手按现状交付"),
+        )
+        result = _pipeline(llm, fm).run(
+            "双模块系统", models=("gpt-4o", "deepseek-chat", "claude-3-5-sonnet"),
+            mode="safe", spec_confirm="确认",
+        )
+        assert result.kind == "interrupted"
+        assert llm.calls == 11, "收手后不得再开新的 LLM 调用"
+        root = fm.get_project(result.project_id).root
+        report = (root / "sessions" / "interruption.md").read_text(encoding="utf-8")
+        assert "运行墙钟" in report
+        assert "预算中止" not in report
+
     def test_state_snapshot_before_module_dev(self, tmp_path):
         # 进入模块开发前落盘 pipeline_state.json（恢复的最小充分状态）
         fm = FileManager(projects_root=tmp_path / "projects")

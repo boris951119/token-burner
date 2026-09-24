@@ -46,7 +46,12 @@ from app.orchestrator import (
 )
 from app.tools.file_manager import FileManager
 from app.tools.git_manager import GitManager
-from app.utils.budget import BudgetExceededError, BudgetGuard, TaskCancelledError
+from app.utils.budget import (
+    BudgetExceededError,
+    BudgetGuard,
+    TaskCancelledError,
+    TaskDeadlineError,
+)
 
 # 看门狗数据源：全局最近进度时间戳（keep5 取证：进程可楔死在墙钟
 # 保护之外的子进程/库内部，心跳冻结数小时无法取证——由 main.py 的
@@ -632,6 +637,15 @@ class Pipeline:
             return self._budget_stop_result(
                 team, guard, stage_box[0], order, module_results, mode, route
             )
+        except TaskDeadlineError as exc:
+            # 运行墙钟见底（批次#58B）：不等平台强杀，自己走中断出口。
+            # 与 KeyboardInterrupt 同路而非同 BudgetExceededError 一路：
+            # 死因是时间不是钱，报告里写成「预算中止」会把下一次排障带到
+            # 错误的方向（而信封调大这件事本来就不该由时间闸来背）。
+            return self._interruption_result(
+                team, guard, stage_box[0], order, module_results, mode, route,
+                str(exc),
+            )
         except KeyboardInterrupt:
             # Ctrl+C：落盘中断现场，返回可观测结果（11.0 同款「续跑或止损」语义）
             return self._interruption_result(
@@ -1017,6 +1031,13 @@ class Pipeline:
         except BudgetExceededError:
             return self._budget_stop_result(
                 team, guard, "恢复续跑", order, module_results, mode, None
+            )
+        except TaskDeadlineError as exc:
+            # 续跑段同样在墙钟管辖内（批次#58B）：恢复出来的项目更容易一路
+            # 跑到上限，中断现场照常落盘，出口走「按现状交付」。
+            return self._interruption_result(
+                team, guard, "恢复续跑", order, module_results, mode, None,
+                str(exc),
             )
         except KeyboardInterrupt:
             return self._interruption_result(
