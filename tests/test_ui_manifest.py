@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """UI 页面清单注入回归（平台 v6-3 取证：占位壳 0/32）。"""
+import re
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
 
@@ -241,3 +242,60 @@ class TestUIGlobalRulesReachEveryModule:
     def test_rules_apply_regardless_of_module_name(self):
         """射程口径本身必须写在提示词里：适用条件是「输出 HTML」，不是模块名。"""
         assert "与模块名无关" in self._system()
+
+
+class TestPageFamilyContract:
+    """批次#60＝契约八落包。三条独立同向的证据（详见 docs/competition-status.md
+    批次#56/#57/#59）：
+
+    - 题面侧（#59 零 LLM 静态）：要求换到另一个页面的需求占比 keep 62% /
+      bookstack 53% / 正式赛 sheet 38% / github 83%；
+    - 形态侧（#43/#56 对照集 40 份）：零「带实体参数」路由 11/40、完全没有
+      HTML 输出文件 12/40；
+    - 得分侧（#56 R3 单轮）：只补真路由与页面族一轮 5→22/34，其中 C2 页面族
+      缺失 7 题、C3 首页聚合区缺失 4 题。
+
+    落点仍是逐模块共见的 WRITE_CODE_SYSTEM：同一具名页被 ≥2 个模块提及在四域
+    全部出现（1~7 处），按模块名挑单一目标注入必然漏页。"""
+
+    def _system(self):
+        from app.tools.prompt_templates import WRITE_CODE_SYSTEM
+        # 提示词按中文排版换行，断言前先吃掉软换行（否则每条短语都要按换行点
+        # 手工对齐，比测的东西还脆）；行内空格保持原样。
+        return re.sub(r"\n[ \t]+", "", WRITE_CODE_SYSTEM)
+
+    def test_named_page_needs_its_own_route(self):
+        s = self._system()
+        assert "页面族与存储硬规则" in s
+        assert "有自己的" in s and "GET 路由" in s
+        # 两种"看着像做了"的假交付必须点名否掉：就地展开、裸 JSON 出口
+        assert "就地展开不算" in s
+        assert "只回 JSON" in s
+
+    def test_home_reachability_is_the_entry_requirement(self):
+        """机理：官方三域 spec 合计只 page.goto('/')⇒深链永不被访问。
+        这条是"评测会做什么"的断言，按 ≥3 域逐行取证后才写进随包文本。"""
+        s = self._system()
+        assert "从首页就能点到的真实控件" in s
+        assert "深链永不被访问" in s
+        assert "首页没有入口的页面在评测眼里等于不存在" in s
+
+    def test_aggregate_blocks_are_a_deliverable(self):
+        s = self._system()
+        assert "跨表聚合查询" in s and "不得整块省略" in s
+
+    def test_one_app_one_store_and_unique_path_expression(self):
+        """#57 频次：每模块各开一库 14/40＝35%，其致死面正是聚合页；
+        D1-exact（同库名两套解析）10% 不单独立约，并进本条后半句。"""
+        s = self._system()
+        assert "一个应用只有一张真库" in s
+        assert "各开一个数据库文件" in s
+        assert "路径解析表达式在全项目必须唯一" in s
+        assert "解析成两个不同文件" in s
+
+    def test_contract_carries_no_content_examples(self):
+        """契约八只说类别：不给任何页面名/文案样本，否则就是下一个 #46。"""
+        seg = self._system()
+        seg = seg[seg.index("【页面族与存储硬规则"):]
+        assert not re.search(r"[\"“'][A-Za-z][A-Za-z ]{2,}[\"”']", seg), \
+            "页面族段出现了英文示例串"
