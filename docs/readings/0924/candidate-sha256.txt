@@ -39,3 +39,21 @@ a5a7c5cb44fd4f92011bd18a696b3642b553d6bdf61f4b485038c9f38862ce3e  v38.zip  (v37 
 #   注意：第 7 节必须连 tests/test_pipeline.py 一起拷（test_budget.py 从它借桩，
 #   单拷会在容器里报 5 例 ModuleNotFoundError 假红）。
 02ac8967ed4857f9272900d3c28b1ad56a06712fd9beb37670146b7cadaa2cd7  v41.zip  (v40 + 批次#64 三条死因收口，当前候选)
+# v42 候选（批次#67 四条：硬帽 / 首页硬契约 / 体检前移 / 编队换腿·试跑档位）
+# 代码位 commit: b0ee1e4
+#   git status 干净（app/ 与 main.py 无未提交改动）
+#   ./.venv/bin/python scripts/build_submission.py --out .tmp/submission-pack/v42.zip --allow-drop
+#   → 202 文件 582,244 字节；逐文件 sha256 与 v41 对账：only-in-v41 空、only-in-v42 空、
+#     changed 恰为 7 个（app/arcbench_smoke.py / app/config.py / app/prompts/write_code_system.md
+#     / app/utils/budget.py / app/utils/selftest_gate.py / config.json / main.py）＝单变量位成立
+#   构建器对 v8 参考包仍报「少了 7 个」= arcbench-agent-runtime/build/lib/**（setuptools 陈旧
+#     构建目录，v39/v40/v41 同样不含，非内容漂移）→ --allow-drop 认可
+# 复验 docs/readings/0924/verify_v42.sh（容器九读，py3.11 下包内 324 例测试全绿）
+#   docker run --rm -v $PWD/.tmp/x-v42:/pkg -v $PWD/tests:/t \
+#     -v $PWD/docs/readings/0924/verify_v42.sh:/verify.sh:ro tb-shape:runA-mini sh /verify.sh
+#   第 9 节本轮多拷了 test_verify_resilience / test_selftest_env_degradation / test_arcbench_main
+#   （v42-3 的接线与 v42-1 的入口帽都在这些文件里）；test_budget.py 仍须连 test_pipeline.py 一起拷。
+# ⚠ 这一包是「私有 key 试跑档位」：config.json 里 max_task_tokens_cap=1600000、
+#   selftest_specs_enabled=false、副腿 qwen3.7-plus+glm-5.3-flash。上传比赛包前翻回官方档位
+#   （tests/test_arcbench_main.py 的 test_shipped_config_is_the_trial_formation 会先红）。
+c7f6ef0d70d894d0b4ad3604b1545ec30cb8c9a805b64e8d9ce3bc0920fbea7e  v42.zip  (v41 + 批次#67 四条·试跑档位，当前候选)
