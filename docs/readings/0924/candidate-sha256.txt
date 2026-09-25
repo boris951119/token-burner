@@ -57,3 +57,12 @@ a5a7c5cb44fd4f92011bd18a696b3642b553d6bdf61f4b485038c9f38862ce3e  v38.zip  (v37 
 #   selftest_specs_enabled=false、副腿 qwen3.7-plus+glm-5.3-flash。上传比赛包前翻回官方档位
 #   （tests/test_arcbench_main.py 的 test_shipped_config_is_the_trial_formation 会先红）。
 c7f6ef0d70d894d0b4ad3604b1545ec30cb8c9a805b64e8d9ce3bc0920fbea7e  v42.zip  (v41 + 批次#67 四条·试跑档位，当前候选)
+# v43 候选（批次#68 四条：出口语法闸 / 坏版不覆盖好版 / 升级排除真失败模型 / 拆分数值体量线）
+# 代码位 commit: 80a1a01（v42 = b0ee1e4 + 复验 7354a84）
+#   ./.venv/bin/python scripts/build_submission.py --out .tmp/submission-pack/v43.zip --allow-drop
+#   → 202 文件 584,786 字节；逐文件 sha256 与 v42 对账：only-in-* 均空、changed 恰 3 个
+#     （app/agents/dev_loop.py / app/prompts/split_system.md / app/prompts/write_code_system.md）
+# 复验 docs/readings/0924/verify_v43.sh（容器十读，py3.11 下包内 363 例测试全绿；
+#   v42 那九读原样保留＝上一批改动没退化，第 8b 节是 v43 出口判据的行为断言）
+# ⚠ 仍是「私有 key 试跑档位」：config.json 三条没动（帽 1.6M / specs off / 副腿 qwen3.7-plus+glm-5.3-flash）
+b42d45d2b25997b7983c344a9d507ed83b35bd4c823f0d0355ff270fc0c472b8  v43.zip  (v42 + 批次#68 四条，当前候选)
