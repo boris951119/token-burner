@@ -63,6 +63,47 @@ def test_gate_skips_generation_but_still_judges(tmp_path, monkeypatch):
     assert seen["specs_dir"] is None
 
 
+def test_specs_switch_off_skips_generation_even_with_node(tmp_path,
+                                                          monkeypatch):
+    """v42-4 试跑档位：node 在场也不生成 specs（9ac543c41514 实测这一段单独
+    吃掉 1h48m+，而它查出的缺陷喂给的是修不动的整文件重发环）。关掉之后
+    node-free 判分段（导出布局→起服→编译逐字事实）必须照跑。"""
+    class _S:
+        selftest_specs_enabled = False
+
+    seen = {}
+
+    def boom(*a, **k):
+        raise AssertionError("开关关闭时不得进入 specs 生成（烧 token）")
+
+    def fake_run_selftests(project_dir, specs_dir, requirements_dir=None):
+        seen["specs_dir"] = specs_dir
+        return 5, 0, [], "tail"
+
+    monkeypatch.setenv("ARCBENCH_SELFTEST", "on")
+    monkeypatch.setattr(sg, "node_unavailable_reason", lambda: "")
+    monkeypatch.setattr(sg, "ensure_selftests", boom)
+    monkeypatch.setattr(sg, "run_selftests", fake_run_selftests)
+    ok, report = sg.selftest_gate(tmp_path, "需求原文", settings=_S())
+    assert ok is True, "关的是付费腿，不是那道免费的眼睛"
+    assert seen["specs_dir"] is None
+
+
+def test_specs_switch_default_on_keeps_the_status_quo(tmp_path, monkeypatch):
+    """默认（含 settings=None）＝现状：生成腿照常开工。"""
+    seen = {}
+
+    monkeypatch.setenv("ARCBENCH_SELFTEST", "on")
+    monkeypatch.setattr(sg, "node_unavailable_reason", lambda: "")
+    monkeypatch.setattr(sg, "ensure_selftests",
+                        lambda *a, **k: seen.__setitem__("gen", True))
+    monkeypatch.setattr(sg, "run_selftests",
+                        lambda *a, **k: seen.get("specs", (5, 0, [], "")))
+    seen["specs"] = (5, 0, [], "tail")
+    ok, report = sg.selftest_gate(tmp_path, "需求", settings=None)
+    assert seen["gen"] is True and ok is True
+
+
 def test_generation_failure_no_longer_voids_the_gate(tmp_path, monkeypatch):
     """specs 全批生成失败：旧实现直接 return 报废整闸；新实现仍跑
     判分段（此处零信号 → FAIL 但不跳过起服检查）。"""

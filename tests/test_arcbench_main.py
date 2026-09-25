@@ -80,14 +80,18 @@ def _team_result(project_dir):
     )
 
 
-def _patch_llm_paths(monkeypatch, result, verify=(True, "verify ok")):
+def _patch_llm_paths(monkeypatch, result, verify=(True, "verify ok"),
+                     tune=None):
     """屏蔽真实网关与真实验收，替换管线为假件。"""
     captured = {}
 
     def fake_load_settings(config_file=None, **kw):
         captured["config_file"] = str(config_file) if config_file else None
-        captured["settings"] = Settings(models=["openai/glm-5.3"])
-        return captured["settings"]
+        s = Settings(models=["openai/glm-5.3"])
+        if tune is not None:
+            tune(s)
+        captured["settings"] = s
+        return s
 
     class _FakePipelineInstance(_FakePipeline):
         pass
@@ -331,6 +335,29 @@ class TestRunnerModelAutocomplete:
         _apply_runner_model(settings)
         return settings
 
+    def test_shipped_config_is_the_trial_formation(self, monkeypatch):
+        """v42-4：随包 config.json 就是试跑档位——注入 flash 后必须排成
+        主=flash / 开发=qwen3.7-plus / 测试=glm-5.3-flash。
+        换腿依据首跑真台账（输出占 74%、开发占 70%）：三条腿里 flash 单价
+        最低，贵的是 pro 与 qwen3.7-max 两条副腿。本测试同时是「上传比赛
+        包前记得翻回官方档位」的示警线——档位一改它就先红。"""
+        import json
+        from pathlib import Path
+
+        from app.config import load_settings
+        from app.pipeline import _model_triplet
+
+        cfg = Path(entry.__file__).resolve().parent / "config.json"
+        raw = json.loads(cfg.read_text(encoding="utf-8"))
+        loaded = load_settings(config_file=cfg)
+        assert loaded.max_task_tokens_cap == raw["max_task_tokens_cap"]
+        assert loaded.selftest_specs_enabled is False
+        s = self._apply(monkeypatch, "deepseek-v4-flash",
+                        "https://api.arc-bench.com/v1", True, raw["models"])
+        assert _model_triplet(s.models) == (
+            "openai/deepseek-v4-flash", "openai/qwen3.7-plus",
+            "openai/glm-5.3-flash")
+
     def test_official_relay_single_model_autocompletes(self, monkeypatch):
         s = self._apply(monkeypatch, "deepseek-v4-pro",
                         "https://api.arc-bench.com/v1",
@@ -377,6 +404,21 @@ class TestForcedRouteOnTreeEntry:
         assert not route.needs_user_confirm
         # 模块化判定输入：FOLDER 数 → estimated_files ≥ 阈值 6
         assert route.estimated_files >= 6
+
+    def test_task_envelope_hard_cap_binds_at_the_entry_and_says_so(
+            self, monkeypatch, tmp_path, req_dir, capsys):
+        """v42-1 接线：cap 写进随包 config.json 就必须真能砍到这一跑的信封，
+        并在 stdout 上留痕（官方容器只看得到日志；9ac543c41514 是精确烧满被
+        抬起来的 486 万之后，死在免费自测闸之前）。"""
+        out = tmp_path / "wsCap"
+        _env(monkeypatch, out)
+        captured = _patch_llm_paths(
+            monkeypatch, _team_result(tmp_path / "dbCap"),
+            tune=lambda s: setattr(s, "max_task_tokens_cap", 300_000))
+        assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 0
+        assert captured["run_kwargs"]["budget_override"] == 300_000
+        printed = capsys.readouterr().out
+        assert "硬帽 300,000 已砍" in printed, printed[-500:]
 
     def test_tree_entry_gets_size_aware_budget_envelope(
             self, monkeypatch, tmp_path, req_dir):

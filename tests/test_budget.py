@@ -451,3 +451,77 @@ class TestTaskEnvelopeOnlyRaises:
         except (TypeError, ValueError):
             # 脏值只允许被当成「没有托底」，不允许把启动折算换成一次异常
             pytest.fail(f"脏配置值把信封折算炸了: {floor!r}")
+
+
+class TestTaskEnvelopeHardCap:
+    """v42-1（批次#67）：「只抬不砍」把全产品唯一能减钱的机制一起废了——
+    9ac543c41514 实证信封抬到 486 万后**精确烧满 486 万（100.2%）**，又死在
+    免费判分段之前。托底照旧不砍，但顶部要有一枚说得清的硬帽：私有 key
+    试跑的单次成本（¥62.69 / 10 小时）得先压到可迭代的水位。"""
+
+    def test_cap_cuts_below_the_char_term(self):
+        from app.utils.budget import size_aware_budget, task_envelope
+
+        assert size_aware_budget(47, 146_637) > 3_000_000
+        assert task_envelope(47, 146_637, 0, 1_600_000) == 1_600_000
+
+    def test_cap_cuts_below_the_config_floor(self):
+        from app.utils.budget import task_envelope
+
+        assert task_envelope(24, 54_048, 2_000_000, 1_600_000) == 1_600_000
+
+    def test_zero_cap_is_the_v41_shape_exactly(self):
+        """0 = 关闭：省略与传 0 必须一字不变（默认档零风险）。"""
+        from app.utils.budget import task_envelope
+
+        for args in ((32, 17_797, 2_000_000), (47, 146_637, 2_000_000),
+                     (24, 54_048, 0)):
+            assert task_envelope(*args) == task_envelope(*args, 0)
+
+    def test_cap_above_the_envelope_only_does_not_raise_it(self):
+        from app.utils.budget import task_envelope
+
+        assert task_envelope(24, 54_048, 2_000_000, 5_000_000) == 2_000_000
+
+    @pytest.mark.parametrize("cap", [None, "abc", -1, True, 1.5, 1_500.5])
+    def test_dirty_cap_fails_toward_no_cap(self, cap):
+        """硬帽脏值的失效方向只能是「不加帽」：`int(1.5)` 截成 1，照单全收
+        就等于把整跑预算换成一个 token——立刻断气。"""
+        from app.utils.budget import task_envelope
+
+        assert task_envelope(24, 54_048, 0, cap) == task_envelope(24, 54_048)
+
+    def test_settings_validate_the_cap(self):
+        from app.config import Settings
+
+        assert Settings().max_task_tokens_cap == 0
+        assert Settings(max_task_tokens_cap=1_600_000).max_task_tokens_cap \
+            == 1_600_000
+        for bad in (-1, "abc", True, 1.5):
+            with pytest.raises(ValueError, match="max_task_tokens_cap"):
+                Settings(max_task_tokens_cap=bad)
+
+    def test_trial_profile_loads_from_config_json(self, tmp_path):
+        """试跑档位走的是随包 config.json：两枚新键必须真能落地，
+        而布尔位写错（"no"）要在启动时就炸出来，不能静默当成 True。"""
+        import json
+
+        from app.config import Settings, load_settings
+
+        # 两枚新键的默认值＝v41 行为一字不变（不写配置的官方跑零风险）
+        assert Settings().max_task_tokens_cap == 0
+        assert Settings().selftest_specs_enabled is True
+
+        cfg = tmp_path / "config.json"
+        cfg.write_text(json.dumps({
+            "max_task_tokens_cap": 1_600_000,
+            "selftest_specs_enabled": False,
+        }), encoding="utf-8")
+        s = load_settings(config_file=cfg)
+        assert s.max_task_tokens_cap == 1_600_000
+        assert s.selftest_specs_enabled is False
+
+        cfg.write_text(json.dumps({"selftest_specs_enabled": "no"}),
+                       encoding="utf-8")
+        with pytest.raises(ValueError, match="selftest_specs_enabled"):
+            load_settings(config_file=cfg)

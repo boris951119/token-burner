@@ -1951,6 +1951,48 @@ def verify_delivery(
     prev_sig = ""
     _beat(project_dir, "验收-启动")
 
+    # --- Phase 0: 体检前移（v42-3，零 LLM、秒级）---
+    # 官方判分是从 / 出发爬「渲染可见」的逐字事实；这个口径原先只在 Phase 3
+    # 自测闸里跑一次，而它排在整个验收循环**之后**。sheet 首跑实证：预算在
+    # 循环中途断气，那条免费的判分段一次都没走到，首页形态错了 10 小时无人知。
+    # 这里复用同一段（specs_dir=None ⇒ 导出官方布局→起服→健康探针→编译清单，
+    # 不碰 node/playwright），把缺口带 REQ id 交给下面现有的修复轮搭车，
+    # 不额外开一次 LLM 调用。
+    pre_txt = ""
+    if requirements_dir:
+        _beat(project_dir, "验收-前置体检")
+        try:
+            from app.utils.selftest_gate import run_selftests
+
+            pc, pf, pfail, pnotes = run_selftests(
+                project_dir, None, port_hint=3409,
+                requirements_dir=requirements_dir)
+            gap = (pfail or [])[:20]
+            notes.append(
+                f"[precheck] 逐字事实 {pc}/{pc + pf} 命中"
+                + (f"（缺 {len(pfail)}）" if pf else ""))
+            if gap:
+                pre_txt = (
+                    "\n【官方口径体检缺口（从首页爬取渲染可见文案判出，"
+                    "评测方同口径；按 REQ id 定位需求条目）】\n"
+                    + "\n".join(f"- {f}" for f in gap))
+                all_reports.append(
+                    f"[precheck] 逐字事实未命中 {len(pfail)} 条"
+                    f"（前 {len(gap)} 条见修复指令）")
+            elif pc:
+                notes.append(f"[precheck] 官方口径全绿 {pnotes[-120:]}")
+            else:
+                # 0/0 不是「全绿」：编译清单没抽出可判的逐字事实（或需求
+                # 目录为空），报告必须说「没信号」，否则下一轮排障会把
+                # 「眼睛没睁开」读成「看过了，没问题」。
+                notes.append(
+                    f"[precheck] 零信号（无逐字事实可判）{pnotes[-120:]}")
+        except Exception as exc:
+            # 前置体检是眼睛不是闸：它自己摔了不得带走验收
+            notes.append(f"[precheck] 异常降级（不影响后续验收）: {exc!r}"[:160])
+    else:
+        notes.append("[precheck] SKIP（无需求清单目录，编译判分环无源可判）")
+
     for verify_round in range(1, max_verify_rounds + 1):
         _beat(project_dir, f"验收-第{verify_round}轮")
 
@@ -1985,7 +2027,8 @@ def verify_delivery(
                     ok, report = auto_repair(
                         project_dir, settings, max_rounds=max_app_rounds,
                         requirement=requirement,
-                        priority_note=_home_route_priority_note(report),
+                        priority_note=_home_route_priority_note(report)
+                        + pre_txt,
                     )
                 except Exception as exc:
                     ok = False
@@ -2061,7 +2104,8 @@ def verify_delivery(
                         "display:none/屏幕外定位的元素，禁止塞进"
                         "textarea/script，禁止占位页 stuffing；"
                         "锚点校验基于渲染可见文本，隐藏塞串=白修。"
-                    ),
+                    )
+                    + pre_txt,
                 )
             except Exception as exc:
                 ok2, rep2 = False, f"锚点修复异常: {exc!r}"[:200]

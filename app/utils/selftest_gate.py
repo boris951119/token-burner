@@ -869,6 +869,11 @@ def selftest_gate(project_dir: Path, requirement: str, settings,
         return False, "自测闸关闭（ARCBENCH_SELFTEST=off）"
     project_dir = Path(project_dir).resolve()
     reason = node_unavailable_reason()
+    # 批次#67：私有 key 试跑档位——spec 生成按 ATOMIC 节点分批调 LLM，实测单独
+    # 吃掉 1h48m+，而它查出的缺陷喂给的是修不动的整文件重发环。关掉它只损失
+    # Playwright 级发现能力，node-free 判分段（起服+导出布局+编译逐字事实）照跑。
+    if not getattr(settings, "selftest_specs_enabled", True):
+        reason = reason or "配置关闭（selftest_specs_enabled=false）"
     specs_dir: Path | None = None
     if reason:
         # specs 生成要先烧 LLM token，跑它却需要 node——缺 node 时一分钱

@@ -1300,3 +1300,279 @@ github 没加这句，但 refresh 相关字样 49 → 84。
 **新题面的头号失分面（写进 v42 靶子）**：刷新后仍在＝每个写操作都要落到服务端持久层。
 这和契约八“一个应用一张真库”同向，但现在需要**逐条需求**都成立（100 步每步都验），
 不再是首页聚合区那一处。
+
+---
+
+## 批次#66：首跑成本台账（权威读数）——推翻本文件批次#65 的第 3 条归因
+
+**来源（免费、可复读）**：run `088dd22be41b` 页 → `File` → `projects/arcbench-app_20260924_024720/logs/cost_report.json`
+（我们自己 `CostDashboard.persist` 的落盘件；04:59:20 快照 total 1,067,631，终值 1,645,515）。
+同目录还有 `session_001.log` / `spec.md` / `interfaces.json` 可白拿。
+
+- **全跑只有 50 次 LLM 调用**；input 277,636（26%）/ output **789,995（74%）**。
+- by_stage：开发 **744,655（70%）** > 测试 137,209 > 方案讨论 119,637 > 拆分接口 66,130。
+- by_model：`deepseek-v4-flash` **696,738（25 次，out/in 5.4×）**、`deepseek-v4-pro` 191,816（12 次，1.24×）、
+  `qwen3.7-max` 179,077（13 次，1.16×）。
+- **11 次输出 >2 万 token，全部是 flash**；其中 6 次 >5 万（66,443 / 66,285 / 62,485 / 53,432 / 51,510 / 50,992）
+  合计 **351,147 = 全跑 33%**，而这 6 次的 input 只有 2–7k。
+- 我们发出的 `max_tokens = 12,000`（`config.max_response_tokens`；本地老跑最大单次输出 6,916 = 上限平时被遵守）
+  ⇒ 官方跑单次 66k 只可能是 **completion_tokens 含思考 token**（这类模型的 max_tokens 管答案、不管思考）。
+- 04:59 → 06:11 的验收/修复尾段又烧 578k（**35%**）然后 `BudgetExceededError` 断气。
+
+**⇒ 修正批次#65 第 3 条**：题面 ×2.8 抬的是 **input**，而 input 只占全跑 26%（题面全文只进「方案讨论吃 FOLDER
+摘要 + 拆分接口」两环节，合计 186k = 17%；逐模块 spec 实测仅 500–1,000 字符，见 `examples/logscan/modules/*.md`）。
+「逐模块只带本模块相关场景」天花板是十几个百分点，却要动提示词拼装（有回归风险）——**不是好杠杆，已撤回**。
+真正的杠杆在**输出侧的思考 token**，且它同时是「贵」和「断气跑不完」的同一个病根。
+
+**钱的换算（首次标定）**：队伍余额首跑后为 **￥475.17** ⇒ 首跑 1,645,515 token 花 **￥24.83**
+⇒ **￥15.1 / 百万 token（三腿混合）**。据此：sheet 烧满信封 4.86M ≈ ￥73、github 顶格 5.0M ≈ ￥75，
+两题合计 ≈ ￥150 < 余额 ⇒ **额度不是瓶颈**（此前「github 会中途断气在额度上」的判断作废）；
+瓶颈是「每块钱换多少分」：榜上 ¥0 → 158.49、¥10.77 → 109.38、¥24.85 → 100.61，我们 ¥24.83 拿 90.09。
+
+## v41 跑中读数（run `9ac543c41514`，204 分钟时；未终态）
+
+- 13:37:51 `[task]` 原子需求 24 条 / 题面 162,077 字符 → 信封 **4,862,310**（配置 2,000,000 被抬 = **v41「只抬不砍」生效**）。
+- 视觉转写 9/9 全过（13:35:59–13:37:51，约 2 分钟）；`[gateway] preflight OK（首选 flash）`。
+- 15:21:16 `[export]` 抢先交付落地：backend=43 文件 / frontend=5 文件 / **入口=mechanical（作者入口不可用）** /
+  挂载模块=5 Blueprint=4 APIRouter=0 / **已隔离坏模块=['pivot']**。
+- `[ledger] 修复升级 → openai/deepseek-v4-flash` 共 7 次，fix_attempts 最高到 5（升级目标始终是 flash 这条腿）。
+- stdout 自 15:21 起静默约 100 分钟（验收/修复段不打日志）；watchdog 阈值 200 分钟于 16:57 到点但未触发
+  （进度由每次 LLM 响应 `touch_progress`）。
+
+**本轮暴露的新问题（非成本类，判分直接相关）**：`ensure_entry` 走到了第 ③ 分支（作者入口确实坏了），
+于是把 `pivot` 整包从装配清单剔除 ⇒ **pivot 相关需求（REQ-5-3「Create and Refresh a Basic Pivot Table」等）
+在交付里没有路由**，判分必红。而 `probe_entries()` 返回的 `dead` 字典**本来就带每个坏包的错误文本**，
+只是 `platform_export.py:505` 那行 `[export]` 没把它打出来 ⇒ 我们无法知道 pivot 死于语法错、悬空 import 还是别的。
+**这是零风险诊断改进点**：把 `dead[包名]` 的原因串进那行日志（不改行为，只补留痕）。
+
+### 编制来源查清（同批免费取证）：提交表单的 Model 字段 = **主模型**
+
+`main.py:276` 一带的平台编制注入把 `MODEL` 环境变量（提交表单 Model 格）litellm 化后
+**放在 `settings.models` 首位**，其余两位取 `config.json` 预设里与它互异的前两个；
+`pipeline._model_triplet`（`app/pipeline.py:80`）按序解析 **models[0]=主 / [1]=开发 / [2]=测试**。
+
+本跑打印 `models=['openai/deepseek-v4-flash', 'openai/deepseek-v4-pro', 'openai/qwen3.7-max']`
+（本地 `config.json` 是 `[pro, flash, qwen]`，剔除注入的 flash 后剩 pro、qwen）⇒ **主模型 = flash**。于是：
+
+- `dev_loop._model_for_module`：UI/组装形态模块（页面/前端/视图/静态托管）→ **主模型亲自写 = flash**；其余 → pro。
+- 修复升级 `recommend("codegen", exclude=(dev_model,))` 排除 pro 后落到 **flash**（本跑 7 次升级全去 flash）。
+
+⇒ 首跑 flash 占 65% 账单不是偶然：**我们在表单里挑的“便宜腿”被放在了最重的位置**（UI 写码 + 全部修复升级），
+而它恰好是思考 token 最凶的一条（out/in 5.4×，单次最高 66,443）。
+
+⇒ 由此多出一个**零代码、零改包**的杠杆：只改提交表单的 Model 字段（让 pro 或 qwen 当主模型），
+就能把这 65% 挪走，且不触碰任何生成逻辑（回归风险 = 0）。唯一不确定项：平台按模型计价的**价目表拿不到**
+（`/api-doc` 页无价目），所以“换主模型是省 ¥、还是省 token 反而更贵”只能靠一次对照跑定
+（每跑约 ¥50–75，余额 ￥475 够两次）。
+
+## v41 实时成本台账（同一跑，15:21:16 抢先交付那一刻的快照，58 次调用）
+
+`projects/arcbench-app_20260924_133755/logs/cost_report.json`（**它是周期性落盘的，可在跑中当实时花费表读**）：
+
+- budget 4,862,310 / total **1,150,265（23.7%）**；input **541,874（47%）** / output 608,391（53%）。
+- by_model：flash **724,917（63%）**、pro 277,069（24%）、qwen 148,279（13%）。
+- by_stage：开发 **848,810（74%）**、方案讨论 129,284、测试 122,937、拆分接口 49,234。
+- 逐环节拆分：`flash/开发` 16 次 = **602,895（全跑 52%）**，`pro/开发` 12 次 = 245,915，
+  `qwen/测试` 11 次 = 122,937，`flash/拆分接口` 9 次 = 49,234，`flash/讨论` 4 次 = 72,788。
+- 怪物调用仍在：输出 >2 万的 6 次**全是 flash**（最高 `开发` 8,630 in / **64,415 out**）。
+
+**⇒ 对批次#66 结论的一处重要修正（新题面下 input 翻身了）**：首跑 input 只占 26%，所以当时判「逐模块瘦身
+不是好杠杆」；**新题面下 input 已占 47%**，且开发调用的单次 input 从首跑的 ~2.5k 涨到 **20k–52k**
+（9 次 >2 万，最高 51,917）。原因实测到两个：① 逐模块 spec 变大了——本跑 `modules/pivot.md` **144 行 /
+约 1.6 万字符**（首跑同位文件只有 500–1,000 字符，20 倍），因为拆分阶段吃的是 3 倍大的全文；
+② 修复轮每次把**整份模块代码 + 整份测试**重发一遍（`FIX_CODE_USER.format(module, code, tests, …)`），
+本跑 fix_attempts 最高到 5 ⇒ 同一坨内容重发了 5 次。
+
+⇒ 结论：**输出侧（flash 思考 token）与输入侧（修复轮重发全文）现在是两个同等大的头**，
+v42 的单变量只能挑一个；另一个记进 backlog。
+
+**交付形态（本跑 204m 时的 workspace）**：`backend/` 下 10 个目录（`_shared`、`app_main` 机械壳、
+`cell`/`database`/`formula`/`pivot`/`sortfilter`/`validation`/`workbook`/`worksheet` 八个模块）+ `data.db`；
+机械入口只挂上 5 个模块 / 4 个 Blueprint，`pivot` 因导入即炸被整包隔离 ⇒ pivot 族需求在交付里没有路由。
+
+### pivot 死因已定位（跑中 stdout 直接给出，不用猜）
+
+```
+[18:18:43] [repo_fix] 本轮拒收 1 个文件: ['code/pivot/pivot.py']
+[20:22:00] [repo_fix] 冻结 code/pivot/pivot.py 的整文件修复（连续 2 次语法非法，…纯失血）
+[20:22:00] [repo_fix] 拒收语法非法的修复内容 code/pivot/pivot.py: invalid syntax (pivot.py, line 1162)
+[20:22:00] [repo_fix] 本轮拒收 1 个文件: ['code/pivot/pivot.py']
+```
+
+四条事实：
+1. **死因是单文件语法错，位置在 `pivot.py` 第 1162 行**（不是悬空 import、不是缺依赖）。
+2. 该文件 **>1162 行**，而 `max_response_tokens = 12,000` ⇒ 一次写不完 ⇒ 走截断续写通道拼接。
+   历史取证（`model_client.py:448` 注释）已记录过同一族死法：句中截断 + 续写裸拼接 ⇒ 未闭合字符串。
+   ⇒ **最可能的成因是「生成期截断拼接」而不是「模型写错了代码」**。
+3. **v41-3 的语法冻结闸在生产里如实触发了**（连续 2 次非法 → 冻结，不再烧第 3 轮），设计意图达成。
+4. 但代价惊人：两次拒收之间隔了 **2 小时 3 分**（18:18:43 → 20:22:00）＝**一次「整文件重发」修复要约 2 小时**
+   （1162 行 ≈ 1.5–2 万输出 token，再叠上思考 token），而且必然再被截断、必然再非法。
+   ⇒ 冻结闸省下了第 3 轮，但**没有省下「注定失败的前两轮」**：4 小时 + 数十万 token 买了个 0。
+
+**验收节奏实测（本跑）**：R2 旅程 18:18→20:06（**1h48m**）→ 修复 → R3 旅程 20:22 起。
+`verify_delivery(max_app_rounds=3, max_verify_rounds=3)` ⇒ 单是旅程测试就可能吃掉 5 小时以上。
+看门狗 200 分钟阈值在这条节奏下**很接近误杀线**（旅程阶段只在切换时写心跳）。
+
+### 链条闭合：一个模块是怎么从「写坏」走到「整块功能消失」的
+
+实读到交付件 `backend/pivot/pivot.py`：**全文 213 行，第 1 行就是 JavaScript**
+（`const cc = startC + ci;`），末尾以 `'''` 收尾 ⇒ 这是一份**只剩尾巴、头部（import / Blueprint 定义 /
+HTML 串开头）整体缺失**的残file，根本不是合法 Python。而 `[repo_fix]` 报的 `line 1162` 是**修复草稿**的行号
+⇒ 模型被要求「整文件重写」时把 213 行写成 1162+ 行，撞上 `max_response_tokens = 12,000` 被截断。
+
+完整因果链（每一环都已在代码里核实）：
+1. 写码调用产出被截断/拼接坏的内容（`_write_code` → `_split_shared(_extract_code(...))`）。
+2. `run_static_check` 门禁**看见了**（`dev_loop.py:321`，语法不过 → `failure_report` → 进修复轮），
+   但修复协议是 **`FIX_CODE_USER.format(module, code, tests, …)` = 整份代码 + 整份测试重发**，
+   修一个语法错要模型再吐一遍全文 ⇒ 再被截断 ⇒ 再非法。
+3. `repo_fixer._apply` 的 compile 闸如实拒收（`repo_fixer.py:300`），v41-3 冻结闸在第 2 次后收手。
+4. **但冻结不等于回滚**：非法内容仍在盘上，`max_fix_rounds` 耗尽后模块记 FROZEN，导出照抄。
+5. 导出期 `ensure_entry` 真导入探测 → pivot 导入即炸 → **整包隔离**（`platform_export.py:505`）
+   → pivot 族需求在交付里连路由都没有 → 判分必红。
+6. 代价：两次注定失败的整文件重发 ≈ **4 小时 + 数十万 token**，换回 0。
+
+⇒ 结论：**这一跑的失分主因不是成本，是「单文件写坏 → 修不动 → 整块功能被切除」**，
+而成本浪费是同一个协议的副产品（整文件重发既慢又贵）。省钱与救分在这里是**同一个修复**。
+
+---
+
+## v42 候选清单（跑后定案用；每条都带证据 / 执行度 / 风险）
+
+**P1 修复协议改「定点补丁」，不再整文件重发**（救分最大）
+- 证据：`pivot.py` 两次整文件重发各约 **2 小时**，均因截断非法（`'(' was never closed (line 1181)`、
+  `invalid syntax (line 1162)`）→ 冻结 → 整包隔离 → pivot 族需求全红。
+- 做法：语法类失败只回传「坏行 ±40 行 + 错误信息」，要求返回该段完整替换块，机械拼接后 `compile()` 自证；
+  整文件重发只在文件 < 300 行时允许。`dev_loop._fix_code`（`FIX_CODE_USER` 带整份 code+tests）同族改。
+- 执行度：中（约 80–120 行 + 单测；容器复验免费）。
+- 风险：拼接错位会把好文件改坏 ⇒ 必须「拼接后 compile 不过就整份丢弃、退回盘上原版」（复用既有 rejected 机制）。
+
+**P2 坏文件不入交付：落盘前 compile 自证 + 保留最近一份合法版本**（最稳妥、直接救「整块功能消失」）
+- 证据：`_finish`（`dev_loop.py:1079-1084`）**无条件落盘**，注释写明「含冻结场景——保留现场供审计」；
+  交付件 `backend/pivot/pivot.py` 第 1 行就是 JS。
+- 做法：`write_code_file` 前 `compile()`；不过则保留上一版合法内容（从无合法版 → 写「可导入的最小存根」，
+  至少不被整包隔离）+ 诊断事件留痕。
+- 执行度：小（约 30–50 行 + 单测）。
+- 风险：存根属「造内容」，可能让本地闸看见「服务活着」而掩盖缺陷 ⇒ 存根必须显式标注并进诊断事件
+  （与既有诚实骨架同一纪律）。
+
+**P3 自测闸 spec 生成加预算/墙钟闸**（省时省钱、改动最小）
+- 证据：本跑 21:46 进「自测闸-生成」后 **89 分钟无心跳更新**；该阶段按 ATOMIC 节点分批调 LLM
+  （`models[:2]` = flash, pro），之后还有 Playwright 跑 + 定向修复 ×2 轮；而它产出的失败清单最终喂给的
+  正是 P1 那个「修不动」的修复环。
+- 做法：复用现成 skip 通道（`selftest_gate.py:871` 的 `reason = node_unavailable_reason()`）——
+  再加一条 reason：剩余信封 < 25% 或剩余墙钟 < 90 分钟 ⇒ 跳过 LLM spec 生成，只跑 node-free 判分
+  （导出布局 + 起服 + 编译清单）。
+- 执行度：很小（约 15 行 + 单测）。
+- 风险：低；node-free 判分仍在，损失的是 Playwright 级发现能力（本轮实证它发现的问题修不动）。
+
+**P4 提交表单 Model 字段换主模型**（零改包）
+- 证据：flash 占账单 63–65%、out/in 5.4×、6 次 >5 万输出全是它；而它被放在最重的位置
+  （UI 写码 + 全部修复升级），因为表单 Model → `models[0]` → main。
+- 执行度：零代码（表单换一个模型名）。
+- 风险：平台价目表未知 ⇒ 可能 token 降而 ¥ 升；换主模型同时改变生成质量，不可免费预判
+  ⇒ 只能当**一次独立对照跑**，不与 P1–P3 同批。
+
+**P5 单次输出 >25k 判腿退化 → 本任务内改路由**（输出侧护栏）
+- 证据：首跑 6 次 >5 万输出 = 全跑 33% token；本跑仍有 8,630 in / **64,415 out**。
+- 执行度：小-中（`model_client` 记账后判定 + `dev_loop` 路由黑名单；约 40 行 + 单测）。
+- 风险：阈值只有单题样本支撑，github 题更大 ⇒ 误杀会让同模块被多条腿重写；缓解＝**每任务只触发一次**。
+
+**P6 `[export]` 行补打 `dead` 原因**（纯诊断）
+- 证据：`probe_entries()` 的 `dead` 字典本就带每个坏包的错误文本，`platform_export.py:505` 没打出来
+  ⇒ 我们只能靠翻交付件才知道 pivot 死于语法。
+- 执行度：极小（1–3 行）。风险：0。
+
+**建议的单变量编组**：v42 = **P2 + P6**（同一件事：不让坏文件进交付，并把死因打出来）；
+v43 = P1（救分最大但改动大，单独一批）；v44 = P3。P4/P5 属「花钱买读数」的对照跑，各自单独一批。
+
+---
+
+## 试水运行登记 3：run `9ac543c41514`（v41·sheet·新题面）终态 —— **0 分**
+
+接口 `/api/runs/9ac543c41514`（2026-09-25 读）：
+
+| 字段 | 值 |
+|---|---|
+| status / failure_reason | `FAILED` / **"Runner exited with test failures or runtime errors"** |
+| score / test_pass_rate | **0.0 / 0.0%** |
+| passed / failed | **0 / 100**（100 条测试全部执行、全部红） |
+| feature_implemented | **0 / 24** |
+| token_count / cost | **4,906,034** / **￥62.6919**（CNY，`billing_mode=self_funded`） |
+| 墙钟 | 36,030s = **600m30s = 10h00m30s**（13:34:57 → 23:54:16 落定） |
+
+**同时纠正一条我自己传播过的错误读数**：`088dd22be41b`（首跑）接口终态同样是
+**score 0、pass 0%、passed 0 / failed 0**，failure_reason =
+**"template application server did not become ready within 120 seconds"**，tokens 1,665,661 / ￥24.83。
+⇒ **我们两跑都是 0 分**；榜上的 90.47 是第一名 MorningW1nd 的分数，**"首跑 90.09" 是我的误读，作废**。
+（`node_states` 里的 `test-passed` 是**我们 SDK 自己上报**的追溯状态，不是官方判分结果——两套口径并存，
+读接口时必须分清。）
+
+**判分阶段日志揭示的死法（与首跑完全不同，这是进步也是新瓶颈）**：
+`23:36:24 frontend-npm-install` → `vite build`（30 modules / dist JS 142.74 kB / index.html 0.33 kB）
+→ `backend-npm-install` → `template-app.stdout: > python3 main.py`、`* Serving Flask app 'app'`
+→ 之后 18 分钟里访问日志**只有 `GET / → 200`（每 ~10s 一次）与 favicon 404，没有任何子路由或 `/api/*` 流量**。
+⇒ 官方 runner **这次把我们的服起来了、首页 200**（首跑是 120s 起不来），但 100 条测试**全在首页第一步就超时**
+——没有任何一条测试走到了第二页或某个 API。这与我们盘上的 `routes=75 / SMOKE_OK` 不矛盾：
+**门闸验的是"路由在不在"，判分要的是"首页第一个控件能不能点"**。
+⇒ 首要嫌疑：官方把 `frontend/` 当站点构建（vite build 确实跑了），而我们出口写的 `frontend/` 是**最小 Vite+React 壳**
+（`platform_export` 的 `_FRONTEND_APP_TSX`），真 UI 在 backend 内联 HTML 里 ⇒ 若判分端加载的是那个壳，
+100 条全红是必然。**下一步免费验证**（零 LLM）：本地重放我们的导出 → `curl` 首页 → 对比 `frontend/dist/index.html`
+与 backend 内联 HTML，确认"官方看到的首页"到底是哪一份。
+
+**余额**：`MY REMAINING BUDGET` 由 ￥475.17 → **￥437.31**（这跑实扣 ￥37.86）；
+而接口/榜单记这跑成本 ￥62.69 —— 两数差额恰为首跑的 ￥24.83 ⇒ 成本字段疑似**按队累计**口径（未定论）。
+无论口径如何：**余 ￥437.31，够再跑约 5–10 次这个量级的评测**，额度确实不是瓶颈。
+
+**排行榜格局（sheet 题，18 条）**：第 1 名 MorningW1nd `deepseek-v4-flash` **90.47 / 90.0% / ￥34.17**；
+第 3 名 VOLO-AI **42% 通过却拿 55.25，只花 ￥1.08**；第 4 名 bzt 56% 花 ￥25.20 得 54.70；
+**18 队里 10 队 0.00**（含我们）⇒ 这个赛道上"交付起不来/全红"是常态，而成本确实在扣分
+（同 42–56% 通过率区间，￥1 比 ￥25 多约 13 分）。
+
+## 批次#67：首页形状本地验证（零 LLM，`scripts/home_shape_probe.py`）——死因确认 + 自家闸能看见
+
+拿官方新题面（`hackathon-req-0924-v2/hackathon--sheet/requirements.yaml`）编译出的 **86 条逐字事实**，
+对两个合成交付各起一个 Flask 服跑我们自己的 `acceptance_judge`：
+
+| 首页形态 | passed / total | 说明 |
+|---|---|---|
+| **A 模块目录页当首页**（v41 实交付形状：`/workbook/ /worksheet/ /cell/ /formula/ /sortfilter/ /pivot/ …` 链接列表） | **0 / 86** | 与官方 **0/100** 同数量级 |
+| **B 业务主页当首页**（页面直接承载题面逐字事实：`Q3 Sales` / `East` / `North` / `Sheet1` / `Region` / `Workbook name` / `Create`） | **74 / 86** | 剩 21 红都是二级页控件（`Sort by` / `Order` / `Ascending` / `Refresh pivot table` / `Text contains`） |
+
+⇒ **两件事同时成立**：
+1. **死因确认**：官方 100 条测试全在首页第一步超时，是因为**首页是"模块目录页"而不是需求点名的工作区主页**
+   （`routes=75` 与 `SMOKE_OK` 都成立，但 86 条逐字事实里 **0 条**出现在入口可达页面；我们自己的审计也打出
+   `anchor 未全对齐（仍缺 94）`）。
+2. **自家那道零 LLM 闸看得见这个死法**（0/86 vs 74/86 的分辨力是决定性的），
+   **但它这一跑根本没跑到**——`[selftest] 异常降级: BudgetExceededError（100.2%）` 恰好砸在它前面一步。
+
+⇒ 因此 v42 的靶子从"信封/成本"改成这一条：**把编译判分环（零 LLM、秒级）提到抢先交付之后立刻跑一次，
+红字直接灌进修复环；并且把"首页必须是需求点名的业务主页、禁止模块目录页当首页"写进逐条生成契约**。
+
+**顺带一条判分器口径备忘（本次实测撞到）**：`acceptance_judge._is_html`（`acceptance_judge.py:194`）
+只认 `<!doctype html` / `<html` 开头或前 2048 字符内含 `<body` 的响应；
+返回 HTML **片段**（LLM 写 Flask 时很常见的裸 `<h1>…` 无外壳）会被整页丢弃 ⇒ 判分语料为空 ⇒
+归并成一条"先修首页"根因红。官方 Playwright 不看这个（浏览器会自动补外壳），
+**所以这条是我们自家闸的口径，不是官方的**——但它顺带说明"页面有没有外壳"值得一道契约。
+
+## 批次#67 落地：v42 四条（用户拍板"改的那四条你都改完"，随后私有 key 试跑）
+
+| # | 改什么 | 落在哪 | 为什么是这一条 |
+|---|---|---|---|
+| v42-1 | 信封加**真能砍下来**的硬帽 `max_task_tokens_cap`（默认 0＝关闭） | `app/config.py` + `app/utils/budget.py:task_envelope` + `main.py` 横幅 | v41 把信封改成"只抬不砍"之后，全产品没有任何口径能减钱 ⇒ 9ac543c41514 精确烧满 486 万（100.2%）后死在免费闸前。官方跑 cap=0 不改行为；试跑把帽写进随包 config.json |
+| v42-2 | **首页硬契约**进 `app/prompts/write_code_system.md`（逐模块共见那份） | 新增 12 行 | 官方 0/100 与本地 0/86 同一个形状：首页是模块自述页。契约只注入 1 个模块不够（20/40 交付页面散在 ≥2 模块） |
+| v42-3 | **体检前移**：`verify_delivery` 新增 Phase 0，抢先交付之后立刻跑一次 node-free 判分段 | `app/arcbench_smoke.py:verify_delivery` | 那道免费的眼睛原先排在整个验收循环之后，两跑都没轮到它。复用 `run_selftests(project_dir, None, ...)`＝零新生产逻辑、零 LLM、秒级；红字带 REQ id **搭现有修复轮的车**（smoke 的 `priority_note` + 锚点的 `extra_issue`），不额外开一次 LLM 调用 |
+| v42-4 | 编队换腿 + 试跑档位写进随包 `config.json` | `config.json` | 首跑台账：输出占 74%、开发占 70%，三条腿里 flash 单价最低（¥3/9），贵的是 pro（¥9/27）与 qwen3.7-max（¥12/36）⇒ 换掉两条副腿：开发=`qwen3.7-plus`(¥2/12)、测试=`glm-5.3-flash`(¥0.8/2.8)，主腿仍 flash |
+
+**帽子的失效方向**（`task_envelope` 里逐型拒绝的一段）：`int(1.5)` 截成 1——一个手写的
+小数/布尔值若照单全收，等于把整跑预算换成一个 token，立刻断气而日志上只看得出"信封好小"。
+托底脏值最多少给钱，硬帽脏值能把任务掐死，所以只有 `int`（非 bool）且 >0 才加帽，其余一律当作"没加帽"。
+
+**试跑档位 = 随包 config.json 三行**（`max_task_tokens_cap: 1600000` /
+`selftest_specs_enabled: false` / `models: [flash, qwen3.7-plus, glm-5.3-flash]`）。
+**上传比赛包前必须翻回官方档位**：帽改回 0、specs 开关改回 true、副腿换回原编队——
+`tests/test_arcbench_main.py::TestRunnerModelFormation::test_shipped_config_is_the_trial_formation`
+就是这条的示警线，档位一改它先红。
+
+**测试**：+17 例（信封硬帽 8 / Phase 0 接线 5 / specs 开关 2 / 入口帽与编队 2），
+全量 **1867 passed, 2 skipped**。零 LLM 侧复测：`scripts/home_shape_probe.py` 重跑仍
+是 0/86（A 目录页）vs 74/86（B 业务主页）⇒ v42-2/3 的靶子量级成立。

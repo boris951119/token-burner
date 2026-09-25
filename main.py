@@ -453,10 +453,16 @@ def main(argv: list[str] | None = None) -> int:
         # 折算 1,621,440 覆盖掉配置的 2,000,000，验收+修复段因此零执行。
         # 配置可能是字符串/脏值：脏值按「没有托底」处理，task_envelope 内已兜住
         _floor = getattr(settings, "max_task_tokens", 0) or 0
-        task_budget = task_envelope(n_atomic, req_chars, _floor)
+        # 硬帽（批次#67）：v41 之后没有任何口径能把信封砍小，于是 9ac543c41514
+        # 精确烧满被抬起来的 486 万（100.2%）、又是死在自测闸前。官方跑用
+        # cap=0 保留「只抬不砍」；私有 key 试跑把 cap 写进 config.json，
+        # 单次成本与墙钟才控得住（￥62.69 / 10 小时 → 目标 ￥10 / 2-3 小时）。
+        _cap = getattr(settings, "max_task_tokens_cap", 0) or 0
+        task_budget = task_envelope(n_atomic, req_chars, _floor, _cap)
         print(f"[task] 原子需求={n_atomic} 条 题面={req_chars:,} 字符 → 任务信封"
               f"={task_budget:,} token（条数/字数两式取大，与配置 {_floor:,} "
               f"取大＝只抬不砍"
+              f"{'，硬帽 ' + format(int(_cap), ',') + ' 已砍' if int(_cap or 0) > 0 and task_budget == int(_cap) else ''}"
               f"{'，本次由配置托底' if int(_floor or 0) > 0 and task_budget == int(_floor) else ''}）",
               flush=True)
     # 网关长挂防御：单请求实测可挂 25 分钟+（httpx read timeout 是字节

@@ -53,21 +53,44 @@ def get_active_budget_guard() -> "BudgetGuard | None":
 
 
 def task_envelope(n_requirements: int, text_chars: int,
-                  config_floor: int = 0) -> int:
-    """单任务实际信封：题面折算与配置预算**取大＝只抬不砍**。
+                  config_floor: int = 0, hard_cap: int = 0) -> int:
+    """单任务实际信封：`min( max(题面折算, 配置托底), 硬帽 )`。
 
-    run 088dd22be41b 实证：sheet 题折算 1,621,440 直接覆盖了配置里的
-    2,000,000，于是这一跑烧到 101.5% 断气、验收+修复段零执行，而账上还有
-    35 万 token 没用。折算口径的职责是给「条少字多」的题面加钱，从来不是
-    给一份健康配置减钱——把预算砍小这件事没有任何证据支持，实测反而说明
-    30k/千字偏薄。
+    两段语义各自有实证，缺一不可：
+
+    ① **托底＝只抬不砍**（v41，run 088dd22be41b）：sheet 题折算 1,621,440 直接
+       覆盖了配置里的 2,000,000，于是这一跑烧到 101.5% 断气、验收+修复段零执行，
+       而账上还有 35 万 token 没用。折算口径的职责是给「条少字多」的题面加钱，
+       从来不是给一份健康配置减钱。
+
+    ② **硬帽**（批次#67，run 9ac543c41514）：①落地后信封从 162 万抬到 486 万，
+       这一跑就**精确烧满 486 万（100.2%）**、又是死在自测闸前——总闸只是许可，
+       烧钱的三处（模型思考 token、修复环整文件重发、自测闸生成 spec）各自没有闸，
+       给多大烧多大。官方跑要留着 ① 不砍，但换私有 key 试跑必须能把单次成本
+       （￥62.69 / 10 小时）压到可迭代的水位，所以这里要有一个**能砍下来**的上限。
+       0 = 关闭（行为与 v41 一字不变）。
     """
     try:
         floor = int(config_floor or 0)
     except (TypeError, ValueError):
         # 配置里的脏值只允许被看成「没有托底」——启动折算不能换成一次崩溃
         floor = 0
-    return max(size_aware_budget(n_requirements, text_chars), floor)
+    envelope = max(size_aware_budget(n_requirements, text_chars), floor)
+    try:
+        cap = int(hard_cap)
+    except (TypeError, ValueError):
+        cap = 0
+    # 帽子的失效方向必须朝「不加帽」：`int(1.5)` 会截成 1，一个手写的
+    # 小数/布尔值若照单全收，等于把整跑预算换成一个 token——立刻断气，
+    # 而日志上只看得出「信封好小」。托底脏值最多少给钱，硬帽脏值能把
+    # 任务直接掐死，所以这一侧逐型拒绝。
+    if isinstance(hard_cap, bool) or cap <= 0:
+        cap = 0
+    elif isinstance(hard_cap, float) and cap != hard_cap:
+        cap = 0
+    if cap > 0:
+        envelope = min(envelope, cap)
+    return envelope
 
 
 def size_aware_budget(

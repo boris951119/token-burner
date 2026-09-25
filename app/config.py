@@ -85,6 +85,20 @@ class Settings:
 
     # ---- 第 11 章 六层成本护栏（11.6 默认值）----
     max_task_tokens: int = 200_000            # 第 0 层：单任务 token 总预算（总闸）
+    # 信封硬帽（批次#67）：max_task_tokens 在 v41 之后是「托底＝只抬不砍」，
+    # 于是全产品没有任何口径能把信封**砍小**。官方跑确实不该砍
+    # （run 088dd22be41b 实证：1,621,440 的折算盖掉配置的 2,000,000，
+    # 验收+修复段零执行），但换私有 key 试跑时「一次自掏约 ￥60、墙钟 10 小时」
+    # 必须压得住——烧钱的三个地方（思考 token、修复环整文件重发、自测闸生成
+    # spec）各自都没有闸，总闸给多大就烧多大。0 = 关闭（行为与 v41 一字不变）。
+    max_task_tokens_cap: int = 0
+    # 自测闸的 Playwright spec 生成开关（批次#67）：True = 现状（先 LLM 生成
+    # specs 再跑）。run 9ac543c41514 实测这一段按 ATOMIC 节点分批调 LLM，
+    # 心跳显示它单独吃掉 1 小时 48 分以上，而它发现的缺陷喂给的是「整文件
+    # 重发修不动」那个修复环——花了钱和时间、零产出。False = 跳过 LLM 生成，
+    # 只跑 node-free 判分段（导出官方布局 + 起服 + 编译清单逐字事实），
+    # 那一段零 LLM、秒级，且正是本轮唯一没轮到跑的闸。
+    selftest_specs_enabled: bool = True
     budget_throttle_threshold: float = 0.9     # 11.0：≥90% 进入省 token 模式
     # 11.0 修复保留额：总预算里划给「验收后的 LLM 修复」那一段的比例。省 token
     # 模式据此提前触发（越过 预算-保留额 就地收敛，不再加讨论轮），使总闸之前
@@ -322,6 +336,13 @@ class Settings:
                 "budget_repair_reserve 必须落在 [0, 1) 区间，当前值: "
                 f"{self.budget_repair_reserve!r}"
             )
+
+        # 信封硬帽：0 = 关闭（与 v41 行为一字不变）。允许低于 max_task_tokens——
+        # 「帽」的职责就是把托底也砍下去，否则私有 key 试跑没有任何手段控成本。
+        cap = self.max_task_tokens_cap
+        if not isinstance(cap, int) or isinstance(cap, bool) or cap < 0:
+            raise ValueError(
+                f"max_task_tokens_cap 必须为非负整数（0=关闭），当前值: {cap!r}")
 
         # M9：快判开启时模型必须在预设列表（调用前确定性校验，尽早失败）
         if self.fast_triage_enabled and self.fast_triage_model not in self.models:

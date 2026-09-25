@@ -1,8 +1,8 @@
 {
   "models": [
-    "openai/deepseek-v4-pro",
     "openai/deepseek-v4-flash",
-    "openai/qwen3.7-max"
+    "openai/qwen3.7-plus",
+    "openai/glm-5.3-flash"
   ],
   "platform_multi_model": true,
   "llm_max_retries": 3,
@@ -10,5 +10,7 @@
   "llm_timeout_seconds": 600,
   "llm_wall_clock_seconds": 600,
   "max_response_tokens": 12000,
-  "max_task_tokens": 2000000
+  "max_task_tokens": 2000000,
+  "max_task_tokens_cap": 1600000,
+  "selftest_specs_enabled": false
 }

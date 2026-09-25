@@ -375,3 +375,116 @@ class TestRepairFundAndStallGates:
         b = sm._failure_sig("invalid syntax (views.py, line 116)")
         assert a == b
         assert sm._failure_sig("a") != sm._failure_sig("b")
+
+
+class TestPrecheckMovedAhead:
+    """v42-3 体检前移（批次#67）：官方口径那段判分（导出布局→起服→逐字
+    事实）零 LLM、秒级，原先只在整个验收循环**之后**的自测闸里跑一次。
+    sheet 两跑都死在循环中途（101.5% / 100.2% 断气），于是那把免费的眼睛
+    一次都没睁开：首页是一页模块清单，10 小时无人知。"""
+
+    def _drive(self, monkeypatch, tmp_path, *, precheck=(0, 0, [], ""),
+               with_reqs=True, smoke_ok=True):
+        import app.arcbench_smoke as sm
+        from app.utils.budget import BudgetGuard, set_active_budget_guard
+
+        proj = tmp_path / "proj"
+        (proj / "code").mkdir(parents=True)
+        set_active_budget_guard(BudgetGuard(1_000_000))
+        order: list[str] = []
+        seen: dict = {}
+
+        def fake_precheck(project_dir, specs_dir, port_hint=None,
+                          requirements_dir=None):
+            order.append("precheck")
+            seen["specs_dir"] = specs_dir
+            seen["requirements_dir"] = requirements_dir
+            return precheck
+
+        def run_smoke(code_dir):
+            order.append("smoke")
+            return (True, "ok") if smoke_ok else (False, "GET / 404")
+
+        def auto_repair(*a, **k):
+            order.append("repair")
+            seen["priority_note"] = k.get("priority_note", "")
+            return True, "fixed"
+
+        monkeypatch.setattr("app.utils.selftest_gate.run_selftests",
+                            fake_precheck)
+        monkeypatch.setattr(sm, "run_smoke", run_smoke)
+        monkeypatch.setattr(sm, "run_all_fixers", lambda cd, ddl: {})
+        monkeypatch.setattr(sm, "collect_ddl", lambda cd: [])
+        monkeypatch.setattr(sm, "_anchor_missing", lambda cd, req: [])
+        monkeypatch.setattr(sm, "auto_repair", auto_repair)
+        monkeypatch.setattr(sm, "_llm_from", lambda s: (lambda *a, **k: "x"))
+        monkeypatch.setattr(sm, "_journey_gate", lambda *a, **k: (True, ""))
+        monkeypatch.setattr("app.utils.selftest_gate.selftest_gate",
+                            lambda *a, **k: (True, "selftest ok"))
+        reqs = (tmp_path / "requirements") if with_reqs else None
+        try:
+            ok, report = sm.verify_delivery(proj, "做一件事", Settings(),
+                                            requirements_dir=reqs)
+        finally:
+            set_active_budget_guard(None)
+        return ok, report, order, seen
+
+    def test_runs_on_the_node_free_segment_before_any_repair(self, monkeypatch,
+                                                             tmp_path):
+        ok, report, order, seen = self._drive(
+            monkeypatch, tmp_path,
+            precheck=(3, 2, ["REQ-7 首页未见 'Sprint goals'"], "tail"))
+        assert order[0] == "precheck" and order[1] == "smoke"
+        assert seen["specs_dir"] is None, "前置体检不得碰 Playwright 段"
+        assert seen["requirements_dir"] is not None
+        assert "[precheck] 逐字事实 3/5 命中（缺 1）" in report
+
+    def test_gaps_reach_the_repair_instructions(self, monkeypatch, tmp_path):
+        """红字必须带 REQ id 出现在修复指令里——否则眼睛睁开了嘴没接上。"""
+        ok, report, order, seen = self._drive(
+            monkeypatch, tmp_path, smoke_ok=False,
+            precheck=(3, 2, ["REQ-7 首页未见 'Sprint goals'",
+                             "REQ-9 缺按钮 'Take a note'"], "tail"))
+        assert "repair" in order
+        note = seen["priority_note"]
+        assert "官方口径体检缺口" in note
+        assert "REQ-7 首页未见 'Sprint goals'" in note
+        assert "REQ-9" in note
+
+    def test_green_precheck_adds_nothing_to_the_note(self, monkeypatch,
+                                                     tmp_path):
+        ok, report, order, seen = self._drive(
+            monkeypatch, tmp_path, smoke_ok=False, precheck=(5, 0, [], "tail"))
+        assert "官方口径体检缺口" not in seen["priority_note"]
+        assert "[precheck] 逐字事实 5/5 命中" in report
+
+    def test_no_requirements_dir_means_no_precheck(self, monkeypatch, tmp_path):
+        """无需求清单目录（无源可判）：零副作用，与 v41 行为一致。"""
+        ok, report, order, seen = self._drive(
+            monkeypatch, tmp_path, with_reqs=False)
+        assert "precheck" not in order
+        assert "[precheck] SKIP" in report
+
+    def test_precheck_crash_never_voids_verification(self, monkeypatch,
+                                                     tmp_path):
+        """体检是眼睛不是闸：它自己摔了不得把已经能交付的产物换成 FAIL。"""
+        import app.arcbench_smoke as sm
+
+        def boom(*a, **k):
+            raise RuntimeError("判分器内部故障")
+
+        monkeypatch.setattr("app.utils.selftest_gate.run_selftests", boom)
+        proj = tmp_path / "proj"
+        (proj / "code").mkdir(parents=True)
+        monkeypatch.setattr(sm, "run_smoke", lambda cd: (True, "ok"))
+        monkeypatch.setattr(sm, "_anchor_missing", lambda cd, req: [])
+        monkeypatch.setattr(sm, "_llm_from", lambda s: (lambda *a, **k: "x"))
+        monkeypatch.setattr(sm, "_journey_gate", lambda *a, **k: (True, ""))
+        monkeypatch.setattr("app.utils.selftest_gate.selftest_gate",
+                            lambda *a, **k: (True, "ok"))
+        ok, report = sm.verify_delivery(proj, "做一件事", Settings(),
+                                        requirements_dir=tmp_path / "reqs")
+        assert ok is True
+        assert "异常降级" in report
+
+
