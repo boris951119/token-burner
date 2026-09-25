@@ -117,3 +117,6 @@ scripts/official_grade/scripts/
 
 # ARC 编译器独立 venv（本机工具链，随包既无意义也不合规）
 .venv-arc/
+
+# 根目录历史提交包（以 .tmp/submission-pack + 桌面交付为准）
+token-burner-submission*.zip
