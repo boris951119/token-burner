@@ -35,7 +35,7 @@ from app.tools.prompt_templates import (
     WRITE_TESTS_USER,
 )
 from app.utils.interface_check import check_implementation
-from app.utils.static_check import run_static_check
+from app.utils.static_check import check_syntax, run_static_check
 from app.utils.untrusted import sanitize_untrusted
 
 # 判定「执行失败」的状态集合（8.4：进入修复循环）
@@ -49,6 +49,10 @@ _MD_DIGEST_LIMIT = 120  # 修复记录失败摘要截断长度（单行可读）
 # M15-4 修复轮上下文增强的调用示例上限（防提示词膨胀）
 _USAGE_LINE_LIMIT = 12  # 每个依赖方文件最多展示的引用行数
 _USAGE_FILE_LIMIT = 8   # 最多展示的依赖方文件数
+
+# 单文件超尺寸读数线（批次#68）：v41 那跑 pivot.py 长 1181+ 行，整文件重发
+# 式修复两次各烧约 2 小时且都被语法拒收——超长的文件在这个协议里修不动。
+_OVERSIZED_LINES = 600
 
 # 12.7/14.4：LLM 输出中的公共层代码标记块（解析后落盘 code/_shared/）
 _SHARED_BLOCK = re.compile(
@@ -736,17 +740,27 @@ class DevLoopEngine:
             try:
                 from app.utils.model_ledger import recommend
 
-                ranked = recommend("codegen",
-                                   exclude=(self.dev_model,))
+                # 批次#68（run 9ac543c41514）：原先只排除 dev_model，但 UI/组装
+                # 模块本来就是主模型写的（_model_for_module），而台账第一名恰是
+                # 主模型 ⇒ 连打 7 次「修复升级 → 同一个刚失败的模型」＝让它把同
+                # 一份代码再想一遍。升级的判据是「换个没失败过的脑子」：排除的
+                # 必须是**真正写过这份代码的那个模型**。
+                failed = {self.dev_model,
+                          getattr(self, "_last_code_model", "") or self.dev_model}
                 # 台账只按历史战绩排序，不认识当前登记表——9/21 取证：
                 # 旧坏跑记下的角色名（dev-model/dev/d）上榜后被
                 # ModelClient 拒绝崩穿管线。只准升级到已登记模型。
                 allowed = set(self.settings.models)
-                ranked = [m for m in ranked if m in allowed]
+                ranked = [m for m in recommend("codegen", exclude=tuple(failed))
+                          if m in allowed]
+                if not ranked:
+                    # 台账没货也要真的换人：从登记表里挑一个不是失败者的
+                    ranked = [m for m in self.settings.models if m not in failed]
                 repair_model = (ranked[0] if ranked
                                 else self.main_model)
                 print(f"[ledger] 修复升级 → {repair_model} "
-                      f"（fix_attempts={fix_attempts}）", flush=True)
+                      f"（fix_attempts={fix_attempts}，已排除 {'/'.join(sorted(failed))}）",
+                      flush=True)
             except Exception:
                 repair_model = self.main_model
         response = self._chat_resilient(
@@ -1056,6 +1070,18 @@ class DevLoopEngine:
             if not normalized or normalized in (".", ".."):
                 continue  # 无有效文件名：跳过该块（门禁会兜住缺失依赖）
             if self._active_project_id:
+                # 公共层比模块更毒：`code/_shared/*.py` 语法非法会连坐每一个
+                # 引用方（9/20 起交付断裂的头号形态就是 _shared 里一个坏符号），
+                # 所以同一道出口判据必须也盖住这里（批次#68 的「一条判据两头一致」）。
+                issues = check_syntax(code)
+                if issues:
+                    self._stash_dead_draft(
+                        self._active_project_id, f"_shared_{normalized}",
+                        code, issues)
+                    print(f"[finish] 拒绝落盘公共层 {normalized}（语法非法，"
+                          "坏稿已存 sessions/dead_drafts/，沿用盘上旧版）："
+                          + "; ".join(issues)[:160], flush=True)
+                    continue  # 不 invalidate：下个模块看到的仍是可用的旧版
                 self.file_manager.write_shared_file(
                     self._active_project_id, normalized, code
                 )
@@ -1076,12 +1102,42 @@ class DevLoopEngine:
         tests: str,
         gate_passed: bool = False,
     ) -> ModuleResult:
-        # 12.3：代码与测试落盘（含冻结场景——保留现场供审计）
+        # 12.3：代码与测试落盘。
+        # 批次#68（run 9ac543c41514 逐行解剖）：这道出口原先无条件写，于是
+        # `'(' was never closed` 的 1181 行文件进了交付树——作者入口 import
+        # 当场失败、机械装配壳接管（`[export] 入口由机械装配补挂…已隔离坏模块
+        # =['pivot']`）、首页没人写，官方 100 条用例全部死在第一步（那侧 201
+        # 次请求只有 `GET / 200`）。而修复环对同样的内容是**拒收**的：一条语法
+        # 判据不能两头不一致。出口只落能编译的代码；坏稿另存 sessions/dead_drafts/
+        # 供审计（旧注释"保留现场"的诉求由坏稿继续满足，不拿整跑 0 分换它）。
+        syntax_issues = check_syntax(code)
         if project_id:
             handle = self.file_manager.get_project(project_id)
             if handle is not None:
-                # 12.3：模块名同名文件（非 main.py）——多模块可同进程导入互不冲突
-                self.file_manager.write_code_file(project_id, module, f"{module}.py", code)
+                if syntax_issues:
+                    self._stash_dead_draft(project_id, module, code, syntax_issues)
+                    if not (handle.root / "code" / module / f"{module}.py").is_file():
+                        # 退无可退：这个模块一次都没能编译过。缺模块比带病模块
+                        # 好——坏文件会连坐整个入口的 import，缺包只丢它自己
+                        print(f"[finish] {module}: 语法非法且无可编译历史版本，"
+                              f"交付树里不落该模块（坏稿已存 "
+                              f"sessions/dead_drafts/{module}.py）："
+                              + "; ".join(syntax_issues)[:160], flush=True)
+                    else:
+                        print(f"[finish] {module}: 语法非法，盘上保留最后一次"
+                              "可编译版本，坏稿已存 sessions/dead_drafts/"
+                              f"{module}.py：" + "; ".join(syntax_issues)[:160],
+                              flush=True)
+                else:
+                    # 12.3：模块名同名文件（非 main.py）——多模块可同进程导入互不冲突
+                    self.file_manager.write_code_file(project_id, module, f"{module}.py", code)
+                    _n = code.count("\n") + 1
+                    if _n > _OVERSIZED_LINES:
+                        # 只出读数不拦交付：整文件重发式修复在长文件上必截断
+                        # （本跑 pivot.py 1181 行 = 两次各 ≈2 小时的空烧）
+                        print(f"[finish] {module}: 单文件 {_n:,} 行 > {_OVERSIZED_LINES} "
+                              "（超尺寸：修复通道按整文件重发，越长越修不动）",
+                              flush=True)
                 self.file_manager.write_test_file(
                     project_id, module, f"test_{module}.py", tests
                 )
@@ -1110,6 +1166,26 @@ class DevLoopEngine:
             code=code,
             tests=tests,
         )
+
+    def _stash_dead_draft(self, project_id: str, module: str,
+                          code: str, issues: list[str]) -> None:
+        """语法非法的草稿落进 sessions/dead_drafts/（不进 code/，随包导出不含
+        sessions/）——审计要看现场，交付不能带病。失败绝不影响终态。"""
+        try:
+            handle = self.file_manager.get_project(project_id)
+            if handle is None:
+                return
+            name = Path(module).name or "unnamed"
+            stem = name[:-3] if name.endswith(".py") else name
+            draft_dir = handle.root / "sessions" / "dead_drafts"
+            draft_dir.mkdir(parents=True, exist_ok=True)
+            (draft_dir / f"{stem}.py").write_text(code, encoding="utf-8")
+            (draft_dir / f"{stem}.reason").write_text(
+                "\n".join(issues) + f"\n\n落盘时刻: "
+                f"{time.strftime('%Y-%m-%d %H:%M:%S')}\n",
+                encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001 —— 坏稿存不下也只是丢审计
+            print(f"[finish] 坏稿存档失败 {module}: {exc!r}"[:160], flush=True)
 
     def _persist_fix(
         self, project_id: str | None, module: str, attempt: int, failure: str

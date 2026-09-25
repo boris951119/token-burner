@@ -560,3 +560,126 @@ class TestChatResilient:
         engine = self._engine(_Budget())
         with pytest.raises(BudgetExceededError):
             engine._chat_resilient("dev", "s", "u")
+
+
+class TestDeliverableSyntaxGate:
+    """批次#68（v43-1/2）：出口与修复环必须同一把语法尺子。
+
+    run 9ac543c41514 逐行解剖：`pivot.py` 带 `'(' was never closed`（第 1181 行）
+    照样被 `_finish` 落进交付树（旧注释「含冻结场景——保留现场」），于是作者入口
+    import 当场失败、机械装配壳接管、首页没人写——官方那侧 201 次请求全是
+    `GET / 200`，100 条用例死在第一步。而 RepoFixer 对同样的内容是**拒收**的。
+    """
+
+    BROKEN = "def open_cell(:\n    return 1\n"
+    VALID = "x = 1\n"
+
+    def _run_to_frozen(self, fm, scripts, statuses, rounds=3):
+        project_id = _create(fm)
+        engine = make_engine(ScriptedLLM(scripts), FakeExecutor(statuses), fm,
+                             settings=Settings(max_fix_rounds=rounds))
+        result = engine.run_module("user", project_id=project_id)
+        return result, fm.get_project(project_id)
+
+    def test_broken_code_never_enters_the_deliverable_tree(self, fm, capsys):
+        result, handle = self._run_to_frozen(
+            fm, [self.BROKEN, "T", self.BROKEN, self.BROKEN, self.BROKEN], [])
+        assert result.status == ModuleStatus.FROZEN
+        assert not (handle.root / "code" / "user" / "user.py").is_file(), \
+            "语法非法的模块进了交付树：它会连坐整个入口的 import"
+        draft = handle.root / "sessions" / "dead_drafts" / "user.py"
+        assert draft.is_file() and draft.read_text(encoding="utf-8") == self.BROKEN, \
+            "旧版「保留现场供审计」的诉求必须由坏稿满足，不是由带病交付满足"
+        assert "语法错误" in (
+            handle.root / "sessions" / "dead_drafts" / "user.reason"
+        ).read_text(encoding="utf-8")
+        assert "无可编译历史版本" in capsys.readouterr().out
+
+    def test_shipped_version_survives_a_later_broken_finish(self, fm, capsys):
+        """写坏不许覆盖盘上已经交付过的可编译版本（旧版：坏版直接盖掉好版）。"""
+        project_id = _create(fm)
+        handle = fm.get_project(project_id)
+        engine = make_engine(ScriptedLLM([]), FakeExecutor([]), fm,
+                             settings=Settings(max_fix_rounds=2))
+        engine._finish("user", project_id, ModuleStatus.SUCCESS, 0, "ok",
+                       self.VALID, "T", True)
+        assert (handle.root / "code" / "user" / "user.py").read_text(
+            encoding="utf-8") == self.VALID
+        engine._finish("user", project_id, ModuleStatus.FROZEN, 2, "修不动",
+                       self.BROKEN, "T", False)
+        assert (handle.root / "code" / "user" / "user.py").read_text(
+            encoding="utf-8") == self.VALID, "坏版本覆盖掉了可编译版本"
+        assert (handle.root / "sessions" / "dead_drafts" / "user.py"
+                ).read_text(encoding="utf-8") == self.BROKEN
+        assert "保留最后一次" in capsys.readouterr().out
+
+    def test_shared_layer_gets_the_same_gate(self, fm, capsys):
+        """公共层更毒：一个坏 _shared 文件连坐每一个引用方。"""
+        project_id = _create(fm)
+        engine = make_engine(ScriptedLLM([]), FakeExecutor([]), fm)
+        engine._active_project_id = project_id
+        broken = "# ==== shared: store.py ====\n" + self.BROKEN + "# ==== end shared ====\n"
+        engine._split_shared(broken)
+        handle = fm.get_project(project_id)
+        assert not (handle.root / "code" / "_shared" / "store.py").exists()
+        assert (handle.root / "sessions" / "dead_drafts"
+                / "_shared_store.py").is_file()
+        assert "拒绝落盘公共层" in capsys.readouterr().out
+        # 能编译的公共层照旧落盘（闸门不是禁写）
+        engine._split_shared("# ==== shared: ok.py ====\nY = 2\n# ==== end shared ====\n")
+        assert (handle.root / "code" / "_shared" / "ok.py").read_text(
+            encoding="utf-8").strip() == "Y = 2"
+
+    def test_oversized_module_reports_a_reading(self, fm, capsys):
+        """超尺寸只出读数不拦交付：修复通道按整文件重发，越长越修不动。"""
+        big = "def f():\n    return 1\n" * 310          # 621 行 > 600
+        project_id = _create(fm)
+        engine = make_engine(ScriptedLLM([]), FakeExecutor([]), fm)
+        engine._finish("user", project_id, ModuleStatus.SUCCESS, 0, "ok",
+                       big, "T", True)
+        out = capsys.readouterr().out
+        assert "超尺寸" in out and "621 行" in out, out[-300:]
+        # 小文件不出噪声
+        engine._finish("cell", project_id, ModuleStatus.SUCCESS, 0, "ok",
+                       "x = 1\n", "T", True)
+        assert "超尺寸" not in capsys.readouterr().out
+
+
+class TestRepairEscalationExcludesTheFailedModel:
+    """批次#68（v43-3）：run 9ac543c41514 连打 7 次「修复升级 → deepseek-v4-flash」
+    ——原实现只排除 dev_model，而 UI/组装模块本来就是主模型写的、台账第一名
+    又恰是它 ⇒ 所谓升级＝让刚失败的那个模型把同一份代码再想一遍。"""
+
+    def _engine(self, monkeypatch, ranking, last_code_model):
+        import app.utils.model_ledger as ledger
+
+        monkeypatch.setattr(
+            ledger, "recommend",
+            lambda task_type, exclude=(), min_attempts=0: [
+                m for m in ranking if m not in set(exclude)])
+        llm = ScriptedLLM(["x = 9\n"])
+        settings = Settings(models=["m_flash", "m_pro", "m_q"])
+        engine = DevLoopEngine(
+            llm=llm, dev_model="m_pro", test_model="m_q",
+            main_model="m_flash", executor=FakeExecutor([]),
+            settings=settings, file_manager=FileManager(
+                projects_root=settings.projects_root
+                if hasattr(settings, "projects_root") else __import__("pathlib").Path("/tmp/py-test")),
+        )
+        engine._last_code_model = last_code_model
+        return engine, llm
+
+    def test_escalation_never_lands_back_on_the_failed_author(
+            self, monkeypatch, capsys):
+        engine, llm = self._engine(
+            monkeypatch, ["m_flash", "m_pro", "m_q"], "m_flash")
+        engine._fix_code("user", "x = 1\n", "T", "boom", fix_attempts=3)
+        assert llm.calls[0]["model"] == "m_q", \
+            "写这份代码的模型（m_flash）被排除了没有？"
+        printed = capsys.readouterr().out
+        assert "修复升级 → m_q" in printed and "已排除" in printed
+
+    def test_ledger_empty_still_changes_the_model(self, monkeypatch, capsys):
+        engine, llm = self._engine(monkeypatch, [], "m_flash")
+        engine._fix_code("user", "x = 1\n", "T", "boom", fix_attempts=3)
+        assert llm.calls[0]["model"] != "m_flash"
