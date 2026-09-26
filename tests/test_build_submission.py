@@ -130,7 +130,7 @@ def test_build_shape_drop_is_fatal_until_allowed(tmp_path, capsys):
     monkey = pytest.MonkeyPatch()
     monkey.setattr(bs, "ROOT", tree)
     try:
-        rc = bs.build(out, base, blank)
+        rc = bs.build(out, base, blank, skip_presubmit=True)
     finally:
         monkey.undo()
     names = [n for n in zipfile.ZipFile(out).namelist() if not n.endswith("/")]
@@ -143,7 +143,7 @@ def test_build_shape_drop_is_fatal_until_allowed(tmp_path, capsys):
     monkey2 = pytest.MonkeyPatch()
     monkey2.setattr(bs, "ROOT", tree)
     try:
-        assert bs.build(out, base, blank, allow_drop=True) == 0
+        assert bs.build(out, base, blank, allow_drop=True, skip_presubmit=True) == 0
     finally:
         monkey2.undo()
 
@@ -158,7 +158,7 @@ def test_build_flags_real_secret_in_body(tmp_path, capsys):
     monkey = pytest.MonkeyPatch()
     monkey.setattr(bs, "ROOT", tree)
     try:
-        rc = bs.build(out, base, tmp_path / "missing.zip")
+        rc = bs.build(out, base, tmp_path / "missing.zip", skip_presubmit=True)
     finally:
         monkey.undo()
     assert rc == 1

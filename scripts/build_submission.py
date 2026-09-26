@@ -167,7 +167,8 @@ def _content_leaks(zf: zipfile.ZipFile) -> list[str]:
 
 def build(out_path: Path, base_zip: Path, blank_zip: Path,
           allow_drop: bool = False,
-          allow_trial: bool = False) -> int:
+          allow_trial: bool = False,
+          skip_presubmit: bool = False) -> int:
     if not allow_trial:
         profile_problems = assert_official_profile()
         if profile_problems:
@@ -260,6 +261,25 @@ def build(out_path: Path, base_zip: Path, blank_zip: Path,
               f"加 --allow-drop 认可：\n  " + "\n  ".join(dropped))
         return 1
     print("[build] 合规自检通过（无官方题面/ARC 素材/本机产物/密钥文件）")
+    # 提交前硬闸 A+B（不进包；失败则拒出包）
+    if not skip_presubmit:
+        try:
+            from scripts.presubmit_gate import run_gate
+            report = run_gate(out_path, full=False)
+            for c in report.checks:
+                mark = "PASS" if c.ok else "FAIL"
+                print(f"[presubmit] [{mark}] {c.name}: {c.detail}", flush=True)
+            if not report.ok:
+                print("[build] 提交前硬闸 A+B 失败 —— 拒绝出包。"
+                      "上平台前另需: python3 scripts/presubmit_gate.py "
+                      f"--zip {out_path} --full", flush=True)
+                return 1
+            print("[build] 提交前硬闸 A+B 通过"
+                  f"（报告 .tmp/presubmit/{out_path.stem}/report.json；"
+                  "上平台前请 --full 跑 C）", flush=True)
+        except Exception as exc:
+            print(f"[build] 硬闸执行异常（拒绝出包）: {exc!r}", flush=True)
+            return 1
     return 0
 
 
@@ -274,6 +294,8 @@ def main() -> int:
     ap.add_argument("--allow-trial", action="store_true",
                     help="允许试跑档 config 入包（仅私有 key 压测；"
                          "正式交分禁止）")
+    ap.add_argument("--skip-presubmit", action="store_true",
+                    help="跳过 A+B 硬闸（仅调试打包脚本本身）")
     a = ap.parse_args()
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -281,8 +303,10 @@ def main() -> int:
     if not base.is_file():
         print(f"参考包不存在: {base}", file=sys.stderr)
         return 2
-    return build(out, base, Path(a.blank), allow_drop=a.allow_drop,
-                 allow_trial=a.allow_trial)
+    return build(out, base, Path(a.blank),
+                 allow_drop=a.allow_drop,
+                 allow_trial=a.allow_trial,
+                 skip_presubmit=a.skip_presubmit)
 
 
 if __name__ == "__main__":

@@ -1570,8 +1570,8 @@ v43 = P1（救分最大但改动大，单独一批）；v44 = P3。P4/P5 属「�
 **试跑档位 = 随包 config.json 三行**（`max_task_tokens_cap: 1600000` /
 `selftest_specs_enabled: false` / `models: [flash, qwen3.7-plus, glm-5.3-flash]`）。
 **上传比赛包前必须翻回官方档位**：帽改回 0、specs 开关改回 true、副腿换回原编队——
-`tests/test_arcbench_main.py::TestRunnerModelFormation::test_shipped_config_is_the_trial_formation`
-就是这条的示警线，档位一改它先红。
+`tests/test_arcbench_main.py::TestRunnerModelFormation::test_shipped_config_is_the_official_formation`
+就是这条的示警线：**随包必须是正式档**（cap=0 / specs on / 官方三腿），试跑档一进包它先红。
 
 **测试**：+17 例（信封硬帽 8 / Phase 0 接线 5 / specs 开关 2 / 入口帽与编队 2），
 全量 **1867 passed, 2 skipped**。零 LLM 侧复测：`scripts/home_shape_probe.py` 重跑仍
@@ -1620,3 +1620,30 @@ v43 = P1（救分最大但改动大，单独一批）；v44 = P3。P4/P5 属「�
 | v43-4 | **体量约束**：拆分给了数值线（每模块 ≤3 条原子需求、预估 ≤400 行，并写明"需求条数多必须加模块数"）；写码侧单文件目标 ≤400 行；`_finish` 对 >600 行的文件打一条可 grep 的超尺寸读数（只出数不拦交付） | `split_system.md` / `write_code_system.md` / `dev_loop` | 纯度与子串分流测试全过；下一跑数几条超尺寸 |
 
 **没做的一条（记在这里防遗忘）**：导出侧再加一道"逐文件编译体检"（纵深防御，防的是绕开 `_finish` 落盘的通道）。当前 `ensure_entry`+`assemble(exclude=dead)` 已把坏包从装配清单里剔除，再加一层要冒"整包被剥空"的新风险 ⇒ 等 v43 试跑读数再判。
+
+## 批次#69：Stage3 首进 + 双 0 分尸检 + 提交前硬闸（2026-09-26）
+
+### 跑次台账（sheet / deepseek-v4-pro）
+
+| run | 包 | 终态 | 分数 | 墙钟/费用 | 一句话 |
+|---|---|---|---|---|---|
+| ed77881f48de | v47（HARD HANDOFF） | FAILED | 0/100，功能 0/24 | ~149m / ≈¥19 | **首次进 Stage3**；首页非真入口 + traceability `req_ids` 挂模块名 |
+| 57e3e8b6f1f5 | v47（入口刀后） | FAILED | 0/100，功能 0/24 | ~21m / ≈¥1 | vision 9/9 后 `UnboundLocalError: threading`，只交保底骨架 |
+| 85f404a69443 | **v48** | RUNNING（写档时） | — | — | threading 已修；入口面 / ATOMIC 登记 / 8 分钟入口修补 |
+
+### 根因判读
+
+1. **ed77 双根因（产品）**：探针绿后整段跳过验收 → Stage3 能开，但 `/` 无题面入口控件 → 100 条首页齐死；接口登记挂 `filter_engine` 等模块名 → 功能率 0/24。
+2. **57e3（工程雷）**：`main()` 内后置 `import threading` 遮蔽顶层 → 看门狗 `Thread` 行 UnboundLocalError；末级救件交骨架 exit 0。
+3. **取消政策**：静默过久勿盲等；Stage2 无进展 / 交接失败倾向 **60 分钟**量级判读（平台卡死再整理主办方证据）。
+
+### 止血动作（本批次）
+
+- git commit `159ba88`：v45–v48 刀集 + threading 修复 + 正式档 config（对应桌面 `token-burner-v48.zip`）。
+- 归档纪律：`.tmp/submission-pack/archive/vN_<runid>.zip`；桌面继续 `token-burner-vN.zip`。ed77 原包字节已丢，记过。
+- **提交前硬闸** `scripts/presubmit_gate.py`：A 静态 + B 假网关启动冒烟随 `build_submission` 自动跑；C 微型端到端（flash）仅 `--full`，**上平台前必跑**。闸与 fixtures **不进提交包**。
+
+### 已知残留（等 85f4 出分再排优先级）
+
+- 首页入口补链目前只挂 Flask `after_request`（FastAPI 产物不补）。
+- 8 分钟入口修补守护线程与终局导出可能竞态。
