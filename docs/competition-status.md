@@ -1696,3 +1696,51 @@ v43 = P1（救分最大但改动大，单独一批）；v44 = P3。P4/P5 属「�
 - **发车：run `6d28c5030fd6`，sheet 任务，03:33:05 RUNNING**（v48 尸检→修复→闸 ABC 全绿→上传→发车 全链 3.5 小时闭环）
 - 预期读数点：①`[export]` 日志不应再出现 `/ 缺失已补挂`（择优应选中带真 / 的 webapp/create_app）；②若仍 0 分，尸检重点转向真 webapp 首页内容与官方断言的差距（题面 WHEN 明示"clicks the visible Q3 Sales workbook entry"——真首页有该链接）。
 - 本轮 ZCode 夜班产出 commits：7b934bb（五处择优同构+保活判红）/ f022d61（mock 签名补齐）/ 批次#70 文档；包归档：v49-stale-nofix-0106.zip（旧 01:06 无修复包）。
+
+## 批次#71 深挖：重复=24 + 功能 0/24（Cursor，2026-09-27，run 6d28c5030fd6）
+
+### 「重复=24」是什么
+
+覆盖闸 `duplicates` = **同一条 ATOMIC 出现在 ≥2 个模块的 responsibility 里**（抢认领），**不是**「24 条全堆进一个模块」。
+
+本地复现：`spec↔REQ 0/24` → `annotate_spec_with_missing` 把 **24 个 REQ id 整表置顶** → 拆分时多个模块把这张表抄进职责 → `audit` 得到 `重复=24`。与日志 `[spec↔REQ] 0/25` + `[coverage] … 重复=24` 同链。
+
+单模块认领全部 24 条时 **dup=0**；只有多模块互抄才会 dup=24。
+
+### 功能 0/24（在 REQ-* 已挂上之后）
+
+对照官方 sheet yaml：平台 ATOMIC id 与我们登记的 `REQ-1-1-1`… **24/24 全重合**（不是点号/横杠格式错）。
+
+本跑 traceability：`interfaces=38`，其中 **implemented=true 覆盖 22/24** 条官方 ATOMIC；`node_states` 大量 `test-passed`。功能计数仍是 **0/24**。
+
+⇒ **接口 `implemented=true` + 正确 `REQ-*` 不足以驱动 `feature_implemented_count`。**  
+API 只回 `interfaces`/`tests`（`tests=[]`，scenarios 不在本端点）。更可能的计分口径：（a）scenarios/tests 表或其它链路未激活；或（b）功能分跟官方场景通过绑定——**0/100 则功能恒 0**。两条都指向：下一发必须以 **首页真实可点（通过率）** 为主目标；拆分去重是为了让 UI 模块可修，不是为了直接刷功能分。
+
+### v50 优先级（挖完后的建议）
+
+1. **P0** 阻断 annotate 整表泄漏进每个模块职责（拆分前把置顶清单改成「分配表」而非可抄全文），并程序校验 `duplicates==0` 且每模块 ≤3 ATOMIC。  
+2. **P0** `web_shell` 超尺寸拆小（否则冻结＝首页半残）。  
+3. **P1** 功能分：在本地把 scenarios/tests 七表与平台计数对齐做一次只读对照（零券），确认是否必须官方场景绿才涨功能分。
+
+## 批次#71：v48/v49 定性判决——不是"agent 能力不行"，是喂给它的契约缺了细节（ZCode，09-27 晨）
+
+### 取证方法
+从平台 File 页签拉回 v49 被评测的完整交付树（project.zip 986KB，`.tmp/v49-delivered/`），本地起服复现 + 逐层比对（题面 yaml ↔ 编译清单 ↔ 模块契约 ↔ 生成代码 ↔ 官方日志）。
+
+### v48 = 100% 工程 bug（已修）
+入口择优盲区 → worksheet_crud 迷你 app 服务 + 合成保活首页。7b934bb 修复后 v49 实证：`Serving 'web_shell'`、无保活补挂、入口=author。**交付链路已通。**
+
+### v49 = 管线契约质量问题（三层，全部可程序化修复）
+官方日志：GET / ×201（=100 测试 ×2 尝试 +1）、**零点击**、每断言 ~5s 失败 → 首页首断言即挂。
+本地起服 v49 交付：首页**能**渲染 Q3 Sales 链接（web_shell 846 行，跟随了注入清单）——但题面 REQ-1-1-1 description 逐字要求 `Each record displays "Last updated: <last updated value>"`，首页没有 → 官方首断言灭。
+
+三层断裂（证据）：
+1. **编译器结构盲区（程序）**：`_facts` 对 description 只走种子通道；引号逐字事实只从场景步抽。而 sheet yaml 场景步被官方占位符污染（"the requested workflow" ×504），description 才是真契约（含 ~110 条双引号 UI 事实：Worksheet grid/Create/Rename workbook/Workbook name/Save/Import CSV/"Last updated: <...>"…）——**我们对着半残的场景步抽了一份同质化清单**（每个 REQ 的"控件须可见"都是同样的 Q3 Sales/East/North），官方编译器（生成隐藏测试的那位）显然以 description 为主。
+2. **拆分层（LLM 转写损耗+程序不拦）**："Last updated" 在 24 个模块契约里 0 命中（只在 requirements.md 原文）；coverage 读数 `重复=24`（全部重复认领）；web_shell 846 行超尺寸冻结。
+3. **实现层（LLM 执行其实合格）**：注入清单里的内容（Q3 Sales 链接/Create 按钮/种子数据/Sheet1）web_shell 基本都做了——**LLM 把喂到手的清单执行得不错；是清单本身缺了官方要断言的细节**。
+
+### v50 施工图（两刀，皆零 LLM 或低 LLM）
+- **刀1 编译器补 description 通道**：desc 双引号/反引号串（含 "Last updated: <...>" 模板——`<...>` 不得判垃圾）进 behavior/control 通道；"the requested workflow" 官方占位符串进黑名单不进清单；节点清单去同质化（home_visible 泄漏只挂真正入口节点）。
+- **刀2 拆分程序校验**：重复认领>50% 打回重拆（现 report-only）；模块契约交叉校验——认领 REQ 的编译清单事实必须在职责文本中出现（零 LLM 可查），缺则把该 REQ 的逐字事实块机械补进职责。
+- 附带：filter_engine.py:170 `"" (right)` 字符串当函数调用（SyntaxWarning 实证）；tests 登记为 0（快车道跳过自测登记，功能率 0/24 的直接原因——参考指标，顺手在快车道补登记）。
+- 预算：sheet 已烧 ~¥60/上限 ¥120，v50 为最后一发额度——两刀落地 + 本地 web_home 探针（首页必须含题面 description 逐字契约抽检）全绿才发。
