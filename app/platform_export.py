@@ -116,11 +116,18 @@ def probe_exported_backend(
                             f"http://127.0.0.1:{port}/", timeout=5) as r:
                         result["home_status"] = int(r.status)
                         body = r.read(4096).decode("utf-8", "replace").lower()
+                        # v48 尸检：合成保活首页过了 200+<a 检查（假绿）
+                        # ——探针必须认得自己的兜底页并判红，快车道才
+                        # 不会把整场交给占位壳。
+                        _fallback = "data-arcbench-fallback" in body
                         result["home"] = (
                             r.status == 200
+                            and not _fallback
                             and ("<html" in body or "<!doctype" in body
                                  or "<body" in body or "<a " in body))
-                        if not result["home"]:
+                        if _fallback:
+                            result["detail"] = "home-is-fallback-shell"
+                        elif not result["home"]:
                             result["detail"] = (
                                 f"health-ok home={r.status}")
                         else:
@@ -380,7 +387,23 @@ def _is_shell(_name):
 
 _pool = [x for x in _cands if not _is_shell(x[0])] or _cands
 _pref = [x for x in _pool if x[0].lower() in _CONVENTION]
-app = max(_pref or _pool, key=lambda _x: _route_count(_x[1]))[1]
+# v48 尸检（run 85f404a69443，0/100）：worksheet_crud 模块级迷你 app
+# 路由数最多但无 /，赢得择优后只能靠合成保活首页兜着——官方评测全部
+# 从 / 进，无 / 的候选无论路由多富都是错门。真 / 在场者一律优先
+# （约定名只在同 tier 内比较；与冒烟闸四处模板同构修改）。
+def _cand_has_home(_a):
+    try:
+        if hasattr(_a, "url_map"):
+            return any(getattr(_r, "rule", "") == "/"
+                       for _r in _a.url_map.iter_rules())
+        return any(getattr(_r, "path", "") == "/"
+                   for _r in getattr(_a, "routes", []) or [])
+    except Exception:
+        return False
+_home = [x for x in _pool if _cand_has_home(x[1])]
+_pref_h = [x for x in _home if x[0].lower() in _CONVENTION]
+app = max(_pref_h or _home or _pref or _pool,
+          key=lambda _x: _route_count(_x[1]))[1]
 
 
 def _app_paths(_a):
@@ -428,12 +451,29 @@ def _ensure_health(_a):
               flush=True)
 
 
-_HOME_HTML = (
-    "<html><body><h1>Application ready</h1>"
-    "<p>Runner fallback home (author entry had no /).</p>"
-    '<a href="/api/health">health</a>'
-    "</body></html>"
-)
+def _fallback_home_html(_a):
+    """合成保活首页（最后手段）：带标记 + 真实 GET 路由入口清单。
+
+    v48 取证：静态占位页骗过探针的 200+<a 检查 = 保证 0/100 的假绿。
+    探针侧已对 data-arcbench-fallback 判红；这里至少把真实路由铺成
+    可见链接，给评测留一条活路。"""
+    _paths = []
+    try:
+        for _p in _app_paths(_a):
+            if (_p in ("/", "/api/health") or _p.startswith("/static")
+                    or "<" in _p or "{" in _p):
+                continue
+            _paths.append(_p)
+    except Exception:
+        pass
+    _links = "".join(
+        '<p><a href="%s">%s</a></p>' % (_p, _p) for _p in _paths[:24])
+    return ('<html lang="en"><head><meta charset="utf-8">'
+            '<title>Application ready</title></head>'
+            '<body data-arcbench-fallback="1"><h1>Application ready</h1>'
+            '<p>Runner fallback home (author entry had no /).</p>'
+            + (_links or '<p><a href="/api/health">health</a></p>')
+            + "</body></html>")
 
 
 def _ensure_home(_a):
@@ -448,12 +488,12 @@ def _ensure_home(_a):
         if hasattr(_a, "url_map"):                     # Flask/WSGI
             _a.add_url_rule(
                 "/", "arcbench_home",
-                lambda: (_HOME_HTML, 200,
+                lambda: (_fallback_home_html(_a), 200,
                          {"Content-Type": "text/html; charset=utf-8"}))
         elif hasattr(_a, "routes"):                    # FastAPI/Starlette ASGI
             def _home_endpoint(_request=None):
                 from starlette.responses import HTMLResponse
-                return HTMLResponse(_HOME_HTML)
+                return HTMLResponse(_fallback_home_html(_a))
             if hasattr(_a, "add_api_route"):
                 _a.add_api_route("/", _home_endpoint, methods=["GET"])
             else:

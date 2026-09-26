@@ -136,7 +136,21 @@ _cands = [x for x in _cands if x[0] not in _shell] or _cands
 _CONVENTION = ("main", "app", "app_main", "project_main",
                 "server", "wsgi", "run")
 _pref = [x for x in _cands if x[0].lower() in _CONVENTION]
-pool = _pref or _cands
+# v48 尸检（run 85f404a69443，0/100）：路由数最多但无 / 的迷你 app
+# 赢得择优 → 合成保活首页吞掉整场。评测全部从 / 进：无 / 的候选
+# 无论路由多富都是错门，真 / 在场者一律优先（与启动器同构修改）。
+def _has_home(_a):
+    try:
+        if hasattr(_a, "url_map"):
+            return any(getattr(_r, "rule", "") == "/"
+                       for _r in _a.url_map.iter_rules())
+        return any(getattr(_r, "path", "") == "/"
+                   for _r in getattr(_a, "routes", []) or [])
+    except Exception:
+        return False
+_home = [x for x in _cands if _has_home(x[1])]
+_pref_h = [x for x in _home if x[0].lower() in _CONVENTION]
+pool = _pref_h or _home or _pref or _cands
 _entry, app = (None, None)
 if pool:
     _entry, app = max(pool, key=lambda t: _route_count(t[1]))
@@ -444,7 +458,21 @@ for mod in mods:
 _CONVENTION = ("main", "app", "app_main", "project_main",
                 "server", "wsgi", "run")
 _pref = [x for x in _cands if x[0].lower() in _CONVENTION]
-pool = _pref or _cands
+# v48 尸检（run 85f404a69443，0/100）：路由数最多但无 / 的迷你 app
+# 赢得择优 → 合成保活首页吞掉整场。评测全部从 / 进：无 / 的候选
+# 无论路由多富都是错门，真 / 在场者一律优先（与启动器同构修改）。
+def _has_home(_a):
+    try:
+        if hasattr(_a, "url_map"):
+            return any(getattr(_r, "rule", "") == "/"
+                       for _r in _a.url_map.iter_rules())
+        return any(getattr(_r, "path", "") == "/"
+                   for _r in getattr(_a, "routes", []) or [])
+    except Exception:
+        return False
+_home = [x for x in _cands if _has_home(x[1])]
+_pref_h = [x for x in _home if x[0].lower() in _CONVENTION]
+pool = _pref_h or _home or _pref or _cands
 app = max(pool, key=lambda t: _route_count(t[1]))[1] if pool else None
 if app is None:
     print("loaded mods:", [m.__name__ for m in mods], file=sys.stderr)
@@ -526,7 +554,21 @@ for mod in mods:
 _CONVENTION = ("main", "app", "app_main", "project_main",
                 "server", "wsgi", "run")
 _pref = [x for x in _cands if x[0].lower() in _CONVENTION]
-pool = _pref or _cands
+# v48 尸检（run 85f404a69443，0/100）：路由数最多但无 / 的迷你 app
+# 赢得择优 → 合成保活首页吞掉整场。评测全部从 / 进：无 / 的候选
+# 无论路由多富都是错门，真 / 在场者一律优先（与启动器同构修改）。
+def _has_home(_a):
+    try:
+        if hasattr(_a, "url_map"):
+            return any(getattr(_r, "rule", "") == "/"
+                       for _r in _a.url_map.iter_rules())
+        return any(getattr(_r, "path", "") == "/"
+                   for _r in getattr(_a, "routes", []) or [])
+    except Exception:
+        return False
+_home = [x for x in _cands if _has_home(x[1])]
+_pref_h = [x for x in _home if x[0].lower() in _CONVENTION]
+pool = _pref_h or _home or _pref or _cands
 app_module, app = ("", None)
 if pool:
     app_module, app = max(pool, key=lambda t: _route_count(t[1]))
@@ -675,7 +717,21 @@ for mod in mods:
 _CONVENTION = ("main", "app", "app_main", "project_main",
                 "server", "wsgi", "run")
 _pref = [x for x in _cands if x[0].lower() in _CONVENTION]
-pool = _pref or _cands
+# v48 尸检（run 85f404a69443，0/100）：路由数最多但无 / 的迷你 app
+# 赢得择优 → 合成保活首页吞掉整场。评测全部从 / 进：无 / 的候选
+# 无论路由多富都是错门，真 / 在场者一律优先（与启动器同构修改）。
+def _has_home(_a):
+    try:
+        if hasattr(_a, "url_map"):
+            return any(getattr(_r, "rule", "") == "/"
+                       for _r in _a.url_map.iter_rules())
+        return any(getattr(_r, "path", "") == "/"
+                   for _r in getattr(_a, "routes", []) or [])
+    except Exception:
+        return False
+_home = [x for x in _cands if _has_home(x[1])]
+_pref_h = [x for x in _home if x[0].lower() in _CONVENTION]
+pool = _pref_h or _home or _pref or _cands
 app = max(pool, key=lambda t: _route_count(t[1]))[1] if pool else None
 if app is None:
     print("loaded mods:", [m.__name__ for m in mods], file=sys.stderr)

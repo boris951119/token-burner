@@ -793,3 +793,56 @@ def test_probe_exported_backend_detects_dead_tree(tmp_path):
     assert probe["health"] is False
     assert probe["ok"] is False
     assert "dead" in probe["detail"] or "no-health" in probe["detail"]
+
+# ---- v48 尸检复现（run 85f404a69443，0/100）--------------------------------
+# worksheet_crud 迷你 app 路由数最多但无 /，旧择优让它赢 → 合成保活
+# 首页吞掉整场。真 / 在场者必须优先。
+
+def test_home_route_beats_route_count(tmp_path):
+    from app.platform_export import _BACKEND_MAIN
+
+    be = tmp_path / "backend"
+    be.mkdir()
+    (be / "worksheet_crud.py").write_text(
+        "from flask import Flask\n"
+        "app = Flask('worksheet_crud')\n"
+        "for i in range(8):\n"
+        "    app.add_url_rule('/ws%d' % i, 'ws%d' % i, lambda: '')\n",
+        encoding="utf-8")
+    (be / "webapp.py").write_text(
+        "from flask import Flask\n"
+        "def create_app():\n"
+        "    a = Flask('webapp')\n"
+        "    a.add_url_rule('/', 'home', lambda: '<h1>real home</h1>')\n"
+        "    a.add_url_rule('/workbooks', 'wbs', lambda: 'ok')\n"
+        "    return a\n",
+        encoding="utf-8")
+    (be / "requirements.txt").write_text("flask\n", encoding="utf-8")
+    (be / "main.py").write_text(_BACKEND_MAIN, encoding="utf-8")
+    mod = _exec_entry(be, "runner_home_first")
+    assert mod.app.name == "webapp", \
+        "无 / 的候选路由再多也是错门（v48：worksheet_crud 赢择优=0/100）"
+    body = mod.app.test_client().get("/").get_data(as_text=True)
+    assert "real home" in body
+    assert "data-arcbench-fallback" not in body
+
+
+def test_fallback_home_is_flagged_and_lists_routes(tmp_path):
+    """全员无 / 时的保活页必须带判红标记 + 真实路由清单（探针据此
+    判 home-is-fallback-shell，不再假绿放行快车道）。"""
+    from app.platform_export import _BACKEND_MAIN
+
+    be = tmp_path / "backend"
+    be.mkdir()
+    (be / "onlymod.py").write_text(
+        "from flask import Flask\n"
+        "app = Flask('onlymod')\n"
+        "@app.route('/workbooks')\n"
+        "def wb():\n    return 'ok'\n",
+        encoding="utf-8")
+    (be / "requirements.txt").write_text("flask\n", encoding="utf-8")
+    (be / "main.py").write_text(_BACKEND_MAIN, encoding="utf-8")
+    mod = _exec_entry(be, "runner_fallback_flag")
+    body = mod.app.test_client().get("/").get_data(as_text=True)
+    assert 'data-arcbench-fallback="1"' in body
+    assert 'href="/workbooks"' in body, "保活页必须铺真实路由链接"
