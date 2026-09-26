@@ -63,3 +63,22 @@ Cursor 落地 A+B（静态检查+假网关启动冒烟）时对照：
 **GitHub 题（TASK-011，/competitions/hackathon/tasks/hackathon--github）**：6 域 24 组，原子需求约 47 条——①身份与访问（注册/登录/找回/登出/改密）②组织与治理（org/team/成员/授权）③仓库资产管理（搜索/创建/fork/clone/可见性）④代码与版本控制（文件浏览/提交历史/分支）⑤Issue 管理（列表/创建/评论/指派/标签/里程碑/关闭）⑥PR 评审与合并（保护分支/PR 创建/评审/diff/合并）。规模与 bookstack(34)/keep(32) 同量级，域是 LLM 最熟悉的 CRUD+工作流，生成质量天花板预期**高于 sheet**（sheet 的公式引擎/透视/校验算法上更难）。同一个 agent 快照两个任务共用。等 sheet 拿到非零分后启动本地彩排（题面下载入口在任务页 "Download all requirements"）。
 
 **补充（00:35 用户口述）**：平台上传不用填 API Key——勾"使用比赛额度评测"复选框即可（平台建临时 key、扣队伍 ¥500 额度、此类 run 才进榜）。ZCode 上传 v49 时照此操作。
+
+## [sentinel] INBOX-006（open，2026-09-27 00:05）— 彩排实弹复现"修复升级链空转"（735dc 同款病理）
+
+GitHub 彩排 r1（本地）日志出现：`修复升级 → deepseek-v4-pro（fix_attempts=3/4/5，已排除 [flash, pro, qwen3.7-max]）`——**三腿全在排除名单里却仍连续三轮升回 pro**，正是 735dc 死循环病理，v43-3 的排除补丁疑似挡不住"台账无货回落"路径。run 仍在推进（未到杀线：watchdog 200 分钟 + 2M token 闸兜底），暂不干预，留作取证。**请 Cursor 复核 `_fix_code` 台账回落分支：排除名单满员时是否应直接冻结该文件修复而非循环升级**（RepoFixer 已有"连败冻结"语义，dev_loop 侧对齐）。日志：`.tmp/github-rehearsal-r1-0927/run.log`。
+
+## [sentinel] INBOX-007（open，2026-09-27 01:25）— v48 尸检定案：入口择优选中迷你 app + 合成首页保活 = 0/100 真凶
+
+**证据链（官方日志 + File 页签取证）**：
+1. run 85f404a69443 终态 FAILED 0/100、feature 0/24、1.04M token、Stage3 正常跑完（14 分钟）；
+2. 评测期应用日志只有 `GET / 200 + favicon 404` 成对出现 ≈ 每条测试一次加载、零交互；
+3. `template-app.stdout`：`npm start → python3 main.py`（端口 3000 正确）后紧跟 **`/ 缺失，已由启动入口补挂（评测首页保活）`+`首页缺少题面入口文案，已补可见链接`+`Serving Flask app 'worksheet_crud.worksheet_crud'`**——启动器选中了 worksheet_crud 模块级迷你 app（非组装真 webapp），无 `/` 路由 → 合成保活首页 + 注入 arcbench_entry.json 的种子串链接（Q3 Sales/East/North，entry_surface 从题面抽的是种子值不是导航控件）；
+4. 导出探针只断言 health+home 200 → 合成页 PASS（假绿）；真 webapp（首页有 Q3 Sales 链接+完整导航+各功能页）从未服务。ed77 的 0/100 同因。
+5. 对照组：GitHub 本地彩排入口=author 无此病 → **任务相关**：sheet 模块布局让 worksheet_crud 在择优池里赢了。
+
+**v49 修复方向（外科级，三刀）**：
+- 刀1 `platform_export.py` 入口择优：**有真实 `/` 路由的候选优先于无 `/` 者**（当前按路由数最多择优，worksheet_crud 路由多但无首页）；平局再比路由数；
+- 刀2 **合成保活首页降级为最后手段**：仅当所有候选都无 `/` 时才允许补挂，且合成页必须渲染全部已知路由的真实链接清单（非题面种子串）；`arcbench_entry.json` 的锚点提取改为抽 WHEN 步骤的控件动词短语/页面名，种子值只作文本不作链接；
+- 刀3 导出探针加**内容断言**：home 200 且 HTML 含 ≥1 个指向本站路由的 `<a href>`（合成占位/空壳判红）——把这次假绿堵死。
+**验证**：本地用 sheet 真题面重跑生成（或直接对 v48 交付树起服）确认首页=真 webapp 页；pytest 全绿 + 闸 A+B 后出 v49。INBOX-001 判读完成，本条为 v49 施工图。
