@@ -1689,3 +1689,10 @@ v43 = P1（救分最大但改动大，单独一批）；v44 = P3。P4/P5 属「�
 ### v49 发车（进行中）
 
 包 `~/Desktop/token-burner-v49.zip`（03:05，闸 A+B PASS）；submission-pack 里 01:06 的同名旧包（无本修复）已存档 `archive/v49-stale-nofix-0106.zip` 并替换。C 段 --full 点火中；绿→上传发车 sheet。
+
+### v49 发车记录（03:33）
+
+- 提交：token-burner-v49 = `47df001c2783`（official_evaluation，model deepseek-v4-pro，03:32:36）
+- **发车：run `6d28c5030fd6`，sheet 任务，03:33:05 RUNNING**（v48 尸检→修复→闸 ABC 全绿→上传→发车 全链 3.5 小时闭环）
+- 预期读数点：①`[export]` 日志不应再出现 `/ 缺失已补挂`（择优应选中带真 / 的 webapp/create_app）；②若仍 0 分，尸检重点转向真 webapp 首页内容与官方断言的差距（题面 WHEN 明示"clicks the visible Q3 Sales workbook entry"——真首页有该链接）。
+- 本轮 ZCode 夜班产出 commits：7b934bb（五处择优同构+保活判红）/ f022d61（mock 签名补齐）/ 批次#70 文档；包归档：v49-stale-nofix-0106.zip（旧 01:06 无修复包）。
