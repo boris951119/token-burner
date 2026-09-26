@@ -46,3 +46,9 @@ Cursor 落地 A+B（静态检查+假网关启动冒烟）时对照：
 1. 今天的工作区先落一个 commit，注明对应 v48 包；
 2. 提交包按 run id 归档：`.tmp/submission-pack/v4x.zip` 复制为 `v4x_<runid>.zip`，桌面不再覆盖同名 zip（ed77 那版 v47 已丢过一次，别再丢）；
 3. 判读进 `docs/competition-status.md`，不要只留在对话里。
+
+## INBOX-004（open）— 预算纪律 + GitHub 题情报（ZCode 9/27 0 点官网实测）
+
+**预算（用户拍板）**：队伍余额实测 **¥417.17**（¥500 券已花 ~¥83）；用户规定 **sheet 任务累计花费上限 ~¥120**，余量留给 GitHub 题。v48 结算后 sheet 剩 1-2 发空间——**v50 起每一发都必须是累积全集 + 硬闸 A+B+C 全绿，禁止单刀发**。
+
+**GitHub 题（TASK-011，/competitions/hackathon/tasks/hackathon--github）**：6 域 24 组，原子需求约 47 条——①身份与访问（注册/登录/找回/登出/改密）②组织与治理（org/team/成员/授权）③仓库资产管理（搜索/创建/fork/clone/可见性）④代码与版本控制（文件浏览/提交历史/分支）⑤Issue 管理（列表/创建/评论/指派/标签/里程碑/关闭）⑥PR 评审与合并（保护分支/PR 创建/评审/diff/合并）。规模与 bookstack(34)/keep(32) 同量级，域是 LLM 最熟悉的 CRUD+工作流，生成质量天花板预期**高于 sheet**（sheet 的公式引擎/透视/校验算法上更难）。同一个 agent 快照两个任务共用。等 sheet 拿到非零分后启动本地彩排（题面下载入口在任务页 "Download all requirements"）。
