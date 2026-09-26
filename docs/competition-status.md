@@ -1665,3 +1665,27 @@ v43 = P1（救分最大但改动大，单独一批）；v44 = P3。P4/P5 属「�
 **通过率 0**：入口修补超时后强交，探针绿 ≠ 场景绿。
 
 **v49 刀**：`_feature_ids` / 接口表 **只认 `REQ-*`**；无 ATOMIC 的模块不写脏 req_ids。入口/FastAPI 残留仍排队。
+
+## 批次#70：v48 尸检（0/100 定案）→ v49 核心刀（ZCode 夜班，2026-09-27 凌晨）
+
+### v48（run 85f404a69443）终态与根因链
+
+- 终态：FAILED，**0/100、feature 0/24**，1,042,811 token，~166 分钟，Stage3 正常跑完（14 分钟评测）。
+- 评测期应用日志：只有 `GET / 200 + favicon 404` 成对循环（每测试一次加载、零交互）。
+- **真凶（template-app.stdout 取证）**：`npm start → python3 main.py`（端口 3000 正确）后，启动器打出 `/ 缺失已补挂（评测首页保活）`+`Serving Flask app 'worksheet_crud.worksheet_crud'`——**入口择优按路由数选中了 worksheet_crud 模块级迷你 app（无 / 路由）**，而非组装真 webapp；合成保活页又被入口文案注入整体替换成 `<h1>Application</h1>+3 个种子串链接`（arcbench_entry.json 的 anchors=["Q3 Sales","East","North"] 是题面种子值而非导航控件）→ 官方 100 条测试全程打在占位页上。
+- 导出探针只查 200+HTML → 假绿放行快车道（`[export-probe] PASS`）。ed77（v47）的 0/100 同因。
+- 对照组：GitHub 本地彩排 r1 入口=author 无此病 → **任务相关**：sheet 模块布局（worksheet_crud 路由最多且无 /）正好踩中择优盲区。
+
+### v49 核心刀（commit `7b934bb` + `f022d61`）
+
+五处同构修改（启动器 `platform_export._BACKEND_MAIN` + 冒烟闸四处模板）：**真 `/` 在场的候选一律优先于无 `/` 者**（约定名只在同 tier 内比较）；保活页升级为带 `data-arcbench-fallback="1"` 标记 + 真实 GET 路由清单；导出探针对标记判红（`home-is-fallback-shell`），快车道不再被占位壳假绿放行。+2 复现测试（`test_home_route_beats_route_count`/`test_fallback_home_is_flagged_and_lists_routes`）。
+
+验证：相关 61 例全绿；全量 **1917 passed**（既有失败仅 `test_perf_baseline` 1 例——macOS `/private/var` 符号链接路径问题，父提交 2c63518 同样红，已存证与本刀无关，待 Cursor 修）；顺手补齐 salvage 测试 mock 的 `entry_anchors` kwargs 签名（Cursor 20:27 漏改处）。硬闸 A+B：`A.config/A.import_shadow/A.layout/B.boot` 全 PASS。
+
+### GitHub 彩排 r1（泛化验证通过）
+
+2.5 小时全程绿：vision 27/27 → spec（`spec↔REQ 0/48` 审计读数）→ 拆分 → 逐模块开发（修复升级链多文件滚动，见 INBOX-006 待 Cursor 复核台账回落分支）→ **export-probe PASS、入口=author、backend 95 文件、快车道正常交棒、completed.json 落盘**。产物：`.tmp/github-rehearsal-r1-0927/`。
+
+### v49 发车（进行中）
+
+包 `~/Desktop/token-burner-v49.zip`（03:05，闸 A+B PASS）；submission-pack 里 01:06 的同名旧包（无本修复）已存档 `archive/v49-stale-nofix-0106.zip` 并替换。C 段 --full 点火中；绿→上传发车 sheet。
