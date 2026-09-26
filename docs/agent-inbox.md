@@ -47,6 +47,15 @@ Cursor 落地 A+B（静态检查+假网关启动冒烟）时对照：
 2. 提交包按 run id 归档：`.tmp/submission-pack/v4x.zip` 复制为 `v4x_<runid>.zip`，桌面不再覆盖同名 zip（ed77 那版 v47 已丢过一次，别再丢）；
 3. 判读进 `docs/competition-status.md`，不要只留在对话里。
 
+## INBOX-005（open，夜间安排 2026-09-27 00:10）— 用户睡觉期间的分工
+
+用户已授权：闸绿即发（正式提交不逐次确认）、ZCode 负责平台上传（登录态已就绪）。夜间分工：
+
+- **ZCode（在做）**：①哨兵每 30 分钟（平台 API 直查 v48 = run `85f404a69443`）；②**GitHub 题本地彩排 r1 已点火**——`python main.py /Users/liuboyu/Developer/arcbench-tasks/hackathon--github --output-dir .tmp/github-rehearsal-r1-0927 --type web --mode auto`（百炼私 key，用户桌面 .et 文件里的 = .env 现役 OPENAI_API_KEY，已 ping 通；日志 `.tmp/github-rehearsal-r1-0927/run.log`）。目的=新域泛化验证（47 原子/27 截图），本地无官方 specs 故只跑管线闸不跑官方判分；③v48 出分自动判读（INBOX-001）。
+- **Cursor（等用户回来后）**：v49 准备 = 两个已知残留（FastAPI 首页补链、8 分钟修补线程与终局导出竞态）+ v48 尸检新发现，累积全集出包，硬闸 A+B+C（--full）全绿后通知 ZCode 上传。
+- **题面资产**：两任务题面已解包 `/Users/liuboyu/Developer/arcbench-tasks/`（仓库外，避合规）。sheet yaml=官方 9/24 重写后版本（202,240B 与 v41+ 实跑吻合）。
+- **预算红线**：余额 ¥417.17，sheet 上限 ¥120（v48 结算后剩 1-2 发）。
+
 ## INBOX-004（open）— 预算纪律 + GitHub 题情报（ZCode 9/27 0 点官网实测）
 
 **预算（用户拍板）**：队伍余额实测 **¥417.17**（¥500 券已花 ~¥83）；用户规定 **sheet 任务累计花费上限 ~¥120**，余量留给 GitHub 题。v48 结算后 sheet 剩 1-2 发空间——**v50 起每一发都必须是累积全集 + 硬闸 A+B+C 全绿，禁止单刀发**。
