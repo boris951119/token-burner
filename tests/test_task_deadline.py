@@ -207,7 +207,7 @@ class TestEntrySurvival:
         called = []
         monkeypatch.setattr(
             "app.platform_export.export_platform_layout",
-            lambda workdir, pd: (called.append(str(pd))
+            lambda workdir, pd, **_k: (called.append(str(pd))
                                  or {"backend_files": 1, "frontend_files": 0}))
         return called
 
@@ -239,7 +239,7 @@ class TestEntrySurvival:
         monkeypatch.setattr(entry, "_SALVAGE_WORKDIR", out)
         monkeypatch.setattr(
             "app.platform_export.export_platform_layout",
-            lambda workdir, pd: {"backend_files": 1, "frontend_files": 0})
+            lambda workdir, pd, **_k: {"backend_files": 1, "frontend_files": 0})
         assert entry._emergency_salvage("测试") == 0
 
     def test_emergency_salvage_falls_to_honest_skeleton(
@@ -283,7 +283,7 @@ class TestEntrySurvival:
         monkeypatch.setenv("ARCBENCH_OUTPUT_DIR", str(out))
         monkeypatch.setattr(
             "app.platform_export.export_platform_layout",
-            lambda workdir, pd: {"backend_files": 1, "frontend_files": 0})
+            lambda workdir, pd, **_k: {"backend_files": 1, "frontend_files": 0})
         assert entry._emergency_salvage("测试") == 0
 
 
