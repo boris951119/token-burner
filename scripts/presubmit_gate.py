@@ -390,12 +390,26 @@ def run_segment_c(zip_path: Path, report: Report, *, timeout_s: int = 1500) -> P
     (work / "stderr.txt").write_text(proc.stderr or "", encoding="utf-8")
     combined = (proc.stdout or "") + "\n" + (proc.stderr or "")
 
-    # run_completed 证据
-    events = list(out.rglob("runner-events.jsonl")) + list(out.rglob("*.jsonl"))
-    saw_completed = "run_completed" in combined or any(
-        "run_completed" in p.read_text(encoding="utf-8", errors="ignore")
-        for p in events[:20]
-    )
+    # run_completed 证据（SDK 落盘是 runner_state.state=completed，
+    # 不是字面量 "run_completed"；stdout 里也常无这串）
+    events = list(out.rglob("runner-events.jsonl"))
+    saw_completed = False
+    for p in events[:20]:
+        try:
+            txt = p.read_text(encoding="utf-8", errors="ignore")
+        except Exception:
+            continue
+        if '"state": "completed"' in txt or '"state":"completed"' in txt:
+            saw_completed = True
+            break
+        if "run_completed" in txt:
+            saw_completed = True
+            break
+    if not saw_completed:
+        if ("官方布局已落地" in combined
+                and ("probe-fast" in combined or "交付完成" in combined
+                     or "交付物汇总" in combined)):
+            saw_completed = True
     backend_main = out / "backend" / "main.py"
     export_ok = backend_main.is_file()
     home_ok = False
