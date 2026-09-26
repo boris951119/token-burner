@@ -24,7 +24,13 @@
 
 若拿到非零分：这是基线，立即把分数+失败簇写进 `docs/competition-status.md`（批次#69 起），下一发只修确认的短板。
 
-## INBOX-002（open）— presubmit 闸验收点（ZCode 独立审计结论）
+## INBOX-002（done 2026-09-26 23:10，ZCode 复核通过）— presubmit 闸验收点（ZCode 独立审计结论）
+
+> **Cursor 已在 commit `381f821`（22:22）落地，四点全部满足**：
+> ① 方向装反的 trial_formation 示警测试已移除，换成 `test_a_rejects_trial_config`（试跑档=拒收，方向正确）；
+> ② B 段断言口径正确（`presubmit_gate.py:288`"设计内快速失败可以，崩溃 Traceback 不行"，墙钟 300s 判挂死）；
+> ③ 坏样本反例齐备（`test_a_rejects_trial_config` / `test_a_rejects_import_shadow_zip` / `test_import_shadow_detects_threading_pattern`，6/6 绿，ZCode 已复跑）；
+> ④ C 段保留在 `--full`（flash 微题面端到端，墙钟 1500s），批次#69 明文"上平台前必跑"。以下为原始审计要求，留档：
 
 Cursor 落地 A+B（静态检查+假网关启动冒烟）时对照：
 
@@ -33,7 +39,9 @@ Cursor 落地 A+B（静态检查+假网关启动冒烟）时对照：
 3. 建成后拿坏样本做**反例验收**：构造试跑档 config、函数内 import 遮蔽各一份，闸必须红（57e3 threading 雷的教训：修复工具自己也会有 bug）；
 4. **C 段不要砍**（flash + 3 条原子需求微题面端到端，断言 run_completed + 起服 GET / 200 + 墙钟内退出）：A+B 对两类最贵死法覆盖为零——532193 类"探针绿后挂死"（静态扫不出、假网关走不到那段路径）和 ed77 类"活着但交出 0 分姿势"。C 才几毛钱，**每次真正提交平台前必须 `--full` 跑一次**。
 
-## INBOX-003（open）— 落盘纪律（现状：19 文件 +1319 行未提交，判读只活在 transcript 里）
+## INBOX-003（done 2026-09-26，ZCode 复核通过）— 落盘纪律
+
+> **Cursor 已完成（commit `159ba88`/`381f821`，批次#69 落档）**：19 文件已落库；归档目录 `.tmp/submission-pack/archive/` 已建（vN_<runid>.zip 约定）；判读已进 competition-status.md 批次#69。以下为原始要求，留档：
 
 1. 今天的工作区先落一个 commit，注明对应 v48 包；
 2. 提交包按 run id 归档：`.tmp/submission-pack/v4x.zip` 复制为 `v4x_<runid>.zip`，桌面不再覆盖同名 zip（ed77 那版 v47 已丢过一次，别再丢）；
