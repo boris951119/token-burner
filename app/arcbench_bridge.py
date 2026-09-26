@@ -37,6 +37,19 @@ def _norm(s: str) -> str:
     return re.sub(r"[^a-z0-9]", "", (s or "").lower())
 
 
+# 平台 feature 率只认官方 ATOMIC 号；模块名 / 截图残片 / "1)" 一律丢掉（85f4）。
+_FEATURE_ID = re.compile(r"^REQ-[\w.-]+$", re.I)
+
+
+def _official_feature_ids(ids: list[str]) -> list[str]:
+    out: list[str] = []
+    for raw in ids:
+        rid = str(raw or "").strip()
+        if rid and _FEATURE_ID.match(rid) and rid not in out:
+            out.append(rid)
+    return out
+
+
 class ArcBenchBridge:
     """Pipeline 事件 → ArcBench Runtime SDK 的单向翻译器（headless 用）。"""
 
@@ -55,8 +68,6 @@ class ArcBenchBridge:
         # store_tree 缓存的 FOLDER 索引（[{"id","name"}]）
         self._folders: list[dict] = []
         # FOLDER id → 其下 ATOMIC id；模块名 → 覆盖闸认领的 ATOMIC id
-        self._atomics_by_folder: dict[str, list[str]] = {}
-        self._owned_by_module: dict[str, list[str]] = {}
         self._atomics_by_folder: dict[str, list[str]] = {}
         self._owned_by_module: dict[str, list[str]] = {}
 
@@ -159,18 +170,24 @@ class ArcBenchBridge:
         return best_id if best_score else None
 
     def _feature_ids(self, module: str) -> list[str]:
-        """平台计分认的需求号：覆盖闸里该模块的 ATOMIC，否则文件夹下的 ATOMIC。
+        """平台计分认的需求号：只返回官方 ATOMIC（REQ-*）。
 
-        都没有时退回文件夹/模块名（旧题面没有 ATOMIC 子节点时行为不变）。
+        覆盖闸认领优先；否则文件夹下 ATOMIC。都没有时返回空——
+        **不再**用模块名 / 脏文件夹名充 req_ids（85f4：57 接口里大量
+        cell_read/截图/1) → 功能率 0/24）。
         """
-        owned = [r for r in (self._owned_by_module.get(module) or []) if r]
+        owned = _official_feature_ids(
+            self._owned_by_module.get(module) or [])
         if owned:
-            return list(dict.fromkeys(owned))
+            return owned
         folder = self._match_folder(module)
-        atoms = list(self._atomics_by_folder.get(folder or "") or [])
+        atoms = _official_feature_ids(
+            self._atomics_by_folder.get(folder or "") or [])
         if atoms:
             return atoms
-        return [self._node(module)]
+        # 最后：node_map 显式指向的 REQ-*（测试/旧题面）
+        node = self._node(module)
+        return _official_feature_ids([node])
 
     # ---- 需求树登记（main.py 解析 requirements.yaml 后显式调用）----
 
@@ -314,6 +331,8 @@ class ArcBenchBridge:
                 for rid, mod in src.items():
                     if not rid or not mod:
                         continue
+                    if not _FEATURE_ID.match(str(rid)):
+                        continue
                     by_mod.setdefault(str(mod), [])
                     if str(rid) not in by_mod[str(mod)]:
                         by_mod[str(mod)].append(str(rid))
@@ -330,9 +349,11 @@ class ArcBenchBridge:
             return
         module = str(data.get("module", ""))
         feature_ids = self._feature_ids(module)
+        # 进度事件：无 REQ 可挂时仍报模块节点（面板不空）；接口/测试表只写 REQ-*
+        progress_ids = feature_ids or [self._node(module)]
         status = str(data.get("status", ""))
         message = (str(data.get("message", "")).strip() or None)
-        for node in feature_ids:
+        for node in progress_ids:
             if status == "SUCCESS":
                 rt.events.mark_implementation_done(node, message)
                 rt.events.mark_test_passed(node, message)
@@ -365,8 +386,10 @@ class ArcBenchBridge:
             if not isinstance(contract, dict):
                 continue
             try:
-                node = self._node(str(module))
                 feature_ids = self._feature_ids(str(module))
+                if not feature_ids:
+                    # 85f4：无官方 ATOMIC 的内核模块（db_schema 等）不写脏 req_ids
+                    continue
                 exports = [
                     str(e).strip()
                     for e in (contract.get("exports") or [])

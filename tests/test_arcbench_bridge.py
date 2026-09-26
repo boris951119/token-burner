@@ -151,9 +151,15 @@ def test_handle_swallows_internal_errors():
 _TREE = {
     "name": "demo",
     "children": [
-        {"type": "FOLDER", "id": "F1", "name": "Authentication", "children": []},
-        {"type": "FOLDER", "id": "F2", "name": "Train Search", "children": []},
-        {"type": "FOLDER", "id": "F3", "name": "Booking", "children": []},
+        {"type": "FOLDER", "id": "F1", "name": "Authentication", "children": [
+            {"type": "ATOMIC", "id": "REQ-1.1", "name": "Login"},
+        ]},
+        {"type": "FOLDER", "id": "F2", "name": "Train Search", "children": [
+            {"type": "ATOMIC", "id": "REQ-2.1", "name": "Search"},
+        ]},
+        {"type": "FOLDER", "id": "F3", "name": "Booking", "children": [
+            {"type": "ATOMIC", "id": "REQ-3.1", "name": "Book"},
+        ]},
     ],
 }
 
@@ -202,11 +208,11 @@ class TestInterfacesReady:
         )
         upserts = [c for c in rt.traceability.calls if c[0] == "upsert_interface"]
         assert upserts[0][1]["interface_id"] == "auth::login"
-        assert upserts[0][1]["req_ids"] == ["F1"]
+        assert upserts[0][1]["req_ids"] == ["REQ-1.1"]
         assert upserts[0][1]["implemented"] is False
         design_done = [c for c in rt.events.calls
                        if c[0] == "mark_design_done"]
-        assert {c[1][0] for c in design_done} == {"F1", "F3"}
+        assert {c[1][0] for c in design_done} == {"REQ-1.1", "REQ-3.1"}
 
     def test_node_contract_registered_verbatim(self):
         """契约原文进 node_contracts：官方节点契约面板由此才有数据，
@@ -218,7 +224,7 @@ class TestInterfacesReady:
                      "dependencies": ["db"]}}})
         contracts = [c for c in rt.traceability.calls
                      if c[0] == "upsert_node_contract"]
-        assert contracts[0][1] == ("F1", {
+        assert contracts[0][1] == ("REQ-1.1", {
             "module": "auth", "exports": ["login(u, p)"],
             "public_api": ["login(u, p)"], "dependencies": ["db"]})
 
@@ -238,7 +244,7 @@ class TestInterfacesReady:
             "booking": {"exports": ["book(t)"], "public_api": []}}})
         done = {c[1][0] for c in rt.events.calls
                 if c[0] == "mark_design_done"}
-        assert done == {"F3"}  # auth 那格没走到设计完成，booking 照登
+        assert done == {"REQ-3.1"}  # auth 那格没走到设计完成，booking 照登
         assert [c[1]["interface_id"] for c in rt.traceability.calls
                 if c[0] == "upsert_interface"] == ["booking::book"]
 
@@ -276,6 +282,21 @@ class TestInterfacesReady:
         assert done == {"REQ-1.1", "REQ-1.2"}
 
 
+    def test_rejects_module_names_and_garbage_as_req_ids(self):
+        """85f4：db_schema / 截图 / 1) 不得进 interfaces.req_ids。"""
+        from app.arcbench_bridge import _official_feature_ids
+        assert _official_feature_ids(
+            ["db_schema", "截图", "1)", "REQ-1.1", "REQ-2"]) == [
+            "REQ-1.1", "REQ-2"]
+        rt = _FakeRuntime()
+        bridge = ArcBenchBridge(runtime=rt)
+        bridge.handle("interfaces_ready", {"interfaces": {
+            "db_schema": {"exports": ["init()"], "public_api": []},
+        }})
+        assert [c for c in rt.traceability.calls
+                if c[0] == "upsert_interface"] == []
+
+
 class TestModuleTestRegistration:
     def test_success_registers_passing_test_and_implements_interfaces(self):
         rt = _FakeRuntime()
@@ -285,8 +306,8 @@ class TestModuleTestRegistration:
             {"module": "auth", "status": "SUCCESS", "fix_attempts": 0},
         )
         tests = [c for c in rt.traceability.calls if c[0] == "upsert_test"]
-        assert tests[0][1]["test_id"] == "test_auth::F1"
-        assert tests[0][1]["req_id"] == "F1"
+        assert tests[0][1]["test_id"] == "test_auth::REQ-1.1"
+        assert tests[0][1]["req_id"] == "REQ-1.1"
         assert tests[0][1]["passed"] is True
         impl = [c for c in rt.traceability.calls
                 if c[0] == "set_interface_implemented"]
@@ -400,6 +421,9 @@ class TestBootstrapWithoutGit:
         self._install_fake_sdk(monkeypatch, rt, calls)
         bridge = ArcBenchBridge()  # 不注入：走真惰性 import 分支
         bridge.run_started("go")
+        bridge.handle("atomic_coverage", {
+            "owned": {"REQ-1.1": "auth"}, "assigned": {},
+        })
         bridge.handle("module_done", {"module": "auth", "status": "SUCCESS",
                                       "fix_attempts": 0, "message": "ok"})
         bridge.run_completed("done")
@@ -407,6 +431,7 @@ class TestBootstrapWithoutGit:
             "mark_run_started", "mark_implementation_done",
             "mark_test_passed", "mark_run_completed",
         ]
+        assert ("mark_implementation_done", ("REQ-1.1", "ok")) in rt.events.calls
         assert [c[0] for c in rt.traceability.calls] == [
             "init_db", "upsert_test", "set_interface_implemented",
             "set_interface_implemented",

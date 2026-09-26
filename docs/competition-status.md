@@ -1647,3 +1647,21 @@ v43 = P1（救分最大但改动大，单独一批）；v44 = P3。P4/P5 属「�
 
 - 首页入口补链目前只挂 Flask `after_request`（FastAPI 产物不补）。
 - 8 分钟入口修补守护线程与终局导出可能竞态。
+
+## 批次#70：v48 正式跑 85f404a69443 尸检（2026-09-27）
+
+| 项 | 值 |
+|---|---|
+| 包 | token-burner-v48.zip |
+| 终态 | FAILED · **0/100** · 功能 **0/24** |
+| Token / 费 | 1,042,811 / ≈¥16.30 |
+| 墙钟 | ≈166.5 min |
+| Stage3 | **已跑完**（threading 骨架雷已灭） |
+
+**相对 v47 的进步**：vision 完整、管线真跑、`export-probe PASS`、`probe-fast` 8 分钟入口修补、强制交 Stage3。
+
+**功能 0 的根因（已取证）**：`[coverage] ATOMIC=28 已认领=28`，但 interfaces 57 条里大量 `req_ids` 仍是模块名（`db_schema`/`cell_read`）与脏串（`截图`/`1)`）；仅部分挂 `REQ-*`。无官方 ATOMIC 的内核模块走 `_feature_ids` 回退到 `_node(module)`＝模块名 → 平台不计功能。
+
+**通过率 0**：入口修补超时后强交，探针绿 ≠ 场景绿。
+
+**v49 刀**：`_feature_ids` / 接口表 **只认 `REQ-*`**；无 ATOMIC 的模块不写脏 req_ids。入口/FastAPI 残留仍排队。
