@@ -19,6 +19,9 @@
 - 引号串四通道（"…" / '…' / “…” / `…`，反引号只收像界面文案的串）：
   Seed data: 子句→种子实体；WHEN 引号→可操作控件；THEN 引号→期望文案。
   图片路径/代码围栏/文件名残渣一律剔除。
+- 无引号 THEN/GIVEN 行为约束（刷新后仍在、排序、持久化等）：进入
+  behavior_constraints，供 UX 清单与修环点名——静态判分不按整句扫页面
+  （整句不在 DOM 里，扫了只会幻影红）。
 """
 from __future__ import annotations
 
@@ -111,6 +114,19 @@ _NEG_CLAUSE = re.compile(
     r"|\bnot\s+(?:be\s+)?(?:include|contain|present|shown|available)"
     r"|\bno\s+longer\b|不包含|没有|不存在|未包含", re.I)
 
+# 无引号行为/流程约束：正式赛 sheet 题面（刷新后仍在、排序、过滤）的主失分面。
+_CONSTRAINT_HINT = re.compile(
+    r"\b(?:still|remain(?:s|ing)?|persist(?:s|ed|ing)?|retain(?:s|ed)?|"
+    r"preserv(?:e|es|ed)|unchanged|same\s+order|after\s+(?:a\s+)?"
+    r"(?:refresh|reload|reload(?:ing)?|save|submit)|"
+    r"sort(?:ed|ing)?|order(?:ed|ing)?|ascend(?:ing)?|descend(?:ing)?|"
+    r"filter(?:ed|ing)?|visible|hidden|disabled|enabled|must|should|"
+    r"keep(?:s|ing)?|reappear|survive)\b|"
+    r"刷新|重载|仍(?:然|旧)?|保持|持久|排序|升序|降序|过滤|可见|隐藏|"
+    r"禁用|启用|保存后|提交后|必须|不得|不能消失|还在",
+    re.I,
+)
+
 
 @dataclass
 class NodeChecklist:
@@ -129,10 +145,19 @@ class NodeChecklist:
     # 落在可点控件里（<button>/<a>/role=menuitem…），只做成正文文字在评测
     # 眼里等于不存在——该通道的硬判分在 acceptance_judge。
     click_controls: list[str] = field(default_factory=list)
+    # 无引号 THEN/GIVEN 行为约束原文（截断）：不进静态扫页，只进 UX/修环。
+    behavior_constraints: list[str] = field(default_factory=list)
     scenarios: list[dict] = field(default_factory=list)   # 原 GWT steps
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+def _constraint_text(content: str) -> str | None:
+    s = " ".join((content or "").split())
+    if len(s) < 8:
+        return None
+    return s[:240]
 
 
 def _clean_quote(s: str) -> str | None:
@@ -388,8 +413,15 @@ def _facts(req_id: str, name: str, desc: str, scenarios: list[dict],
     steps_text_all = [desc, name]
     home_visible = bool(_HOME_HINT.search(desc) or _ENTRY_HINT.search(desc))
     behavior: list[str] = []
+    constraints: list[str] = []
     controls: list[str] = []
     clicks: list[str] = []
+
+    def _push_constraint(content: str) -> None:
+        c = _constraint_text(content)
+        if c and c not in constraints:
+            constraints.append(c)
+
     for sc in scenarios:
         for s in sc.get("steps") or []:
             kw = str(s.get("keyword") or "").upper()
@@ -398,6 +430,10 @@ def _facts(req_id: str, name: str, desc: str, scenarios: list[dict],
             if kw in ("GIVEN", "WHEN"):
                 if _HOME_HINT.search(content) or _ENTRY_HINT.search(content):
                     home_visible = True
+                if kw == "GIVEN" and _CONSTRAINT_HINT.search(content):
+                    # GIVEN 无引号持久化/前置状态：引号通道看不见
+                    if not _quotes_in(content):
+                        _push_constraint(content)
                 if kw == "WHEN":
                     typed = _typed_quotes_in(content)
                     for q in _quotes_in(content, for_control=True):
@@ -409,9 +445,13 @@ def _facts(req_id: str, name: str, desc: str, scenarios: list[dict],
                         if q not in clicks:
                             clicks.append(q)
             elif kw == "THEN":
-                for q in _quotes_in(content):
+                qs = _quotes_in(content)
+                for q in qs:
                     if q not in behavior:
                         behavior.append(q)
+                # 无引号整句，或带引号但仍含持久化/排序等约束词
+                if not qs or _CONSTRAINT_HINT.search(content):
+                    _push_constraint(content)
     seeds = [s for s in _seed_entities_of(desc)
              if not _CREDENTIAL_HINT.search(s)
              # 同一节点里既是种子名又是控件名的串只挂一条（官方题面实测 4/47）：
@@ -433,6 +473,7 @@ def _facts(req_id: str, name: str, desc: str, scenarios: list[dict],
         control_labels=controls,
         behavior_expectations=behavior,
         click_controls=clicks,
+        behavior_constraints=constraints,
         scenarios=[dict(s) for s in scenarios],
     )
 
@@ -584,14 +625,22 @@ def render_checklist_spec(checklists: list[NodeChecklist]) -> str:
 
 
 def render_ux_checklist(checklists: list[NodeChecklist],
-                        max_nodes: int = 48) -> str:
+                        max_nodes: int = 48,
+                        prefer_ids: list[str] | None = None) -> str:
     """逐节点验收清单 → 开发契约注入段（规格保真度：UX 结构逐字入契约）。
 
     keep#2 取证死因：锚点清单是摊平的文案集合，模型分不清「哪个词是
     按钮、哪个词是动作后提示、哪个词是种子」——逐节点行保留 GWT 通道
-    归属，写码首轮即可按语义对准控件。空事实节点不出行，控制 token。"""
+    归属，写码首轮即可按语义对准控件。空事实节点仍出 REQ 行（无引号
+    行为约束时代不能再静默丢节点）。截断按未命中/盲区轮换，非文档序前 N。"""
+    try:
+        from app.utils.coverage_rotation import prioritize
+        ordered = prioritize(checklists, prefer_ids=prefer_ids,
+                             limit=max_nodes)
+    except Exception:
+        ordered = list(checklists)[:max_nodes]
     lines: list[str] = []
-    for ck in checklists:
+    for ck in ordered:
         parts: list[str] = []
         if ck.control_labels:
             parts.append("控件须可见: " + "、".join(
@@ -604,13 +653,15 @@ def render_ux_checklist(checklists: list[NodeChecklist],
         if ck.behavior_expectations:
             parts.append("动作后须出现: " + "、".join(
                 f'"{b}"' for b in ck.behavior_expectations[:6]))
+        if ck.behavior_constraints:
+            parts.append("行为约束(无引号须实现): " + "；".join(
+                ck.behavior_constraints[:4]))
         if ck.seed_entities:
             parts.append("种子可见: " + "、".join(
                 f'"{s}"' for s in ck.seed_entities[:8]))
-        if parts:
-            lines.append(f"- {ck.req_id} {ck.req_name}｜" + "｜".join(parts))
-        if len(lines) >= max_nodes:
-            break
+        if not parts:
+            parts.append("须实现本条 ATOMIC（场景无引号事实，勿漏行为/流程）")
+        lines.append(f"- {ck.req_id} {ck.req_name}｜" + "｜".join(parts))
     if not lines:
         return ""
     return (
@@ -628,6 +679,8 @@ def render_ux_checklist(checklists: list[NodeChecklist],
         "把动作后的提示、编辑框、确认项静态铺在页面上凑数，等于交互链"
         "没实现"
         "= 评测按需求顺序操作时依旧落空。\n"
+        "「行为约束(无引号须实现)」来自 THEN/GIVEN 整句（刷新后仍在、排序"
+        "等），不是引号串——必须做成真交互/持久化，禁止当装饰文案忽略。\n"
         + "\n".join(lines))
 
 

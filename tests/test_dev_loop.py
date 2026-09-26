@@ -683,3 +683,21 @@ class TestRepairEscalationExcludesTheFailedModel:
         engine, llm = self._engine(monkeypatch, [], "m_flash")
         engine._fix_code("user", "x = 1\n", "T", "boom", fix_attempts=3)
         assert llm.calls[0]["model"] != "m_flash"
+
+    def test_escalation_does_not_reselect_a_failed_repair_leg(
+            self, monkeypatch, capsys):
+        """run 735dc60369fd：已排除作者后仍连升回 qwen——备胎失败未累计。"""
+        engine, llm = self._engine(
+            monkeypatch, ["m_q", "m_pro", "m_flash"], "m_flash")
+        # 模拟 UI 模块：作者=主模型；开发副腿也是它（升级判据只看作者）
+        engine.dev_model = "m_flash"
+        engine._repair_failed_models = set()
+        llm2 = ScriptedLLM(["x = 2\n", "x = 3\n"])
+        engine.llm = llm2
+        engine._fix_code("user", "x = 1\n", "T", "boom", fix_attempts=3)
+        engine._fix_code("user", "x = 1\n", "T", "boom", fix_attempts=4)
+        assert llm2.calls[0]["model"] == "m_q"
+        assert llm2.calls[1]["model"] == "m_pro", \
+            f"第二轮应跳过已试过的 m_q，实际={llm2.calls[1]['model']}"
+        out = capsys.readouterr().out
+        assert "已排除" in out and "m_q" in out

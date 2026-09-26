@@ -256,6 +256,87 @@ def test_ensure_entry_replaces_dead_factory(tmp_path):
         "作者入口跑不起来时必须机械装配，换一次可评分的终态"
 
 
+def test_ensure_entry_shells_undeclared_missing_local(tmp_path):
+    """v44 P0：缺失名不在 requirements.txt → 产物缺陷 → 照常装壳。
+
+    旧口径把未生成的本地包名当成第三方，放弃装壳去 pip → 容器装不上 →
+    SystemExit → 不评分。"""
+    from app.utils.mechanical_assembly import ensure_entry
+
+    code = tmp_path / "code"
+    pkg = code / "notes"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "notes.py").write_text(
+        "import ghost_local_pkg\n"
+        "from flask import Flask\n"
+        "def create_app():\n"
+        "    return Flask(__name__)\n", encoding="utf-8")
+    (code / "requirements.txt").write_text("flask\n", encoding="utf-8")
+    fix = ensure_entry(code)
+    assert fix is not None, "未声明的缺失本地名必须触发装壳"
+    assert (code / "app_main" / "app_main.py").is_file()
+    gen = (code / "app_main" / "app_main.py").read_text(encoding="utf-8")
+    assert "_assembled_home" in gen or 'route("/")' in gen
+
+
+def test_ensure_entry_still_waits_for_declared_third_party(tmp_path):
+    """缺失名已写进 requirements.txt → 仍可能是依赖没装，不抢装壳。"""
+    from app.utils.mechanical_assembly import ensure_entry
+
+    code = tmp_path / "code"
+    pkg = code / "notes"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "notes.py").write_text(
+        "import some_weird_dep_xyz\n"
+        "from flask import Flask\n"
+        "def create_app():\n"
+        "    return Flask(__name__)\n", encoding="utf-8")
+    (code / "requirements.txt").write_text(
+        "flask\nsome_weird_dep_xyz\n", encoding="utf-8")
+    assert ensure_entry(code) is None
+    assert not (code / "app_main").exists()
+
+
+def test_mechanical_shell_provides_home_when_no_blueprint_home(tmp_path):
+    """保底壳在业务蓝图未挂 / 时必须自带可渲染首页。"""
+    from app.utils.mechanical_assembly import assemble
+
+    code = tmp_path / "code"
+    code.mkdir()
+    pkg = code / "api"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "api.py").write_text(
+        "from flask import Blueprint\n"
+        "bp = Blueprint('api', __name__)\n"
+        "@bp.route('/api/items')\n"
+        "def items():\n"
+        "    return []\n", encoding="utf-8")
+    info = assemble(code)
+    assert info["framework"] == "flask"
+    gen = (code / "app_main" / "app_main.py").read_text(encoding="utf-8")
+    assert "_assembled_home" in gen
+    # 真能挂上 /
+    import json
+    import subprocess
+    import sys as _sys
+
+    probe = (
+        "import sys, json; sys.path.insert(0, %r)\n"
+        "import app_main.app_main as m\n"
+        "a = m.create_app()\n"
+        "print(json.dumps(sorted(r.rule for r in a.url_map.iter_rules())))\n"
+        % str(code)
+    )
+    res = subprocess.run([_sys.executable, "-c", probe], capture_output=True,
+                         text=True, timeout=60)
+    assert res.returncode == 0, res.stderr[-400:]
+    rules = json.loads(res.stdout.strip().splitlines()[-1])
+    assert "/api/health" in rules and "/" in rules
+
+
 def test_shell_survives_its_own_broken_import(tmp_path):
     """保底壳逐条 import 容错（9/24 对照集 26 号实证）：壳装配出来了，却因为
     壳里一句 `from view_mode import ...` 抛 TypeError 而整个壳一起死——

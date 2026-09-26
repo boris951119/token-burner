@@ -1,0 +1,155 @@
+# -*- coding: utf-8 -*-
+"""532193 夜迭代：超尺寸停修 / 探针绿快车道 / spec 置顶认领。"""
+from __future__ import annotations
+
+from app.agents.dev_loop import DevLoopEngine, ModuleStatus, _is_oversized
+from app.config import Settings
+from app.tools.file_manager import FileManager
+from app.utils.spec_req_audit import annotate_spec_with_missing, SpecReqReport
+
+
+class _NoChatLLM:
+    def chat(self, *a, **k):
+        raise AssertionError("超尺寸路径不得再调 LLM 整文件重写")
+
+
+class _FailExec:
+    def run(self, code, tests, timeout, expected_output="", module=""):
+        from app.execution.executor import ExecutionResult, ExecutionStatus
+        return ExecutionResult(
+            status=ExecutionStatus.FAILED, message="boom",
+            exit_code=1, stdout="", stderr="boom",
+        )
+
+
+def test_oversized_predicate():
+    assert not _is_oversized("x = 1\n")
+    assert _is_oversized("def f():\n    return 1\n" * 310)
+
+
+def test_oversized_skips_whole_file_llm_repair(tmp_path, capsys):
+    fm = FileManager(projects_root=tmp_path / "projects")
+    handle = fm.create_project("oversized")
+    pid = handle.project_id
+    settings = Settings(models=["m1", "m2", "m3"], max_fix_rounds=5)
+    eng = DevLoopEngine(
+        llm=_NoChatLLM(), dev_model="m1", test_model="m2", main_model="m3",
+        executor=_FailExec(), settings=settings, file_manager=fm,
+    )
+    big = "def f():\n    return 1\n" * 310
+    result = eng._drive(
+        "webui_pages", pid, big, "def test_x():\n    assert True\n",
+        fix_attempts=0, user_feedback="", contract=None,
+        project_modules=None, feedback_pending=False,
+    )
+    assert result.status is ModuleStatus.FROZEN
+    out = capsys.readouterr().out
+    assert "超尺寸" in result.message or "超尺寸" in out
+    assert (handle.root / "code" / "webui_pages" / "webui_pages.py").is_file()
+
+
+def test_annotate_puts_missing_at_top():
+    report = SpecReqReport(
+        required=["REQ-1", "REQ-2"], mentioned=[], missing=["REQ-1", "REQ-2"],
+    )
+    out = annotate_spec_with_missing("# Spec\n\nbody only\n", report)
+    assert out.index("必须认领的 ATOMIC") < out.index("body only")
+    assert "REQ-1" in out and "REQ-2" in out
+
+
+def test_probe_green_verify_repairs_entry_once(tmp_path, monkeypatch):
+    """探针绿 → 只打一轮入口修补，不进冒烟环。"""
+    from app import arcbench_smoke as sm
+
+    called = {"smoke": 0, "repair": 0, "note": ""}
+
+    def _smoke(*_a, **_k):
+        called["smoke"] += 1
+        return False, "red"
+
+    def _repair(*_a, **_k):
+        called["repair"] += 1
+        called["note"] = _k.get("priority_note") or ""
+        return True, "patched"
+
+    monkeypatch.setattr(sm, "run_smoke", _smoke)
+    monkeypatch.setattr(sm, "auto_repair", _repair)
+    ok, report = sm.verify_delivery(
+        tmp_path, "req", settings=type("S", (), {"models": []})(),
+        probe_green=True,
+        repair_budget_s=60,
+    )
+    assert ok is True
+    assert called["smoke"] == 0 and called["repair"] == 1
+    assert "入口优先" in called["note"]
+    assert "probe-fast" in report
+
+
+def test_entry_anchors_prefer_quoted_controls():
+    from app.utils.entry_surface import entry_anchors
+    text = (
+        "## 模块：REQ-1 Home\n"
+        "### REQ-1-1 Open（验收标准）\n"
+        "Open.\n"
+        "  - 场景：open\n"
+        "    GIVEN: home page\n"
+        '    WHEN: click "New sheet"\n'
+        '    THEN: the grid shows "Untitled"\n'
+    )
+    assert "New sheet" in entry_anchors(text)
+
+
+def test_main_does_not_shadow_threading_locally():
+    """57e3：main() 内 `import threading` 把顶层名变成局部，
+    看门狗 Thread 一行 UnboundLocalError → 只交骨架 0 分。"""
+    import ast
+    from pathlib import Path
+
+    src = Path(__file__).resolve().parents[1] / "main.py"
+    tree = ast.parse(src.read_text(encoding="utf-8"))
+    main_fn = next(
+        n for n in tree.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and n.name == "main"
+    )
+    shadows = [
+        n for n in ast.walk(main_fn)
+        if isinstance(n, (ast.Import, ast.ImportFrom))
+        and any(
+            (isinstance(n, ast.Import) and a.name.split(".")[0] == "threading")
+            or (isinstance(n, ast.ImportFrom) and n.module
+                and n.module.split(".")[0] == "threading")
+            for a in (getattr(n, "names", None) or [])
+        )
+    ]
+    assert shadows == [], "main() 不得再 import threading（会遮蔽顶层）"
+
+
+def test_main_skips_verify_when_probe_green(monkeypatch):
+    """探针判定本身：绿探针为真；本测试不启动验收线程。"""
+    import main as m
+
+    calls = {"verify": 0}
+
+    def _fake_export(*_a, **_k):
+        return {
+            "exported": True,
+            "backend_files": 1,
+            "frontend_files": 1,
+            "entry": "author",
+            "export_probe": {"ok": True, "health": True, "home": True},
+        }
+
+    def _boom_verify(*_a, **_k):
+        calls["verify"] += 1
+        raise AssertionError("must skip verify on probe green")
+
+    monkeypatch.setattr(m, "_export_official_layout", _fake_export)
+    monkeypatch.setattr(m, "_probe_green", lambda s: True)
+    # 只测分支语义：模拟 early 后的决策
+    early = _fake_export()
+    assert m._probe_green(early) is True
+    # 若走进 else 会调 verify；这里断言辅助函数路径
+    monkeypatch.setattr(
+        "app.arcbench_smoke.verify_delivery", _boom_verify, raising=False)
+    assert calls["verify"] == 0

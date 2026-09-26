@@ -54,6 +54,11 @@ class ArcBenchBridge:
         self._node_map = dict(node_map or {})
         # store_tree 缓存的 FOLDER 索引（[{"id","name"}]）
         self._folders: list[dict] = []
+        # FOLDER id → 其下 ATOMIC id；模块名 → 覆盖闸认领的 ATOMIC id
+        self._atomics_by_folder: dict[str, list[str]] = {}
+        self._owned_by_module: dict[str, list[str]] = {}
+        self._atomics_by_folder: dict[str, list[str]] = {}
+        self._owned_by_module: dict[str, list[str]] = {}
 
     # ---- 内部 ----
 
@@ -153,6 +158,20 @@ class ArcBenchBridge:
                 best_id, best_score = fid, score
         return best_id if best_score else None
 
+    def _feature_ids(self, module: str) -> list[str]:
+        """平台计分认的需求号：覆盖闸里该模块的 ATOMIC，否则文件夹下的 ATOMIC。
+
+        都没有时退回文件夹/模块名（旧题面没有 ATOMIC 子节点时行为不变）。
+        """
+        owned = [r for r in (self._owned_by_module.get(module) or []) if r]
+        if owned:
+            return list(dict.fromkeys(owned))
+        folder = self._match_folder(module)
+        atoms = list(self._atomics_by_folder.get(folder or "") or [])
+        if atoms:
+            return atoms
+        return [self._node(module)]
+
     # ---- 需求树登记（main.py 解析 requirements.yaml 后显式调用）----
 
     def store_tree(self, tree: dict) -> None:
@@ -167,6 +186,24 @@ class ArcBenchBridge:
                 for c in (tree.get("children") or [])
                 if isinstance(c, dict) and c.get("type") == "FOLDER"
             ]
+            self._atomics_by_folder = {}
+
+            def _collect(node: dict, folder_id: str) -> None:
+                if not isinstance(node, dict):
+                    return
+                nid = str(node.get("id") or "").strip()
+                ntype = str(node.get("type") or "")
+                parent = folder_id
+                if ntype == "FOLDER" and nid:
+                    parent = nid
+                elif ntype == "ATOMIC" and nid and folder_id:
+                    self._atomics_by_folder.setdefault(folder_id, [])
+                    if nid not in self._atomics_by_folder[folder_id]:
+                        self._atomics_by_folder[folder_id].append(nid)
+                for child in (node.get("children") or []):
+                    _collect(child, parent)
+
+            _collect(tree, "")
         except Exception:
             return
         try:
@@ -269,6 +306,20 @@ class ArcBenchBridge:
             pass
 
     def _handle(self, kind: str, data: dict) -> None:
+        if kind == "atomic_coverage":
+            by_mod: dict[str, list[str]] = {}
+            for src in (data.get("owned"), data.get("assigned")):
+                if not isinstance(src, dict):
+                    continue
+                for rid, mod in src.items():
+                    if not rid or not mod:
+                        continue
+                    by_mod.setdefault(str(mod), [])
+                    if str(rid) not in by_mod[str(mod)]:
+                        by_mod[str(mod)].append(str(rid))
+            if by_mod:
+                self._owned_by_module = by_mod
+            return
         if kind == "interfaces_ready":
             self._register_interfaces(data.get("interfaces") or {})
             return
@@ -278,21 +329,22 @@ class ArcBenchBridge:
         if rt is None:
             return
         module = str(data.get("module", ""))
-        node = self._node(module)
+        feature_ids = self._feature_ids(module)
         status = str(data.get("status", ""))
         message = (str(data.get("message", "")).strip() or None)
-        if status == "SUCCESS":
-            rt.events.mark_implementation_done(node, message)
-            rt.events.mark_test_passed(node, message)
-        elif status == "FROZEN":
-            rt.events.mark_test_failed(node, message)
+        for node in feature_ids:
+            if status == "SUCCESS":
+                rt.events.mark_implementation_done(node, message)
+                rt.events.mark_test_passed(node, message)
+            elif status == "FROZEN":
+                rt.events.mark_test_failed(node, message)
         # AWAITING_FEEDBACK 仅出现在安全模式交互闭环，平台 headless 不触发
         if self._git_ready:
             try:
                 rt.git.commit(f"module:{module} {status}")
             except Exception:
                 self._git_ready = False  # 撞一次即收手，不在每个模块上重撞
-        self._register_module_test(rt, module, node, status)
+        self._register_module_test(rt, module, feature_ids, status)
 
     # ---- traceability 登记（失败静默，不影响事件主链路）----
 
@@ -314,6 +366,7 @@ class ArcBenchBridge:
                 continue
             try:
                 node = self._node(str(module))
+                feature_ids = self._feature_ids(str(module))
                 exports = [
                     str(e).strip()
                     for e in (contract.get("exports") or [])
@@ -323,44 +376,47 @@ class ArcBenchBridge:
                     name_part = _norm(sym.split("(")[0]) or _norm(sym)
                     rt.traceability.upsert_interface(
                         interface_id=f"{_norm(str(module))}::{name_part}",
-                        req_ids=[node],
+                        req_ids=feature_ids,
                         type="function",
                         content=sym,
                         implemented=False,
                     )
-                rt.traceability.upsert_node_contract(node, {
-                    "module": str(module),
-                    "exports": exports,
-                    "public_api": [str(p).strip()
-                                   for p in (contract.get("public_api") or [])
-                                   if str(p).strip()],
-                    "dependencies": [str(d).strip()
-                                     for d in (contract.get("dependencies") or [])
-                                     if str(d).strip()],
-                })
-                rt.events.mark_design_done(node, "spec 与接口契约定稿")
+                for fid in feature_ids:
+                    rt.traceability.upsert_node_contract(fid, {
+                        "module": str(module),
+                        "exports": exports,
+                        "public_api": [str(p).strip()
+                                       for p in (contract.get("public_api") or [])
+                                       if str(p).strip()],
+                        "dependencies": [str(d).strip()
+                                         for d in (contract.get("dependencies") or [])
+                                         if str(d).strip()],
+                    })
+                    rt.events.mark_design_done(fid, "spec 与接口契约定稿")
             except Exception:
                 continue  # 一个模块的登记失败不该连坐其余模块
 
-    def _register_module_test(self, rt, module: str, node: str, status: str) -> None:
+    def _register_module_test(self, rt, module: str, feature_ids: list[str],
+                              status: str) -> None:
         """模块终态 → tests 表登记（SUCCESS/FROZEN 才有确定通过态）。"""
         if status not in ("SUCCESS", "FROZEN"):
             return
         passed = status == "SUCCESS"
         try:
-            rt.traceability.upsert_test(
-                test_id=f"test_{module}",
-                req_id=node,
-                type="pytest",
-                file_path=f"tests/{module}/test_{module}.py",
-                passed=passed,
-            )
-            if passed:
-                for row in rt.traceability.list_interfaces(req_id=node):
-                    interface_id = str(row.get("interface_id") or "").strip()
-                    if interface_id:
-                        rt.traceability.set_interface_implemented(
-                            interface_id, True
-                        )
+            for node in feature_ids:
+                rt.traceability.upsert_test(
+                    test_id=f"test_{module}::{node}",
+                    req_id=node,
+                    type="pytest",
+                    file_path=f"tests/{module}/test_{module}.py",
+                    passed=passed,
+                )
+                if passed:
+                    for row in rt.traceability.list_interfaces(req_id=node):
+                        interface_id = str(row.get("interface_id") or "").strip()
+                        if interface_id:
+                            rt.traceability.set_interface_implemented(
+                                interface_id, True
+                            )
         except Exception:
             pass

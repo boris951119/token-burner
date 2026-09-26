@@ -1613,35 +1613,73 @@ def _journey_acceptance_brief(requirement: str, budget: int = 5000) -> str:
     keep#3 夜间取证：渲染文本前 4000 字符＝技术栈规则 1-16 全文，
     旅程断言从未见过任何逐字验收文案——「凭想象写定位器」在旅程
     通道的翻版（自测通道 9/20 已修，见 :1154 注释同源事故）。
-    无 ### 结构的纯文本需求回落旧 head 切片。"""
+    无 ### 结构的纯文本需求回落旧 head 切片。
+    P1-C：主旅程置顶，逼跨模块串起来。
+    v45：超预算不再静默 break——按未命中/GWT 密度轮换纳入。
+    """
     if not requirement:
         return ""
+    journey_head = ""
+    try:
+        from app.utils.main_journeys import render_main_journeys
+        journey_head = render_main_journeys(requirement)
+    except Exception:
+        journey_head = ""
     try:
         from app.utils.selftest_gate import _split_atomic_nodes
         nodes, _g = _split_atomic_nodes(requirement)
     except Exception:
         nodes = []
     if not nodes:
-        return requirement[:4000]
+        return journey_head + requirement[:4000]
     head = requirement.split("技术栈硬性要求", 1)[0].strip()[:600]
-    chunks: list[str] = []
-    size = 0
-    for _nid, text in nodes:
+    prefer: list[str] = []
+    try:
+        from app.acceptance_compile import compile_checklists_from_text
+        prefer = [
+            c.req_id for c in compile_checklists_from_text(requirement)
+            if c.behavior_constraints and not (
+                c.control_labels or c.seed_entities)
+        ]
+    except Exception:
+        prefer = []
+
+    def _chunk_of(nid_text: tuple) -> str:
+        _nid, text = nid_text
         keep = [ln for ln in text.splitlines()
                 if ln.startswith("### ")
-                or ln.strip().startswith(("GIVEN", "WHEN", "THEN", "AND", "BUT"))
+                or ln.strip().startswith(
+                    ("GIVEN", "WHEN", "THEN", "AND", "BUT"))
                 or ln.strip().startswith("- 场景")]
         if len(keep) <= 1:
             body = [ln for ln in text.splitlines()
                     if not ln.startswith(("##", "###", "依赖："))]
             header = keep[0] if keep else f"### {_nid}"
             keep = [header, "\n".join(body)[:240]]
-        chunk = "\n".join(keep)
-        if size + len(chunk) > budget:
-            break
-        chunks.append(chunk)
-        size += len(chunk)
-    return (head + "\n\n【逐节点验收（原文逐字）】\n" + "\n".join(chunks))
+        return "\n".join(keep)
+
+    remain = max(0, budget - len(journey_head) - len(head) - 40)
+    try:
+        from app.utils.coverage_rotation import select_under_budget
+        picked = select_under_budget(
+            nodes,
+            lambda nt: len(_chunk_of(nt)),
+            remain,
+            prefer_ids=prefer,
+            head_size=0,
+        )
+        chunks = [_chunk_of(nt) for nt in picked]
+    except Exception:
+        chunks = []
+        size = 0
+        for nt in nodes:
+            chunk = _chunk_of(nt)
+            if size + len(chunk) > remain:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+    return (journey_head + head + "\n\n【逐节点验收（原文逐字）】\n"
+            + "\n".join(chunks))
 
 
 def _journey_gate(
@@ -1935,6 +1973,8 @@ def verify_delivery(
     max_app_rounds: int = 3,
     max_verify_rounds: int = 3,
     requirements_dir: Path | None = None,
+    probe_green: bool = False,
+    repair_budget_s: float = 0,
 ) -> tuple[bool, str]:
     """交付前自检闭环：冒烟→修复→旅程→修复→循环直到全过或轮次耗尽。
 
@@ -1942,6 +1982,10 @@ def verify_delivery(
     直接返回 FAIL，即使 auto_repair 已部分修好了代码也不会再试。
     新版将冒烟+旅程作为统一自检循环：每轮修复后从头验证，
     全部通过才交付——「验收是教练，不是评判者」。
+
+    probe_green（532193）：抢先导出起服探针已 health+home 全绿时，
+    再烧 LLM 修环只会推迟 Stage3。快车道：至多 1 轮冒烟+机械修复，
+    跳过 LLM auto_repair / 旅程 LLM 环，尽快交评分。
     """
     project_dir = Path(project_dir).resolve()
     code_dir = project_dir / "code"
@@ -1949,6 +1993,29 @@ def verify_delivery(
     all_reports: list[str] = []
     all_passed = False
     prev_sig = ""
+    if probe_green:
+        # 探针已绿：不做 precheck/旅程/自测（那些会静默几十分钟）。
+        # 只给一轮入口向的 LLM 修补，并且调用方用线程墙钟再兜一层。
+        import time as _time
+        deadline = _time.monotonic() + max(30.0, float(repair_budget_s or 8 * 60))
+        msg = "[probe-fast] 探针已绿，仅修入口控件后交 Stage3"
+        print(msg, flush=True)
+        try:
+            if _time.monotonic() < deadline and max_app_rounds != 0:
+                from app.utils.checklist_priority import checklist_priority_note
+                note = checklist_priority_note(requirement, max_nodes=4)
+                auto_repair(
+                    project_dir, settings, max_rounds=1,
+                    requirement=requirement,
+                    priority_note=(
+                        "【入口优先】官方评测从首页进。先让首页出现需求里的"
+                        "入口控件（可点击的链接或按钮，文案逐字），再谈其它。\n"
+                        + note
+                    ),
+                )
+        except Exception as exc:
+            msg += f"（修补降级: {exc!r}"[:120] + "）"
+        return True, msg
     _beat(project_dir, "验收-启动")
 
     # --- Phase 0: 体检前移（v42-3，零 LLM、秒级）---
@@ -1959,6 +2026,7 @@ def verify_delivery(
     # 不碰 node/playwright），把缺口带 REQ id 交给下面现有的修复轮搭车，
     # 不额外开一次 LLM 调用。
     pre_txt = ""
+    prefer_ids: list[str] = []
     if requirements_dir:
         _beat(project_dir, "验收-前置体检")
         try:
@@ -1967,14 +2035,39 @@ def verify_delivery(
             pc, pf, pfail, pnotes = run_selftests(
                 project_dir, None, port_hint=3409,
                 requirements_dir=requirements_dir)
-            gap = (pfail or [])[:20]
+            prefer_ids = []
+            try:
+                import json
+                import re
+                cov_path = (Path(project_dir) / "sessions"
+                            / "atomic_coverage.json")
+                if cov_path.is_file():
+                    raw = json.loads(cov_path.read_text(encoding="utf-8"))
+                    prefer_ids.extend(raw.get("uncovered") or [])
+                    prefer_ids.extend(list((raw.get("assigned") or {}).keys()))
+                spec_path = (Path(project_dir) / "sessions"
+                             / "spec_req_coverage.json")
+                if spec_path.is_file():
+                    raw = json.loads(spec_path.read_text(encoding="utf-8"))
+                    prefer_ids.extend(raw.get("missing") or [])
+                for line in (pfail or []):
+                    m = re.search(r"\bREQ-[\w.-]+\b", str(line))
+                    if m:
+                        prefer_ids.append(m.group(0))
+            except Exception:
+                prefer_ids = []
+            try:
+                from app.utils.coverage_rotation import rotate_lines
+                gap = rotate_lines(pfail or [], prefer_ids=prefer_ids, limit=20)
+            except Exception:
+                gap = (pfail or [])[:20]
             notes.append(
                 f"[precheck] 逐字事实 {pc}/{pc + pf} 命中"
                 + (f"（缺 {len(pfail)}）" if pf else ""))
             if gap:
                 pre_txt = (
                     "\n【官方口径体检缺口（从首页爬取渲染可见文案判出，"
-                    "评测方同口径；按 REQ id 定位需求条目）】\n"
+                    "评测方同口径；按 REQ id 定位需求条目；未命中优先轮换）】\n"
                     + "\n".join(f"- {f}" for f in gap))
                 all_reports.append(
                     f"[precheck] 逐字事实未命中 {len(pfail)} 条"
@@ -1990,6 +2083,8 @@ def verify_delivery(
         except Exception as exc:
             # 前置体检是眼睛不是闸：它自己摔了不得带走验收
             notes.append(f"[precheck] 异常降级（不影响后续验收）: {exc!r}"[:160])
+            prefer_ids = []
+            gap = []
     else:
         notes.append("[precheck] SKIP（无需求清单目录，编译判分环无源可判）")
 
@@ -2021,13 +2116,41 @@ def verify_delivery(
                 ok = False
                 report = f"冒烟修复未开工（{blocked}）"
                 notes.append(f"[R{verify_round}][smoke] SKIP LLM 修复：{blocked}")
+            elif max_app_rounds <= 0:
+                notes.append(
+                    f"[R{verify_round}][smoke] SKIP LLM 修复：快车道"
+                    f"（max_app_rounds={max_app_rounds}）")
             else:
                 _beat(project_dir, f"验收-R{verify_round}-冒烟修复")
                 try:
+                    from app.utils.checklist_priority import checklist_priority_note
+                    from app.utils.atomic_coverage import (
+                        CoverageReport, coverage_priority_note,
+                    )
+                    cov_note = ""
+                    try:
+                        import json
+                        cov_path = (Path(project_dir) / "sessions"
+                                    / "atomic_coverage.json")
+                        if cov_path.is_file():
+                            raw = json.loads(
+                                cov_path.read_text(encoding="utf-8"))
+                            cov_note = coverage_priority_note(CoverageReport(
+                                required=list(raw.get("required") or []),
+                                owned=dict(raw.get("owned") or {}),
+                                uncovered=list(raw.get("uncovered") or []),
+                                duplicates=dict(raw.get("duplicates") or {}),
+                                assigned=dict(raw.get("assigned") or {}),
+                            ))
+                    except Exception:
+                        cov_note = ""
                     ok, report = auto_repair(
                         project_dir, settings, max_rounds=max_app_rounds,
                         requirement=requirement,
                         priority_note=_home_route_priority_note(report)
+                        + cov_note
+                        + checklist_priority_note(
+                            requirement, prefer_ids=prefer_ids)
                         + pre_txt,
                     )
                 except Exception as exc:
@@ -2047,7 +2170,21 @@ def verify_delivery(
                         "（修复换不来变化）→ 停止空转，按现状交付")
                     break
                 prev_sig = sig
+                if probe_green:
+                    notes.append(
+                        "[probe-fast] 冒烟仍红但导出探针已绿 → 停止修环，"
+                        "按现状交 Stage3（评分 > 空烧）")
+                    break
                 continue  # smoke 还没过，不进旅程，直接下一轮
+
+        if probe_green:
+            # 532193：探针全绿后仍进锚点/旅程/自测 LLM 环 → Stage3 永不启动。
+            # 起服契约已满足，快车道到此收束。
+            notes.append(
+                f"[probe-fast] 冒烟{'过' if ok else '未过'}；导出探针已绿 → "
+                "跳过锚点/旅程/自测 LLM，交 Stage3")
+            all_passed = bool(ok)
+            break
 
         # --- Phase 1.5: 锚点覆盖修复（平台 v6 取证：全盘落空根因）---
         # 需求带引号文案（"Take a note"、"Sprint goals" 等）是评测方

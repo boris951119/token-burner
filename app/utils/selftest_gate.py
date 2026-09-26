@@ -22,6 +22,24 @@ import time
 import urllib.request
 from pathlib import Path
 
+
+def _rotate_fail(failures: list[str] | None, limit: int = 20) -> list[str]:
+    """失败指令按未命中 REQ 轮换截前 N（固定文档序前 20 = 后排永远看不见）。"""
+    lines = list(failures or [])
+    try:
+        from app.utils.coverage_rotation import rotate_lines
+        prefer = []
+        for ln in lines:
+            m = re.search(r"\bREQ-[\w.-]+\b", str(ln))
+            if m:
+                prefer.append(m.group(0))
+        # 后半段出现的 REQ 往往是文档序截断的牺牲品——给一点优先
+        prefer = prefer[len(prefer) // 2:] + prefer[:len(prefer) // 2]
+        return rotate_lines(lines, prefer_ids=prefer, limit=limit)
+    except Exception:
+        return lines[:limit]
+
+
 # 判分工作区有两个住所：①开发仓库的 scripts/official_grade（node_modules
 # 已装好，本地跑不必碰网络）；②随包的 app/utils/grade_workspace。
 # 取证（2026-09-23 包清单核对）：打包白名单只认 app/ 等根条目，scripts/
@@ -920,7 +938,7 @@ def selftest_gate(project_dir: Path, requirement: str, settings,
             continue
     issue = (
         "自生成验收测试失败（交付闸，失败即用户需求未满足）：\n"
-        + "\n".join(f"- {f}" for f in failures[:20])
+        + "\n".join(f"- {f}" for f in _rotate_fail(failures))
         + "\n\n测试输出尾部：\n" + tail[-1500:]
         + "\n\n页面真实快照（前 3 个失败用例，Playwright 实测 DOM）：\n"
         + "\n---\n".join(snapshots)
@@ -957,7 +975,7 @@ def selftest_gate(project_dir: Path, requirement: str, settings,
             _beat(project_dir, "自测闸-通过")
             return True, "\n".join(notes)
         issue = ("自生成验收测试仍有失败：\n"
-                 + "\n".join(f"- {f}" for f in failures[:20])
+                 + "\n".join(f"- {f}" for f in _rotate_fail(failures))
                  + "\n\n输出尾部：\n" + tail[-1200:])
     _beat(project_dir, "自测闸-尽力交付")
     return False, "\n".join(notes)
@@ -986,7 +1004,7 @@ def _cli() -> int:
         requirements_dir=(Path(args.requirements_dir)
                           if args.requirements_dir else None))
     print(f"[selftest] {passed}/{passed + failed} passed")
-    for f in failures[:20]:
+    for f in _rotate_fail(failures):
         print(f"  FAIL {f}")
     print(tail[-600:])
     return 0 if not failed and passed else 1

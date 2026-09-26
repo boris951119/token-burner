@@ -58,7 +58,7 @@ def make_workdir(tag: str, *, drop_half: bool = False) -> Path:
 
 def export(wd: Path, project: Path) -> bool:
     from main import _export_official_layout
-    return _export_official_layout(wd, project)
+    return bool(_export_official_layout(wd, project).get("exported"))
 
 
 def boot_and_probe(wd: Path, timeout: float = 60.0) -> dict:

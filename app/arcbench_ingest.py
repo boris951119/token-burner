@@ -118,6 +118,12 @@ def render_folder_summary(tree: dict, *, web_port: int = 3301) -> str:
             "种子夹具契约将在拆分与模块开发阶段提供全文。讨论阶段只做"
             "架构/职责/风险评估，不要展开单条需求的实现细节。"
         )
+        lines.append("")
+        lines.append(
+            "硬约束：收敛出的 spec.md 必须逐条显式写出上面每个 ATOMIC id"
+            "（例如 `REQ-1-1-1`），禁止只写模块名或用「等功能」省略——"
+            "漏点名的 id 会在后续对账里被标为未认领。"
+        )
     return "\n".join(lines)
 
 

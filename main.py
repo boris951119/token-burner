@@ -136,32 +136,56 @@ _KNOWN_RELAY_FALLBACKS = ("openai/minimax-m3", "openai/glm-5.3")
 
 
 def _export_official_layout(workdir: Path, project_dir: Path | None,
-                            note: str = "") -> bool:
+                            note: str = "", requirement: str = "") -> dict:
     """把项目按官方 runner 布局落地（backend/ + frontend/）。
 
-    返回是否真正导出。导出是交付的最后一步：它失败不该改变交付终态
+    返回摘要 dict（至少含 exported: bool；成功时透传 export_probe）。
+    导出是交付的最后一步：它失败不该改变交付终态
     （抢先交付那份仍在位可启，且 exit 1 = 不评分，改判失败换不来分），
     但必须留一条可 grep 的痕迹（异常上抛会把已完成的交付换成 exit 1）。
     """
+    empty = {"exported": False, "export_probe": None}
     if project_dir is None:
-        return False
+        return empty
     global _export_busy
     _export_busy = True
     try:
         from app.platform_export import export_platform_layout
 
-        summary = export_platform_layout(workdir, project_dir)
+        anchors: list[str] = []
+        if requirement:
+            try:
+                from app.utils.entry_surface import entry_anchors
+                anchors = entry_anchors(requirement)
+            except Exception:
+                anchors = []
+        summary = export_platform_layout(
+            workdir, project_dir, entry_anchors=anchors)
         print("[export] 官方布局已落地"
               f"{'（' + note + '）' if note else ''}: "
               f"backend={summary['backend_files']}文件, "
               f"frontend={summary['frontend_files']}文件, "
               f"入口={summary.get('entry') or 'author'}", flush=True)
-        return True
+        probe = summary.get("export_probe") or {}
+        if probe and not probe.get("ok"):
+            print("[export] 终局起服探针未全绿（交付仍落地，见 [export-probe]）"
+                  f": detail={probe.get('detail')}", flush=True)
+        elif probe and probe.get("ok"):
+            print("[export] 起服探针全绿（health+home）→ 验收走快车道，"
+                  "尽快交 Stage3", flush=True)
+        out = dict(summary)
+        out["exported"] = True
+        return out
     except Exception as exc:
         print(f"[export] 布局适配失败（交付不受影响）: {exc!r}", flush=True)
-        return False
+        return empty
     finally:
         _export_busy = False
+
+
+def _probe_green(export_summary: dict | None) -> bool:
+    probe = (export_summary or {}).get("export_probe") or {}
+    return bool(probe.get("ok"))
 
 
 def _has_product_code(project_dir) -> bool:
@@ -188,7 +212,8 @@ def _salvage_export(workdir: Path) -> bool:
             continue
         if not _has_product_code(cand):
             continue
-        return _export_official_layout(workdir, cand, note="崩溃兜底交付")
+        return bool(_export_official_layout(
+            workdir, cand, note="崩溃兜底交付").get("exported"))
     return False
 
 
@@ -686,43 +711,83 @@ def main(argv: list[str] | None = None) -> int:
         # 交付两段式验收（r2/r4 演练取证：逐模块门禁覆盖不了组装级缺陷；
         # 基础冒烟覆盖不了旅程级缺陷——评测方是 Playwright 走用户旅程）
         if result.project_dir is not None:
-            # 抢先导出：验收段可以跑几个小时，而官方侧的超时/OOM/预算截断
-            # 都是 SIGKILL——那时末尾这次导出根本不会执行，已经写完的代码
-            # 等于没写（输出目录里只有生成中间态）。先落一份可运行产物，
-            # 验收后按最终态覆盖（导出幂等：先清后写）。
-            _export_official_layout(workdir, result.project_dir,
-                                    note="抢先交付（验收前）")
-            from app.arcbench_smoke import verify_delivery
+            # 探针已绿：入口修补有 8 分钟墙钟，到点仍终局导出 + run_completed。
+            early = _export_official_layout(workdir, result.project_dir,
+                                           note="抢先交付（验收前）",
+                                           requirement=requirement)
+            if _probe_green(early):
+                # ed77881：整段跳过验收能交卷，但首页不是真入口时官方 0/100。
+                # 只留一轮入口修补，墙钟 8 分钟，到点无论如何 run_completed。
+                print("[probe-fast] 探针已绿 → 入口修补上限 8 分钟，"
+                      "到点强制交 Stage3", flush=True)
+                # 顶层已 import threading；此处再 import 会让整函数把
+                # threading 当局部名 → 前面看门狗 Thread(...) UnboundLocalError
+                # （57e3 题面 vision 后立刻崩，只交骨架，0/100）。
+                box: dict = {}
 
-            try:
-                ok, report = verify_delivery(
-                    result.project_dir, requirement, settings,
-                    requirements_dir=_ring_requirements_dir(req_dir),
-                )
-            except Exception as exc:
-                # 验收器崩溃吃掉的是「已经写完的整个项目」：此刻产物齐备，
-                # 退出 1 = 平台不评分 = 全部白做。教练摔了也要把学生送进考场。
-                import traceback
+                def _bounded():
+                    try:
+                        from app.arcbench_smoke import verify_delivery
+                        box["r"] = verify_delivery(
+                            result.project_dir, requirement, settings,
+                            requirements_dir=_ring_requirements_dir(req_dir),
+                            probe_green=True,
+                            repair_budget_s=8 * 60,
+                        )
+                    except Exception as exc:
+                        box["e"] = exc
 
-                traceback.print_exc()
-                ok = True
-                report = f"验收器内部故障（不判失败，照常交付）: {exc!r}\n" \
-                    + traceback.format_exc()[-300:]
-            print(f"[verify] {'PASS' if ok else 'FAIL'}", flush=True)
-            print(f"[verify] {report[-600:]}", flush=True)
-            # 平台 v6-1 取证（¥47/5.7h 白扔）：exit 1 = 平台不评分 = 0 分，
-            # 与拒绝交付等值且更亏。验收是教练不是评判者——FAIL 也照常
-            # 交付（评分只会更好），失败详情写入交付摘要留痕。
-            if not ok:
+                worker = threading.Thread(target=_bounded, daemon=True)
+                worker.start()
+                worker.join(8 * 60 + 20)
+                if worker.is_alive():
+                    print("[probe-fast] 入口修补超时，强制交 Stage3", flush=True)
+                    report = "入口修补超时"
+                    ok = False
+                elif box.get("e"):
+                    ok = True
+                    report = f"入口修补异常（照常交付）: {box['e']!r}"
+                else:
+                    ok, report = box.get("r") or (True, "")
                 result.deliverable_summary = (
-                    "交付完成（内部验收未通过，已尽力修复——详情见 verify "
-                    "报告尾部）: " + report[-200:]
+                    (result.deliverable_summary or "交付完成")
+                    + "（probe-fast：探针已绿，入口修补后交 Stage3）"
+                    + ("" if ok else " " + str(report)[-160:])
                 )
+            else:
+                from app.arcbench_smoke import verify_delivery
+
+                try:
+                    ok, report = verify_delivery(
+                        result.project_dir, requirement, settings,
+                        requirements_dir=_ring_requirements_dir(req_dir),
+                        probe_green=False,
+                    )
+                except Exception as exc:
+                    # 验收器崩溃吃掉的是「已经写完的整个项目」：此刻产物齐备，
+                    # 退出 1 = 平台不评分 = 全部白做。教练摔了也要把学生送进考场。
+                    import traceback
+
+                    traceback.print_exc()
+                    ok = True
+                    report = f"验收器内部故障（不判失败，照常交付）: {exc!r}\n" \
+                        + traceback.format_exc()[-300:]
+                print(f"[verify] {'PASS' if ok else 'FAIL'}", flush=True)
+                print(f"[verify] {report[-600:]}", flush=True)
+                # 平台 v6-1 取证（¥47/5.7h 白扔）：exit 1 = 平台不评分 = 0 分，
+                # 与拒绝交付等值且更亏。验收是教练不是评判者——FAIL 也照常
+                # 交付（评分只会更好），失败详情写入交付摘要留痕。
+                if not ok:
+                    result.deliverable_summary = (
+                        "交付完成（内部验收未通过，已尽力修复——详情见 verify "
+                        "报告尾部）: " + report[-200:]
+                    )
         # 官方 runner 布局适配（6 平台提交取证：布局违约是主死因——
         # 内部 verify PASS 也因缺 frontend//backend/ 被判模板不完整）。
         # 次序（9/23 交付路径审计取证）：先换入最终态、后报 run_completed
         # ——平台若在完成事件处取件，先报事件交出去的就是验收前的旧代码。
-        _export_official_layout(workdir, result.project_dir)
+        _export_official_layout(workdir, result.project_dir,
+                                requirement=requirement)
         if (result.project_dir is not None
                 and not (Path(workdir) / "backend" / "main.py").is_file()):
             # 只留痕不改判：exit 1 = 不评分，与「有产物但判它失败」等价，
@@ -743,7 +808,7 @@ def main(argv: list[str] | None = None) -> int:
     # 摘要如实带上终态名与「未走验收」，不冒充完成（r10 诚实不变量）。
     partial = getattr(result, "project_dir", None)
     if _has_product_code(partial) and _export_official_layout(
-            workdir, Path(partial)):
+            workdir, Path(partial), requirement=requirement).get("exported"):
         bridge.run_completed(
             f"{result.kind}·部分交付（未走验收，按现状导出）: "
             + (result.deliverable_summary or "")[:300])

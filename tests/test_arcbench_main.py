@@ -335,12 +335,9 @@ class TestRunnerModelAutocomplete:
         _apply_runner_model(settings)
         return settings
 
-    def test_shipped_config_is_the_trial_formation(self, monkeypatch):
-        """v42-4：随包 config.json 就是试跑档位——注入 flash 后必须排成
-        主=flash / 开发=qwen3.7-plus / 测试=glm-5.3-flash。
-        换腿依据首跑真台账（输出占 74%、开发占 70%）：三条腿里 flash 单价
-        最低，贵的是 pro 与 qwen3.7-max 两条副腿。本测试同时是「上传比赛
-        包前记得翻回官方档位」的示警线——档位一改它就先红。"""
+    def test_shipped_config_is_the_official_formation(self, monkeypatch):
+        """v44 P0：随包 config.json 必须是正式档——帽关闭、specs 开、
+        官方三腿。试跑档（1.6M 帽 / specs off / 便宜腿）不得再默默随包。"""
         import json
         from pathlib import Path
 
@@ -350,14 +347,17 @@ class TestRunnerModelAutocomplete:
         cfg = Path(entry.__file__).resolve().parent / "config.json"
         raw = json.loads(cfg.read_text(encoding="utf-8"))
         loaded = load_settings(config_file=cfg)
-        assert loaded.max_task_tokens_cap == raw["max_task_tokens_cap"]
-        assert loaded.selftest_specs_enabled is False
-        s = self._apply(monkeypatch, "deepseek-v4-flash",
-                        "https://api.arc-bench.com/v1", True, raw["models"])
-        assert _model_triplet(s.models) == (
-            "openai/deepseek-v4-flash", "openai/qwen3.7-plus",
-            "openai/glm-5.3-flash")
-
+        assert int(raw.get("max_task_tokens_cap") or 0) == 0
+        assert raw.get("selftest_specs_enabled", True) is True
+        assert loaded.max_task_tokens_cap == 0
+        assert loaded.selftest_specs_enabled is True
+        s = self._apply(monkeypatch, "deepseek-v4-pro",
+                        "https://api.arc-bench.com/v1",
+                        True, raw["models"])
+        assert set(_model_triplet(s.models)) == {
+            "openai/deepseek-v4-pro", "openai/deepseek-v4-flash",
+            "openai/qwen3.7-max"}
+        assert s.models[0] == "openai/deepseek-v4-pro"
     def test_official_relay_single_model_autocompletes(self, monkeypatch):
         s = self._apply(monkeypatch, "deepseek-v4-pro",
                         "https://api.arc-bench.com/v1",
@@ -624,7 +624,7 @@ class TestBudgetPartialDelivery:
         called = []
         monkeypatch.setattr(
             "app.platform_export.export_platform_layout",
-            lambda workdir, pd: (called.append(str(pd))
+            lambda workdir, pd, **_k: (called.append(str(pd))
                                  or {"backend_files": 3, "frontend_files": 0}))
         rc = entry.main([str(req_dir), "-o", str(out), "--mode", "auto"])
         assert rc == 0                                   # 换取被评分的机会
@@ -643,7 +643,7 @@ class TestBudgetPartialDelivery:
         _patch_llm_paths(monkeypatch, PipelineResult(
             kind="budget_exceeded", project_dir=self._partial(tmp_path, "p2")))
 
-        def boom(workdir, pd):
+        def boom(workdir, pd, **_k):
             raise RuntimeError("布局导出炸了")
 
         monkeypatch.setattr("app.platform_export.export_platform_layout", boom)
@@ -664,7 +664,7 @@ class TestBudgetPartialDelivery:
         called = []
         monkeypatch.setattr(
             "app.platform_export.export_platform_layout",
-            lambda workdir, pd: (called.append(str(pd))
+            lambda workdir, pd, **_k: (called.append(str(pd))
                                  or {"backend_files": 1, "frontend_files": 0}))
         assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 0
         assert called == [str(proj)]
@@ -689,7 +689,7 @@ class TestBudgetPartialDelivery:
         called = []
         monkeypatch.setattr(
             "app.platform_export.export_platform_layout",
-            lambda w, p: (called.append(str(p)) or {}))
+            lambda w, p, **_k: (called.append(str(p)) or {}))
         assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 1
         assert called == []
 
@@ -721,7 +721,7 @@ class TestCrashSalvage:
         called = []
         monkeypatch.setattr(
             "app.platform_export.export_platform_layout",
-            lambda workdir, pd: (called.append(str(pd))
+            lambda workdir, pd, **_k: (called.append(str(pd))
                                  or {"backend_files": 1, "frontend_files": 0}))
         assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 0
         assert called == [str(proj)], "兜底取工作区里最新的项目目录"
@@ -749,7 +749,7 @@ class TestCrashSalvage:
         called = []
         monkeypatch.setattr(
             "app.platform_export.export_platform_layout",
-            lambda w, p: (called.append(str(p)) or {}))
+            lambda w, p, **_k: (called.append(str(p)) or {}))
         assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 1
         assert called == []
         assert "管线异常" in _events_text(out)
@@ -762,7 +762,7 @@ class TestCrashSalvage:
         called = []
         monkeypatch.setattr(
             "app.platform_export.export_platform_layout",
-            lambda w, p: called.append(p) or {})
+            lambda w, p, **_k: called.append(p) or {})
         assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 1
         assert called == []
 
@@ -782,8 +782,9 @@ def test_export_precedes_verify_so_a_kill_still_ships(monkeypatch, tmp_path,
         lambda *a, **k: (order.append("verify") or (True, "verify ok")))
     monkeypatch.setattr(
         "app.platform_export.export_platform_layout",
-        lambda w, p: (order.append("export")
-                      or {"backend_files": 1, "frontend_files": 1}))
+        lambda w, p, **_k: (order.append("export")
+                      or {"backend_files": 1, "frontend_files": 1,
+                          "export_probe": {"ok": False}}))
     rc = entry.main(
         [str(req_dir), "-o", str(out), "--type", "web", "--mode", "auto"])
     assert rc == 0

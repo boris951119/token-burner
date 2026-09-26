@@ -522,6 +522,33 @@ class Pipeline:
             confirm = discussion.confirm_spec(outcome, spec_confirm)
             final_spec = confirm.spec_md
 
+            # 三刀②：收敛后零 LLM 对账 spec 点名 REQ vs 题面 ATOMIC 总数
+            try:
+                from app.utils.spec_req_audit import (
+                    annotate_spec_with_missing, audit_spec_req_coverage,
+                    persist_spec_req_report,
+                )
+                spec_req = audit_spec_req_coverage(requirement, final_spec)
+                sessions = (
+                    self.file_manager.get_project(team.project_id).root
+                    / "sessions")
+                persist_spec_req_report(spec_req, sessions)
+                final_spec = annotate_spec_with_missing(final_spec, spec_req)
+                print(
+                    f"[spec↔REQ] {spec_req.ratio} 条已在 spec 点名"
+                    + (f"（缺 {len(spec_req.missing)}）"
+                       if spec_req.missing else ""),
+                    flush=True,
+                )
+                self._emit(
+                    "spec_req_coverage",
+                    mentioned=len(spec_req.mentioned),
+                    required=len(spec_req.required),
+                    missing=list(spec_req.missing)[:20],
+                )
+            except Exception as exc:
+                print(f"[spec↔REQ] 对账降级: {exc!r}"[:160], flush=True)
+
             # 14 章：git init + spec 确认后阶段提交
             git = self._git()
             project_root = self.file_manager.get_project(team.project_id).root
@@ -572,6 +599,50 @@ class Pipeline:
                 )]
                 interfaces = {}
             order = builder.build_order(plans)
+            # P1-A：ATOMIC 覆盖闸——每条原子需求必须有主人；未覆盖则机械补挂
+            # 进最像模块的职责（零 LLM）。不 raise、不改交付口径。
+            coverage_report = None
+            try:
+                from app.utils.atomic_coverage import (
+                    enforce_atomic_coverage, persist_coverage_report,
+                )
+                coverage_report = enforce_atomic_coverage(requirement, plans)
+                handle = self.file_manager.get_project(team.project_id)
+                if handle is not None:
+                    persist_coverage_report(handle.root, coverage_report)
+                print(
+                    f"[coverage] ATOMIC={len(coverage_report.required)} "
+                    f"已认领={len(coverage_report.owned)} "
+                    f"补挂={len(coverage_report.assigned)} "
+                    f"仍缺={len(coverage_report.uncovered)} "
+                    f"重复={len(coverage_report.duplicates)}",
+                    flush=True,
+                )
+                self._emit(
+                    "atomic_coverage",
+                    required=len(coverage_report.required),
+                    owned=dict(coverage_report.owned),
+                    assigned=dict(coverage_report.assigned),
+                    uncovered=list(coverage_report.uncovered)[:20],
+                )
+            except Exception as exc:
+                print(f"[coverage] 覆盖闸降级: {exc!r}", flush=True)
+            # P1-D：领域内核落盘 + 职责注解（只增不改）
+            try:
+                from app.utils.domain_kernels import (
+                    annotate_plans_with_kernels, ensure_domain_kernels,
+                )
+                annotate_plans_with_kernels(plans, requirement)
+                handle = self.file_manager.get_project(team.project_id)
+                if handle is not None:
+                    code_root = handle.root / "code"
+                    code_root.mkdir(parents=True, exist_ok=True)
+                    written = ensure_domain_kernels(code_root, requirement)
+                    if written:
+                        print(f"[domain-kernel] 已落盘: {', '.join(written)}",
+                              flush=True)
+            except Exception as exc:
+                print(f"[domain-kernel] 降级: {exc!r}", flush=True)
             if interfaces:
                 # factory26：契约快照事件（平台桥接层登记 traceability，
                 # 工作台无消费者时零成本）
@@ -605,7 +676,9 @@ class Pipeline:
                             peer_lines.append(
                                 f"- {mod_name}: {', '.join(exports[:8])}")
                     if peer_lines:
-                        dev_loop.peer_exports_summary = (
+                        # peer_exports 在 _develop_and_deliver 里新建 DevLoop，
+                        # 这里只把摘要挂到 pipeline 临时属性，下面传入
+                        self._peer_exports_summary = (
                             "## 全模块导出符号清单（组装模块将按这些名字 import，"
                             "你的模块必须导出契约中列出的符号）\n"
                             + "\n".join(peer_lines)
@@ -624,6 +697,7 @@ class Pipeline:
                 team, route, plans, interfaces, order, guard, mode,
                 feedback_fn, user_feedback, module_results, stage_box,
                 research_context=research_context,
+                requirement=requirement,
             )
             # 任务完成 → 清理中断现场标记
             handle = self.file_manager.get_project(team.project_id)
@@ -682,6 +756,7 @@ class Pipeline:
         module_results: dict,
         stage_box: list[str] | None = None,
         research_context: str = "",
+        requirement: str = "",
     ) -> PipelineResult:
         """模块开发循环 → _shared 回归 → 反馈环 → 交付（run / resume 共用）。
 
@@ -690,9 +765,17 @@ class Pipeline:
 
         research_context：M10-3 Researcher 摘要（已含数据边界治理），
         空串 = 未触发研究（零行为变化）。
+        requirement：题面全文——覆盖闸/领域内核续跑补落盘可能用到。
         """
         git = self._git()
         project_root = self.file_manager.get_project(team.project_id).root
+        # P1-D 续跑兜底：内核文件缺失则补（已存在跳过）
+        if requirement:
+            try:
+                from app.utils.domain_kernels import ensure_domain_kernels
+                ensure_domain_kernels(project_root / "code", requirement)
+            except Exception:
+                pass
         dev_loop = DevLoopEngine(
             llm=self.llm,
             dev_model=team.dev_model,
@@ -704,6 +787,10 @@ class Pipeline:
             research_context=research_context,
             main_model=team.main_model,  # factory26 r7e：模型级降级备胎
         )
+        peer = getattr(self, "_peer_exports_summary", "") or ""
+        if peer:
+            dev_loop.peer_exports_summary = peer
+            self._peer_exports_summary = ""
         self._bind_executor_project(team.project_id)
         # 14.4：_shared/ 内容签名基线（变更检测）
         shared_baseline = self.file_manager.shared_signature(team.project_id)

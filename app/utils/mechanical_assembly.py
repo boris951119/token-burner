@@ -167,6 +167,17 @@ def create_app() -> Flask:
 {chr(10).join(init_calls) if init_calls else "        pass"}
 
 {chr(10).join(bp_reg) if bp_reg else "    pass"}
+    # 业务蓝图没挂首页时机械补一个可渲染 /——官方评测从首页进，
+    # 只有 health 绿而 / 404 = 可评分但全红；两端都没有 = 起服契约残缺。
+    if not any(getattr(r, "rule", None) == "/" for r in app.url_map.iter_rules()):
+        @app.route("/")
+        def _assembled_home():
+            return (
+                "<html><body><h1>Application ready</h1>"
+                "<p>Mechanical assembly fallback home.</p>"
+                "<a href=\\"/api/health\\">health</a>"
+                "</body></html>"
+            ), 200, {{"Content-Type": "text/html; charset=utf-8"}}
     return app
 
 
@@ -214,7 +225,7 @@ def generate_app_main_fastapi(surfaces: list[ModuleSurface]) -> str:
 __arcbench_assembled__ = True  # 入口择优时让位作者入口
 
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 {chr(10).join(imports)}
 
@@ -229,6 +240,15 @@ def create_app() -> FastAPI:
 {chr(10).join(init_calls)}
 
 {chr(10).join(router_reg) if router_reg else "    pass"}
+    if not any(getattr(r, "path", None) == "/" for r in app.routes):
+        @app.get("/")
+        def _assembled_home():
+            return HTMLResponse(
+                "<html><body><h1>Application ready</h1>"
+                "<p>Mechanical assembly fallback home.</p>"
+                "<a href=\\"/api/health\\">health</a>"
+                "</body></html>"
+            )
     return app
 
 
@@ -457,11 +477,48 @@ def probe_entries(code_dir: Path, timeout: float = 45.0) -> dict | None:
             "missing": [str(x) for x in data.get("missing") or []]}
 
 
-def _stdlib_or_local(name: str) -> bool:
-    """缺失名是不是「装包也救不回来」的那一类（标准库/本项目自己的包）。"""
-    if name in set(getattr(sys, "stdlib_module_names", ())):
+def _declared_req_names(code_dir: Path) -> set[str]:
+    """requirements.txt 里声明的顶层包名（归一化：小写、_/- 互通）。"""
+    req = Path(code_dir) / "requirements.txt"
+    names: set[str] = set()
+    if not req.is_file():
+        return names
+    try:
+        text = req.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return names
+    for line in text.splitlines():
+        line = line.strip()
+        if (not line or line.startswith("#") or line.startswith("-")
+                or line.startswith(".")):
+            continue
+        # flask>=3.0 / pillow[extra]==10 → flask / pillow
+        name = re.split(r"[<>=!~;\\[]", line, 1)[0].strip()
+        if name:
+            names.add(name.lower().replace("-", "_"))
+    return names
+
+
+def _stdlib_or_local(name: str, declared: set[str] | None = None) -> bool:
+    """缺失名是不是「装包也救不回来 / 不该去 pip」的那一类。
+
+    标准库与 `_shared` 永远是产物侧问题。另外：不在导出
+    requirements.txt 里的缺失名一律视为本地产物缺陷（业务模块 import
+    了一个从未生成的包）——旧口径会把它当成第三方依赖、放弃装壳去 pip，
+    容器装不上 → SystemExit → exit 1 = 不评分（e482 同类路径）。
+    """
+    root = (name or "").split(".")[0]
+    if not root:
         return True
-    return name in {"_shared"}            # 共享层缺失是产物缺陷，不是依赖缺陷
+    if root in set(getattr(sys, "stdlib_module_names", ())):
+        return True
+    if root in {"_shared"}:
+        return True
+    if declared is not None:
+        # 未声明 = 不是真第三方依赖缺口，照常装壳
+        if root.lower().replace("-", "_") not in declared:
+            return True
+    return False
 
 
 def ensure_entry(code_dir: Path) -> dict | None:
@@ -476,9 +533,9 @@ def ensure_entry(code_dir: Path) -> dict | None:
     这件事，于是保底壳没写、启动器 raise SystemExit、整跑不评分。现按真导入探测
     判三种终态：
       ① 探到活入口 → 不动（作者修复永不被旁路）；
-      ② 探不到活入口、但缺失名里有第三方包 → 判「依赖没装」的不确定态，沿用旧
-         文本口径（`_bootstrap_deps` 那条腿不能被抢：装上就能起来）；
-      ③ 探不到活入口也没缺包 → 作者入口确实是坏的，装配保底壳，并把探测到的
+      ② 探不到活入口、但缺失名里有**已声明的**第三方包 → 判「依赖没装」的
+         不确定态，沿用旧文本口径（`_bootstrap_deps` 那条腿不能被抢：装上就能起来）；
+      ③ 探不到活入口也没缺已声明包 → 作者入口确实是坏的，装配保底壳，并把探测到的
          坏包从装配清单里剔除（隔离病灶，不是造内容：壳只挂真能 import 的蓝图）。
     """
     code_dir = Path(code_dir)
@@ -486,8 +543,9 @@ def ensure_entry(code_dir: Path) -> dict | None:
     probe = probe_entries(code_dir)
     if probe and probe["live"]:
         return None
+    declared = _declared_req_names(code_dir)
     if text_entry and (probe is None or any(
-            not _stdlib_or_local(m) for m in probe["missing"])):
+            not _stdlib_or_local(m, declared) for m in probe["missing"])):
         return None
     dead_roots = sorted({k.split(".")[0] for k in (probe or {}).get("dead", {})})
     return assemble(code_dir, exclude=dead_roots)

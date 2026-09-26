@@ -242,6 +242,39 @@ class TestInterfacesReady:
         assert [c[1]["interface_id"] for c in rt.traceability.calls
                 if c[0] == "upsert_interface"] == ["booking::book"]
 
+    def test_atomic_ids_replace_module_names(self):
+        """官方 feature 率认 ATOMIC id。覆盖闸把模块挂到 REQ-* 上之后，
+        接口与测试都必须挂这些号，而不是文件夹名或模块名。"""
+        tree = {
+            "children": [
+                {"type": "FOLDER", "id": "F1", "name": "Sheets", "children": [
+                    {"type": "ATOMIC", "id": "REQ-1.1", "name": "Create"},
+                    {"type": "ATOMIC", "id": "REQ-1.2", "name": "Rename"},
+                ]},
+            ],
+        }
+        rt = _FakeRuntime()
+        bridge = ArcBenchBridge(runtime=rt)
+        bridge.store_tree(tree)
+        bridge.handle("atomic_coverage", {
+            "owned": {"REQ-1.1": "sheets", "REQ-1.2": "sheets"},
+            "assigned": {},
+        })
+        bridge.handle("interfaces_ready", {"interfaces": {
+            "sheets": {"exports": ["create()"], "public_api": []},
+        }})
+        upserts = [c for c in rt.traceability.calls
+                   if c[0] == "upsert_interface"]
+        assert upserts[0][1]["req_ids"] == ["REQ-1.1", "REQ-1.2"]
+        bridge.handle("module_done", {
+            "module": "sheets", "status": "SUCCESS", "message": "ok",
+        })
+        tests = [c for c in rt.traceability.calls if c[0] == "upsert_test"]
+        assert {t[1]["req_id"] for t in tests} == {"REQ-1.1", "REQ-1.2"}
+        done = {c[1][0] for c in rt.events.calls
+                if c[0] == "mark_implementation_done"}
+        assert done == {"REQ-1.1", "REQ-1.2"}
+
 
 class TestModuleTestRegistration:
     def test_success_registers_passing_test_and_implements_interfaces(self):
@@ -252,7 +285,7 @@ class TestModuleTestRegistration:
             {"module": "auth", "status": "SUCCESS", "fix_attempts": 0},
         )
         tests = [c for c in rt.traceability.calls if c[0] == "upsert_test"]
-        assert tests[0][1]["test_id"] == "test_auth"
+        assert tests[0][1]["test_id"] == "test_auth::F1"
         assert tests[0][1]["req_id"] == "F1"
         assert tests[0][1]["passed"] is True
         impl = [c for c in rt.traceability.calls

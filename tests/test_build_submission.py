@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import io
+import json
 import zipfile
 from pathlib import Path
 
@@ -48,11 +49,66 @@ def test_denied_rules(rel, denied):
     assert bool(got) is denied, f"{rel} → {got}"
 
 
+def test_assert_official_profile_accepts_shipped_config():
+    problems = bs.assert_official_profile()
+    assert problems == [], problems
+
+
+def test_assert_official_profile_rejects_trial_cap(tmp_path):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        '{"models":["openai/deepseek-v4-pro","openai/deepseek-v4-flash",'
+        '"openai/qwen3.7-max"],'
+        '"max_task_tokens_cap":1600000,'
+        '"selftest_specs_enabled":true}',
+        encoding="utf-8")
+    problems = bs.assert_official_profile(cfg)
+    assert any("硬帽" in p for p in problems), problems
+
+
+def test_assert_official_profile_rejects_trial_models(tmp_path):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        '{"models":["openai/qwen3.7-plus","openai/glm-5.3",'
+        '"openai/deepseek-v4-flash"],'
+        '"max_task_tokens_cap":0,'
+        '"selftest_specs_enabled":true}',
+        encoding="utf-8")
+    problems = bs.assert_official_profile(cfg)
+    assert any("试跑档" in p for p in problems), problems
+
+
+def test_assert_official_profile_rejects_specs_off(tmp_path):
+    cfg = tmp_path / "config.json"
+    cfg.write_text(
+        '{"models":["openai/deepseek-v4-pro","openai/deepseek-v4-flash",'
+        '"openai/qwen3.7-max"],'
+        '"max_task_tokens_cap":0,'
+        '"selftest_specs_enabled":false}',
+        encoding="utf-8")
+    problems = bs.assert_official_profile(cfg)
+    assert any("selftest_specs_enabled" in p for p in problems), problems
+
+
 def _fake_tree(root: Path) -> None:
     (root / "app").mkdir(parents=True)
     (root / "app" / "pipeline.py").write_text("print('ok')\n", encoding="utf-8")
     (root / "app" / "new_module.py").write_text("x = 1\n", encoding="utf-8")
     (root / "main.py").write_text("def main():\n    return 0\n", encoding="utf-8")
+    # 正式档位断言读 ROOT/config.json；假树也得给一份官方档，否则测的是
+    # 「缺 config」而不是「缩水/密钥」那条路径。
+    (root / "config.json").write_text(
+        json.dumps({
+            "models": [
+                "openai/deepseek-v4-pro",
+                "openai/deepseek-v4-flash",
+                "openai/qwen3.7-max",
+            ],
+            "max_task_tokens_cap": 0,
+            "selftest_specs_enabled": True,
+        }),
+        encoding="utf-8",
+    )
     (root / "release").mkdir()
     (root / "release" / "token-burner.exe").write_bytes(b"MZ")
 
@@ -81,6 +137,7 @@ def test_build_shape_drop_is_fatal_until_allowed(tmp_path, capsys):
     assert rc == 1                                   # 静默缩水必须响
     assert "app/gone_module.py" in capsys.readouterr().out
     assert set(names) == {"app/pipeline.py", "app/new_module.py", "main.py",
+                          "config.json",
                           "template/backend/main.py", "skills/write_code/SKILL.md"}
     assert "release/injected.exe" not in names       # Blank 侧同样过滤
     monkey2 = pytest.MonkeyPatch()

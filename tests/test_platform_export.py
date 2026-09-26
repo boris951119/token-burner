@@ -595,11 +595,92 @@ def test_author_health_route_is_not_overwritten(tmp_path, capsys):
         "from flask import Flask, jsonify\n"
         "app = Flask(__name__)\n"
         "@app.route('/api/health')\n"
-        "def h():\n    return jsonify(status='ready')\n"))
+        "def h():\n    return jsonify(status='ready')\n"
+        "@app.route('/')\n"
+        "def home():\n    return '<html><body>ok</body></html>'\n"))
     mod = _exec_entry(be, "runner_health_keep")
     assert mod.app.test_client().get("/api/health").get_json() \
         == {"status": "ready"}
-    assert "补挂" not in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "/api/health 缺失" not in out
+    assert "/ 缺失" not in out
+
+
+def test_home_backfilled_when_author_omits_it(tmp_path, capsys):
+    """e511：作者入口活着 + health 绿，但 / 缺失 → export-probe home-err。"""
+    be = _plain_backend(tmp_path, (
+        "from flask import Flask, jsonify\n"
+        "app = Flask(__name__)\n"
+        "@app.route('/api/health')\n"
+        "def h():\n    return jsonify(status='ok')\n"
+        "@app.route('/api/sheets')\n"
+        "def sheets():\n    return jsonify([])\n"))
+    mod = _exec_entry(be, "runner_home_backfill")
+    rules = {r.rule for r in mod.app.url_map.iter_rules()}
+    assert "/" in rules, f"缺 / 必须补挂: {rules}"
+    client = mod.app.test_client()
+    home = client.get("/")
+    assert home.status_code == 200
+    body = home.get_data(as_text=True).lower()
+    assert "<html" in body or "<body" in body
+    assert client.get("/api/health").status_code == 200
+    assert client.get("/api/sheets").status_code == 200, "补挂不该动业务路由"
+    assert "/ 缺失" in capsys.readouterr().out
+
+
+def test_weak_home_gains_requirement_anchors(tmp_path):
+    """首页是 JSON/空壳、题面入口不在 DOM 里时，补可见链接。"""
+    import json
+
+    be = _plain_backend(tmp_path, (
+        "from flask import Flask, jsonify\n"
+        "app = Flask(__name__)\n"
+        "@app.route('/')\n"
+        "def home():\n    return jsonify(ok=True)\n"
+        "@app.route('/api/health')\n"
+        "def h():\n    return jsonify(status='ok')\n"
+        "@app.route('/sheets')\n"
+        "def sheets():\n    return 'grid'\n"))
+    (be / "arcbench_entry.json").write_text(
+        json.dumps({"anchors": ["New sheet"]}), encoding="utf-8")
+    mod = _exec_entry(be, "runner_entry_wrap")
+    body = mod.app.test_client().get("/").get_data(as_text=True)
+    assert "New sheet" in body
+    assert "<a " in body
+    assert mod.app.test_client().get("/sheets").get_data(as_text=True) == "grid"
+
+
+def test_home_that_already_shows_anchor_is_kept(tmp_path):
+    import json
+
+    be = _plain_backend(tmp_path, (
+        "from flask import Flask, jsonify\n"
+        "app = Flask(__name__)\n"
+        "@app.route('/')\n"
+        "def home():\n"
+        "    return '<html><body><a href=\"/sheets\">New sheet</a></body></html>'\n"
+        "@app.route('/api/health')\n"
+        "def h():\n    return jsonify(status='ok')\n"))
+    (be / "arcbench_entry.json").write_text(
+        json.dumps({"anchors": ["New sheet"]}), encoding="utf-8")
+    mod = _exec_entry(be, "runner_entry_keep")
+    body = mod.app.test_client().get("/").get_data(as_text=True)
+    assert "New sheet" in body
+    assert "Application" not in body
+
+
+def test_author_home_route_is_not_overwritten(tmp_path, capsys):
+    be = _plain_backend(tmp_path, (
+        "from flask import Flask, jsonify\n"
+        "app = Flask(__name__)\n"
+        "@app.route('/')\n"
+        "def home():\n    return '<html><body>author-home</body></html>'\n"
+        "@app.route('/api/health')\n"
+        "def h():\n    return jsonify(status='ok')\n"))
+    mod = _exec_entry(be, "runner_home_keep")
+    body = mod.app.test_client().get("/").get_data(as_text=True)
+    assert "author-home" in body
+    assert "/ 缺失" not in capsys.readouterr().out
 
 
 # ---- 入口择优与本地冒烟闸同构（9/23 交付路径审计取证 P0-4）------------------
@@ -681,3 +762,34 @@ def test_export_failure_keeps_previous_backend(tmp_path, project,
         encoding="utf-8") == "keep me", "在位产物必须整份活到换入那一刻"
     # 换入前的中间态落在点前缀暂存目录里，不污染布局验证
     assert (out / ".export-backend.new").is_dir()
+
+
+def test_export_probe_reports_health_and_home(tmp_path, project, monkeypatch):
+    """v44 P0：终局导出后起服探针——health+首页都绿才算 ok。"""
+    monkeypatch.setenv("TB_EXPORT_PROBE", "1")
+    monkeypatch.setenv("TB_EXPORT_PROBE_WINDOW", "25")
+    out = tmp_path / "out"
+    summary = export_platform_layout(out, project)
+    probe = summary.get("export_probe") or {}
+    assert probe.get("health") is True, probe
+    assert probe.get("ok") is True, probe
+
+
+def test_export_probe_skipped_under_pytest_by_default(tmp_path, project):
+    """默认在 pytest 下跳过探针，避免每例烧满窗口。"""
+    out = tmp_path / "out"
+    summary = export_platform_layout(out, project)
+    assert summary.get("export_probe") is None
+
+
+def test_probe_exported_backend_detects_dead_tree(tmp_path):
+    from app.platform_export import probe_exported_backend
+
+    be = tmp_path / "backend"
+    be.mkdir()
+    (be / "main.py").write_text(
+        "import sys\nsys.exit(2)\n", encoding="utf-8")
+    probe = probe_exported_backend(be, window_s=5)
+    assert probe["health"] is False
+    assert probe["ok"] is False
+    assert "dead" in probe["detail"] or "no-health" in probe["detail"]

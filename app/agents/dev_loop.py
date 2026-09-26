@@ -50,9 +50,21 @@ _MD_DIGEST_LIMIT = 120  # 修复记录失败摘要截断长度（单行可读）
 _USAGE_LINE_LIMIT = 12  # 每个依赖方文件最多展示的引用行数
 _USAGE_FILE_LIMIT = 8   # 最多展示的依赖方文件数
 
-# 单文件超尺寸读数线（批次#68）：v41 那跑 pivot.py 长 1181+ 行，整文件重发
-# 式修复两次各烧约 2 小时且都被语法拒收——超长的文件在这个协议里修不动。
+# 单文件超尺寸读数线（批次#68 / 532193bf3c55）：v41 pivot.py 1181 行、
+# v45 webui_pages 820 行 —— 整文件重发式修复在长文件上必截断空烧。
+# 超线后禁止再走 LLM 整文件重写，按可编译现状冻结，换 Stage3 评分机会。
 _OVERSIZED_LINES = 600
+
+
+def _line_count(code: str) -> int:
+    if not code:
+        return 0
+    return code.count("\n") + 1
+
+
+def _is_oversized(code: str) -> bool:
+    return _line_count(code) > _OVERSIZED_LINES
+
 
 # 12.7/14.4：LLM 输出中的公共层代码标记块（解析后落盘 code/_shared/）
 _SHARED_BLOCK = re.compile(
@@ -231,6 +243,9 @@ class DevLoopEngine:
         均在执行器之前运行——门禁失败不消耗执行预算，直接进修复循环。
         """
         self._active_project_id = project_id
+        # 本模块修复升级已试过、失败过的模型——跨 fix_attempts 累计，
+        # 防止「已排除作者」后仍反复升回同一个刚修挂的备胎（run 735dc60369fd）。
+        self._repair_failed_models: set[str] = set()
         # M15-7：契约同步传给写码（实现必须按契约命名）
         code = self._write_code(module, responsibility, contract=contract)
         # M15-5：契约同步传给测试生成（测试调用必须按契约签名）
@@ -571,6 +586,23 @@ class DevLoopEngine:
                     code, tests, gate_passed,
                 )
 
+            # 超尺寸：整文件重写通道结构性失效（532193：webui_pages 820 行
+            # 两次 finish 间隔 ~64min 台账空烧）。有可编译代码就冻结交付，
+            # 不再换模型整文件重写——通用规则，与具体题面无关。
+            if (not tests_gate_failed) and _is_oversized(code):
+                print(
+                    f"[repair] {module}: 单文件 {_line_count(code):,} 行 > "
+                    f"{_OVERSIZED_LINES}，跳过整文件 LLM 重写，按现状冻结",
+                    flush=True,
+                )
+                return self._finish(
+                    module, project_id, ModuleStatus.FROZEN, fix_attempts,
+                    (f"超尺寸单文件（{_line_count(code)} 行 > "
+                     f"{_OVERSIZED_LINES}）：整文件修复通道失效，"
+                     f"按可编译现状冻结。末次失败: {failure_report[:200]}"),
+                    code, tests, gate_passed,
+                )
+
             # 11.0：超预算 → 立即中止该任务（异常上抛，由 Pipeline 落盘）
             if self.budget_guard is not None:
                 self.budget_guard.ensure_allowed()
@@ -745,8 +777,14 @@ class DevLoopEngine:
                 # 主模型 ⇒ 连打 7 次「修复升级 → 同一个刚失败的模型」＝让它把同
                 # 一份代码再想一遍。升级的判据是「换个没失败过的脑子」：排除的
                 # 必须是**真正写过这份代码的那个模型**。
+                #
+                # run 735dc60369fd：只排除作者还不够——备胎 qwen 修挂后
+                # 下一轮仍升回 qwen（作者还是 deepseek，排除集没进 qwen）。
+                # 本模块已经试过的修复模型也必须累计排除。
                 failed = {self.dev_model,
                           getattr(self, "_last_code_model", "") or self.dev_model}
+                failed |= set(getattr(self, "_repair_failed_models", set()) or ())
+                failed.discard("")
                 # 台账只按历史战绩排序，不认识当前登记表——9/21 取证：
                 # 旧坏跑记下的角色名（dev-model/dev/d）上榜后被
                 # ModelClient 拒绝崩穿管线。只准升级到已登记模型。
@@ -776,6 +814,12 @@ class DevLoopEngine:
                 + self._fix_context(module)
             ),
         )
+        # 无论成败，这轮用过的修复模型下一轮都不再选——成败要等门禁/
+        # 执行才知道，但「同一脑子再想一遍」已被 735dc 实证无效。
+        if fix_attempts >= 2 and repair_model:
+            failed_so_far = set(getattr(self, "_repair_failed_models", set()) or ())
+            failed_so_far.add(repair_model)
+            self._repair_failed_models = failed_so_far
         return self._split_shared(_extract_code(response.content))
 
     # ------------------------------------------------------------------
@@ -1131,12 +1175,13 @@ class DevLoopEngine:
                 else:
                     # 12.3：模块名同名文件（非 main.py）——多模块可同进程导入互不冲突
                     self.file_manager.write_code_file(project_id, module, f"{module}.py", code)
-                    _n = code.count("\n") + 1
+                    _n = _line_count(code)
                     if _n > _OVERSIZED_LINES:
                         # 只出读数不拦交付：整文件重发式修复在长文件上必截断
                         # （本跑 pivot.py 1181 行 = 两次各 ≈2 小时的空烧）
                         print(f"[finish] {module}: 单文件 {_n:,} 行 > {_OVERSIZED_LINES} "
-                              "（超尺寸：修复通道按整文件重发，越长越修不动）",
+                              "（超尺寸：修复通道按整文件重发，越长越修不动；"
+                              "后续修复轮将跳过整文件重写）",
                               flush=True)
                 self.file_manager.write_test_file(
                     project_id, module, f"test_{module}.py", tests

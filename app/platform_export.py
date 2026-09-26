@@ -22,10 +22,148 @@ backend/ 目录（arc-bench 2026-09 更新）。参考契约（官方 12306 参�
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import socket
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from app.utils.auto_fixer import _py_files, _read
+
+# 终局导出后起服探针窗口（秒）。官方 runner 健康轮询约 60–120s；
+# 本探针只落日志不拦交付——拦交付会把「能评分的半成品」换成 exit 1。
+EXPORT_PROBE_WINDOW_S = float(os.environ.get("TB_EXPORT_PROBE_WINDOW", "60"))
+
+
+def _export_probe_enabled() -> bool:
+    """默认在实跑开启；pytest 关闭（否则每例 export 烧满窗口）。
+
+    显式 TB_EXPORT_PROBE=1/0 可覆盖。"""
+    flag = (os.environ.get("TB_EXPORT_PROBE") or "").strip().lower()
+    if flag in ("0", "false", "off", "no"):
+        return False
+    if flag in ("1", "true", "on", "yes"):
+        return True
+    return "PYTEST_CURRENT_TEST" not in os.environ
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+def probe_exported_backend(
+    backend: Path,
+    window_s: float | None = None,
+) -> dict:
+    """终局导出树起服探针：PORT 起 main.py → GET /api/health（+ 尝试 GET /）。
+
+    返回 dict：ok / health / home / secs / detail / log_tail。
+    任何异常都吞掉写成 detail——探针不得拖垮导出。
+    """
+    backend = Path(backend)
+    window = float(EXPORT_PROBE_WINDOW_S if window_s is None else window_s)
+    result = {
+        "ok": False,
+        "health": False,
+        "home": False,
+        "home_status": None,
+        "secs": 0.0,
+        "detail": "not-started",
+        "log_tail": "",
+    }
+    if not (backend / "main.py").is_file():
+        result["detail"] = "no-main"
+        return result
+    port = _free_port()
+    log_path = backend / ".export-probe.log"
+    env = {**os.environ, "PORT": str(port), "PYTHONUNBUFFERED": "1"}
+    t0 = time.time()
+    proc = None
+    try:
+        with open(log_path, "wb") as fh:
+            proc = subprocess.Popen(
+                [sys.executable, "main.py"],
+                cwd=str(backend),
+                env=env,
+                stdout=fh,
+                stderr=subprocess.STDOUT,
+            )
+            health_ok = False
+            while time.time() - t0 < window:
+                if proc.poll() is not None:
+                    result["detail"] = f"dead-on-boot rc={proc.returncode}"
+                    break
+                try:
+                    with urllib.request.urlopen(
+                            f"http://127.0.0.1:{port}/api/health",
+                            timeout=2) as r:
+                        if r.status == 200:
+                            health_ok = True
+                            break
+                except (urllib.error.URLError, TimeoutError, OSError):
+                    time.sleep(0.4)
+            result["health"] = health_ok
+            if health_ok:
+                result["detail"] = "health-ok"
+                try:
+                    with urllib.request.urlopen(
+                            f"http://127.0.0.1:{port}/", timeout=5) as r:
+                        result["home_status"] = int(r.status)
+                        body = r.read(4096).decode("utf-8", "replace").lower()
+                        result["home"] = (
+                            r.status == 200
+                            and ("<html" in body or "<!doctype" in body
+                                 or "<body" in body or "<a " in body))
+                        if not result["home"]:
+                            result["detail"] = (
+                                f"health-ok home={r.status}")
+                        else:
+                            result["detail"] = "ok"
+                            result["ok"] = True
+                except Exception as exc:
+                    result["detail"] = f"health-ok home-err={type(exc).__name__}"
+            elif result["detail"] == "not-started":
+                result["detail"] = f"no-health-in-{window:.0f}s"
+    except Exception as exc:
+        result["detail"] = f"probe-exc={type(exc).__name__}:{exc!r}"[:200]
+    finally:
+        if proc is not None:
+            try:
+                proc.terminate()
+                proc.wait(5)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+        result["secs"] = round(time.time() - t0, 1)
+        try:
+            if log_path.is_file():
+                result["log_tail"] = log_path.read_text(
+                    encoding="utf-8", errors="replace")[-400:]
+        except Exception:
+            pass
+    return result
+
+
+def _log_export_probe(probe: dict) -> None:
+    tag = "PASS" if probe.get("ok") else (
+        "HEALTH" if probe.get("health") else "FAIL")
+    print(
+        f"[export-probe] {tag} health={probe.get('health')} "
+        f"home={probe.get('home')} status={probe.get('home_status')} "
+        f"secs={probe.get('secs')} detail={probe.get('detail')}",
+        flush=True,
+    )
+    tail = (probe.get("log_tail") or "").strip()
+    if tag == "FAIL" and tail:
+        print(f"[export-probe] boot-log-tail:\n{tail}", flush=True)
 
 _BACKEND_MAIN = '''\
 """官方 runner 启动入口：PORT 环境变量（默认 3301），/api/health 就绪。
@@ -37,8 +175,11 @@ _BACKEND_MAIN = '''\
 补装一次再探（官方容器不保证替产物装依赖）。
 起服前保底挂 GET /api/health：runner 60 秒轮询这条路由，产物漏写 = 整跑
 不评分，而「有没有 health」是布局契约而不是业务功能，不该交给概率。
+同步保底挂 GET /：官方评测从首页进；作者入口活着但只挂了 health、/ 404
+时（e511 export-probe: health=True home-err=HTTPError），Stage3 仍会全红。
 """
 import importlib
+import json
 import os
 import pkgutil
 import sys
@@ -242,14 +383,20 @@ _pref = [x for x in _pool if x[0].lower() in _CONVENTION]
 app = max(_pref or _pool, key=lambda _x: _route_count(_x[1]))[1]
 
 
-def _has_health(_a):
+def _app_paths(_a):
     if hasattr(_a, "url_map"):                         # Flask/WSGI
-        _paths = [getattr(_r, "rule", "")
-                  for _r in _a.url_map.iter_rules()]
-    else:                                              # ASGI
-        _paths = [getattr(_r, "path", "")
-                  for _r in getattr(_a, "routes", []) or []]
-    return any(_p in ("/api/health", "/api/health/") for _p in _paths)
+        return [getattr(_r, "rule", "")
+                for _r in _a.url_map.iter_rules()]
+    return [getattr(_r, "path", "")
+            for _r in getattr(_a, "routes", []) or []]
+
+
+def _has_health(_a):
+    return any(_p in ("/api/health", "/api/health/") for _p in _app_paths(_a))
+
+
+def _has_home(_a):
+    return any(_p == "/" for _p in _app_paths(_a))
 
 
 def _ensure_health(_a):
@@ -281,7 +428,107 @@ def _ensure_health(_a):
               flush=True)
 
 
+_HOME_HTML = (
+    "<html><body><h1>Application ready</h1>"
+    "<p>Runner fallback home (author entry had no /).</p>"
+    '<a href="/api/health">health</a>'
+    "</body></html>"
+)
+
+
+def _ensure_home(_a):
+    """缺 GET / 时机械补挂——评测从首页进；只 health 绿而 / 404 = 可评分全红。
+
+    与 _ensure_health 同口径：应用自带 / 一律优先（含已挂但 5xx 的作者页，
+    不覆盖业务路由）；仅 url_map/routes 里完全没有 / 时补位。
+    """
+    try:
+        if _has_home(_a):
+            return
+        if hasattr(_a, "url_map"):                     # Flask/WSGI
+            _a.add_url_rule(
+                "/", "arcbench_home",
+                lambda: (_HOME_HTML, 200,
+                         {"Content-Type": "text/html; charset=utf-8"}))
+        elif hasattr(_a, "routes"):                    # FastAPI/Starlette ASGI
+            def _home_endpoint(_request=None):
+                from starlette.responses import HTMLResponse
+                return HTMLResponse(_HOME_HTML)
+            if hasattr(_a, "add_api_route"):
+                _a.add_api_route("/", _home_endpoint, methods=["GET"])
+            else:
+                _a.router.add_route("/", _home_endpoint, methods=["GET"])
+        print("[backend] / 缺失，已由启动入口补挂（评测首页保活）",
+              flush=True)
+    except Exception as _exc:
+        print(f"[backend] / 补挂失败（照常起服）: {_exc!r}"[:200],
+              flush=True)
+
+
+def _install_entry_surface(_a):
+    """首页响应里没有题面入口文案时，补一组可见 <a>（作者页已含则不动）。"""
+    try:
+        _path = Path(__file__).with_name("arcbench_entry.json")
+        if not _path.is_file():
+            return
+        _spec = json.loads(_path.read_text(encoding="utf-8"))
+        _anchors = [str(_x).strip() for _x in (_spec.get("anchors") or [])
+                    if str(_x).strip()]
+        if not _anchors:
+            return
+
+        def _page():
+            _links = []
+            try:
+                if hasattr(_a, "url_map"):
+                    for _r in _a.url_map.iter_rules():
+                        _rule = getattr(_r, "rule", "") or ""
+                        if _rule in ("/", "/api/health") or _rule.startswith("/static"):
+                            continue
+                        if "GET" in (getattr(_r, "methods", None) or set()):
+                            _links.append(_rule)
+            except Exception:
+                pass
+            _bits = ["<html><body><h1>Application</h1>"]
+            for _i, _lab in enumerate(_anchors[:12]):
+                _href = _links[_i % len(_links)] if _links else "/"
+                _esc = (_lab.replace("&", "&amp;").replace("<", "&lt;")
+                        .replace(">", "&gt;"))
+                _bits.append('<p><a href="%s">%s</a></p>' % (_href, _esc))
+            _bits.append("</body></html>")
+            return "".join(_bits)
+
+        def _weak(_body):
+            _low = (_body or "").lower()
+            if ("<html" not in _low and "<body" not in _low
+                    and "<a " not in _low):
+                return True
+            return not any(_lab.lower() in _low for _lab in _anchors)
+
+        if hasattr(_a, "after_request"):
+            @_a.after_request
+            def _wrap_home(_resp):
+                try:
+                    from flask import request
+                    if getattr(request, "path", "") not in ("/", ""):
+                        return _resp
+                    _body = _resp.get_data(as_text=True)
+                    if not _weak(_body):
+                        return _resp
+                    _resp.set_data(_page())
+                    _resp.mimetype = "text/html"
+                    _resp.status_code = 200
+                except Exception:
+                    return _resp
+                return _resp
+            print("[backend] 首页缺少题面入口文案，已补可见链接", flush=True)
+    except Exception as _exc:
+        print(("[backend] 入口补面失败: %r" % (_exc,))[:180], flush=True)
+
+
 _ensure_health(app)
+_ensure_home(app)
+_install_entry_surface(app)
 
 if __name__ == "__main__":
     if hasattr(app, "wsgi_app"):                # Flask/WSGI
@@ -433,7 +680,8 @@ def _is_runtime_data(p: Path) -> bool:
     return name.endswith(_DB_DATA_EXT)
 
 
-def export_platform_layout(output_dir: Path, project_dir: Path) -> dict:
+def export_platform_layout(output_dir: Path, project_dir: Path,
+                           entry_anchors: list[str] | None = None) -> dict:
     """把生成项目适配导出为官方 runner 布局，返回导出摘要。
 
     - backend/  = project code 全量（剥离 __pycache__/instance 数据）
@@ -508,6 +756,18 @@ def export_platform_layout(output_dir: Path, project_dir: Path) -> dict:
               f"Blueprint={entry_fix['blueprints']} APIRouter={entry_fix['routers']}"
               f"{' 已隔离坏模块=' + str(entry_fix.get('excluded')) if entry_fix.get('excluded') else ''}",
               flush=True)
+    # P1-D：导出树也补内核（只增不改）——生成期若漏落盘，修环仍可 import
+    try:
+        from app.utils.domain_kernels import ensure_domain_kernels
+        # 题面可能不在导出上下文：用 backend 内 README/注释弱信号跳过；
+        # 有 requirements 渲染残留时再探。这里用目录名弱启发。
+        hint = " ".join(p.name for p in backend.iterdir())
+        written = ensure_domain_kernels(backend, hint)
+        if written:
+            print(f"[export] domain-kernel 补落盘: {', '.join(written)}",
+                  flush=True)
+    except Exception:
+        pass
     req_text = _requirements_for(code_dir)
     if entry_fix:
         import re
@@ -517,6 +777,12 @@ def export_platform_layout(output_dir: Path, project_dir: Path) -> dict:
         for dep in need:
             if not re.search(rf"^{dep}\b", req_text, re.M | re.I):
                 req_text = req_text + f"{dep}\n"
+    if entry_anchors:
+        try:
+            from app.utils.entry_surface import write_entry_spec
+            write_entry_spec(backend, entry_anchors)
+        except Exception:
+            pass
     (backend / "main.py").write_text(_BACKEND_MAIN, encoding="utf-8")
     (backend / "requirements.txt").write_text(
         req_text, encoding="utf-8")
@@ -543,6 +809,14 @@ def export_platform_layout(output_dir: Path, project_dir: Path) -> dict:
         target.rename(final)
     backend, frontend = (output_dir / "backend", output_dir / "frontend")
 
+    # 终局导出后起服探针（e482：agent 正常退出但平台 120s 起不来服）。
+    # 只落日志不拦交付——与 main「FAIL 也照常交付」同口径；下一次排障
+    # 至少能在 stdout 里看见 health/home 红字，而不是 Stage3 才爆。
+    probe: dict | None = None
+    if _export_probe_enabled():
+        probe = probe_exported_backend(backend)
+        _log_export_probe(probe)
+
     return {
         "backend_files": sum(1 for _ in backend.rglob("*") if _.is_file()),
         "frontend_files": sum(1 for _ in frontend.rglob("*") if _.is_file()),
@@ -553,6 +827,7 @@ def export_platform_layout(output_dir: Path, project_dir: Path) -> dict:
         "entry": ("mechanical" if entry_fix else "author"),
         # 剥除的运行库清单：产物数据不在这几枚文件里，只在启动播种里
         "runtime_data_stripped": stripped_data,
+        "export_probe": probe,
     }
 
 

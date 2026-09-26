@@ -15,12 +15,60 @@ logs/、_docgen/）。手工攒包在下一次赶时间时必然带出这些残�
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import sys
 import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# 试跑档位（v42-4 / v43）：硬帽 + 关 specs + 便宜三腿。随包交正式赛 =
+# 不评分/半截断气温床；打包时硬失败，禁止「记得翻回去」靠人。
+_TRIAL_MODEL_SETS = (
+    frozenset({"openai/qwen3.7-plus", "openai/glm-5.3",
+               "openai/deepseek-v4-flash"}),
+    frozenset({"openai/deepseek-v4-flash", "openai/qwen3.7-plus",
+               "openai/glm-5.3-flash"}),
+)
+
+
+def assert_official_profile(config_path: Path | None = None) -> list[str]:
+    """正式提交包档位硬断言；返回问题列表（空 = 通过）。"""
+    cfg_path = config_path or (ROOT / "config.json")
+    problems: list[str] = []
+    if not cfg_path.is_file():
+        return [f"缺少 config.json: {cfg_path}"]
+    try:
+        raw = json.loads(cfg_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return [f"config.json 无法解析: {exc!r}"]
+    if not isinstance(raw, dict):
+        return ["config.json 根必须是对象"]
+    cap = raw.get("max_task_tokens_cap", 0)
+    try:
+        cap_n = int(cap)
+    except (TypeError, ValueError):
+        problems.append(f"max_task_tokens_cap 非法: {cap!r}（正式包必须为 0）")
+    else:
+        if cap_n > 0:
+            problems.append(
+                f"试跑硬帽仍开启 max_task_tokens_cap={cap_n}"
+                "（正式包必须为 0）")
+    if raw.get("selftest_specs_enabled", True) is False:
+        problems.append(
+            "selftest_specs_enabled=false（正式包必须 true）")
+    models = raw.get("models") or []
+    if not isinstance(models, list) or not models:
+        problems.append("models 为空或非法")
+    else:
+        norm = frozenset(str(m) for m in models)
+        if norm in _TRIAL_MODEL_SETS:
+            problems.append(
+                f"编队仍是试跑档 {sorted(norm)}——"
+                "正式包请用官方三腿（如 deepseek-v4-pro / "
+                "deepseek-v4-flash / qwen3.7-max）")
+    return problems
 
 # 允许进入提交包的顶层条目（v8 实测形状）
 ALLOW_ROOT = {
@@ -118,7 +166,19 @@ def _content_leaks(zf: zipfile.ZipFile) -> list[str]:
 
 
 def build(out_path: Path, base_zip: Path, blank_zip: Path,
-          allow_drop: bool = False) -> int:
+          allow_drop: bool = False,
+          allow_trial: bool = False) -> int:
+    if not allow_trial:
+        profile_problems = assert_official_profile()
+        if profile_problems:
+            print("[build] 正式档位断言失败（试跑 config 禁止随包上正式赛）:")
+            for p in profile_problems:
+                print("  ", p)
+            print("  翻回官方档后再打包；私有 key 压测若故意用试跑档，"
+                  "加 --allow-trial")
+            return 1
+    else:
+        print("[build] --allow-trial：跳过正式档位断言（仅限私有 key 压测包）")
     base_names = manifest_from_base(base_zip)
     # 以参考包清单为准，再补上"允许根目录下新增的文件"（防新模块漏包）
     picked = set(base_names)
@@ -211,6 +271,9 @@ def main() -> int:
                     help="官方 Blank Template 包：补齐工作树里不存在的脚手架")
     ap.add_argument("--allow-drop", action="store_true",
                     help="认可相比参考包的文件裁剪（默认硬失败）")
+    ap.add_argument("--allow-trial", action="store_true",
+                    help="允许试跑档 config 入包（仅私有 key 压测；"
+                         "正式交分禁止）")
     a = ap.parse_args()
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -218,7 +281,8 @@ def main() -> int:
     if not base.is_file():
         print(f"参考包不存在: {base}", file=sys.stderr)
         return 2
-    return build(out, base, Path(a.blank), allow_drop=a.allow_drop)
+    return build(out, base, Path(a.blank), allow_drop=a.allow_drop,
+                 allow_trial=a.allow_trial)
 
 
 if __name__ == "__main__":
