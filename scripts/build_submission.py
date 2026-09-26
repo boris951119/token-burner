@@ -264,6 +264,8 @@ def build(out_path: Path, base_zip: Path, blank_zip: Path,
     # 提交前硬闸 A+B（不进包；失败则拒出包）
     if not skip_presubmit:
         try:
+            if str(ROOT) not in sys.path:
+                sys.path.insert(0, str(ROOT))
             from scripts.presubmit_gate import run_gate
             report = run_gate(out_path, full=False)
             for c in report.checks:
