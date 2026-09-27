@@ -44,14 +44,24 @@ if _CODE_DIR.is_dir() and str(_CODE_DIR) not in sys.path:
 # 的装配赋值同样静默失效。别名后包名与子模块是同一个对象，读写同源。
 # __path__ 与自引用保住 `import <m>.<m>`、`from <m>.<m> import x`、
 # `python -m <m>.<m>` 与 pkgutil 子模块检索（四形逐一试过）。
+#
+# v53 刀E（d462 尸检）：旧 shim 无条件 `_impl.{m} = _impl` 会把实现里的
+# 同名函数（如 def seed_accounts）覆盖成模块对象 →
+# `from seed_accounts import seed_accounts; seed_accounts()` 炸
+# TypeError: 'module' object is not callable，毒死 create_app / init_db。
+# 自引用仅在同名属性不存在或不可调用时设置；并用 sys.modules 双键
+# 保住 `import {m}.{m}`。
 _PKG_SHIM = '''"""{module} 包入口：包名即实现模块（属性读写与 {module}.{module} 同源）。"""
 import sys as _sys
 
 from . import {module} as _impl
 
 _impl.__path__ = __path__
-_impl.{module} = _impl
+_existing = getattr(_impl, "{module}", None)
+if _existing is None or not callable(_existing):
+    setattr(_impl, "{module}", _impl)
 _sys.modules[__name__] = _impl
+_sys.modules[__name__ + ".{module}"] = _impl
 '''
 
 

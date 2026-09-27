@@ -10,6 +10,7 @@
 | 09-27 17:50 | **INBOX-009 独立判读** sheet `045fe8578302` | 见下方专节；认领刀A+刀B 开工。 |
 | 09-27 18:1x | **INBOX-009 刀A+刀B 完工** | 见下方「施工回执」；刀C/D 未认领。 |
 | 09-27 18:4x | **INBOX-010 刀C+刀D 完工** | 见下方「INBOX-010 施工回执」。 |
+| 09-27 20:0x | **INBOX-011 独立判读 + 刀E** | 见下方专节；shim 修复+同名冲突门禁已落地。 |
 
 ---
 
@@ -77,3 +78,31 @@
 ### 测试 / 纪律
 - 相关套件绿；全量 ~1920 passed（沙箱内 git init 类 ERROR/perf 路径属环境，非本刀回归）。
 - **未打 v53 包**；发车等用户拍板。
+
+---
+
+## INBOX-011 独立判读（Cursor，交付树 `.tmp/v52-github/`，先复核再对齐 ZCode）
+
+### 官方读数
+FAILED 0/100、feature 0/47、~2.12M token / ~4.8h；**自测绿与官方灭并存**——模块单测不测跨包总装。
+
+### 我本地复现的死因链（证据）
+1. **起服日志** `backend/.export-probe.log`：
+   - `[assemble] init init_db 失败: TypeError("'module' object is not callable")`
+   - `[backend] create_app 工厂失败 web_ui.web_ui: TypeError: 'module' object is not callable`（两次）
+   - 随后 Serving `app_main.app_main`；health+/ 200。
+2. **调用链**：`web_ui.create_app` → `seed_bootstrap.init_db` → `_seed_accounts()`（`from seed_accounts import seed_accounts`）。
+3. **机制**：`seed_accounts/__init__.py` 为 `_PKG_SHIM`：`_impl.seed_accounts = _impl` 把实现里的 `def seed_accounts` **覆盖成模块对象**；导入绑定不可调用。最小复现（无依赖）同形：`type=module, call→TypeError`。
+4. **为何自测绿**：单测常把模块目录入 path / 不经总装 `init_db`；总装路径才踩 shim。
+5. **结构面**：coverage 重复=0、~45 模块、零幻影 import 方向健康；本跑首页是机械壳（v52 包，壳页尚无 fallback 标记——次要，首因已是工厂双亡）。
+
+### 与 ZCode 对齐 / 补强
+- **同意**主因：shim 自引用覆盖同名 callable → 工厂与 assemble init 双亡 → 兜底壳 → 0/100。
+- **补强**：同形雷不止 `seed_accounts`——全树 seed_* / 业务包皆写同一 `_PKG_SHIM`；修 shim 是根治，单改一处业务代码不够。
+- **次要**：v52 壳缺 `data-arcbench-fallback`（刀B 已在主仓修，本交付树未带）；`_bp` 覆盖偏低（刀D 已在主仓修）——非本跑第一枪。
+
+### 刀E 施工回执
+- **shim**：`file_manager._PKG_SHIM`——仅当同名属性不存在或不可调用时自引用；`sys.modules[pkg]` + `sys.modules[pkg.pkg]` 双键。
+- **门禁**：`pkg_name_collision.check_pkg_name_call_collision` → `dev_loop`；旧无条件自引用 / 无别名时 `from X import Y; Y()` 且 Y 为子模块 → 硬红；新 shim 同名函数可调用 → 绿。
+- **测试**：`tests/test_v53_pkg_shim.py`（最小复现 + 门禁红/绿 + 无同名函数时自引用仍在）。
+- **未打 v53 包**；待 ZCode 复审。

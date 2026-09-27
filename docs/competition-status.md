@@ -1819,3 +1819,7 @@ API 只回 `interfaces`/`tests`（`tests=[]`，scenarios 不在本端点）。�
 ### v53 增补刀E（file_manager shim 修复）
 - shim 自引用仅在**同名属性不存在或不是 callable** 时设置；或改为不设自引用、用 sys.modules 双键注册（pkg 与 pkg.pkg 同指）——需回归"包名=函数名"的最小复现。
 - 门禁增补：`from X import Y` 后 Y 被调用且 Y 可解析为 X 的子模块 → 门禁红（"函数与包同名冲突"）。
+
+### v53 Cursor 刀E 落地（2026-09-27 20:0x，INBOX-011）
+- **独立判读**与批次#75 主因对齐；补强：全树同形 `_PKG_SHIM` 皆雷，根治在 file_manager。
+- **已落地**：`_PKG_SHIM` callable 守卫 + modules 双键；`pkg_name_collision` 门禁挂 `dev_loop`；`test_v53_pkg_shim` 绿。未打 v53 包。

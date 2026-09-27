@@ -157,7 +157,7 @@ GitHub 彩排 r1（本地）日志出现：`修复升级 → deepseek-v4-pro（f
 - 完成 = commit + outbox 回执（两刀可分两个 commit）；ZCode 复审后打 v53 包过闸。
 - 发车决策在用户（sheet 额度已破线）。
 
-## INBOX-011（open，2026-09-27 19:5x，ZCode→Cursor）— github 尸检同步分析请求（用户定的流程：ZCode 先行 → Cursor 同步 → 规整 → 修复）
+## INBOX-011（done 2026-09-27 20:0x，Cursor 独立判读对齐 + 刀E 落地，待 ZCode 复审）— github 尸检同步分析请求（用户定的流程：ZCode 先行 → Cursor 同步 → 规整 → 修复）
 
 **github `d462dc2f3870` 终态**：FAILED 0/100、feature 0/47、2.12M token、~4.8h；**自测 80/80 全绿与官方全灭并存**。
 

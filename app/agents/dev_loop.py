@@ -453,6 +453,21 @@ class DevLoopEngine:
                         if bp_issues:
                             failure_report = "; ".join(bp_issues[:4])
                             gate_passed = False
+                    # v53 刀E：from X import Y 后调 Y，且 Y 是危险同名子模块
+                    if gate_passed and code_root is not None:
+                        try:
+                            from app.utils.pkg_name_collision import (
+                                check_pkg_name_call_collision,
+                            )
+                            coll = check_pkg_name_call_collision(
+                                code, code_root=code_root,
+                                module=module or "",
+                            )
+                        except Exception:
+                            coll = []
+                        if coll:
+                            failure_report = "; ".join(coll[:4])
+                            gate_passed = False
 
             if gate_passed:
                 # M15-3：auto 契约风格自适应——首轮实现到达接口门禁时，
