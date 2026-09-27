@@ -173,9 +173,10 @@ def create_app() -> Flask:
         @app.route("/")
         def _assembled_home():
             return (
-                "<html><body><h1>Application ready</h1>"
+                '<html><body data-arcbench-fallback="1">'
+                "<h1>Application ready</h1>"
                 "<p>Mechanical assembly fallback home.</p>"
-                "<a href=\\"/api/health\\">health</a>"
+                '<a href="/api/health">health</a>'
                 "</body></html>"
             ), 200, {{"Content-Type": "text/html; charset=utf-8"}}
     return app
@@ -244,9 +245,10 @@ def create_app() -> FastAPI:
         @app.get("/")
         def _assembled_home():
             return HTMLResponse(
-                "<html><body><h1>Application ready</h1>"
+                '<html><body data-arcbench-fallback="1">'
+                "<h1>Application ready</h1>"
                 "<p>Mechanical assembly fallback home.</p>"
-                "<a href=\\"/api/health\\">health</a>"
+                '<a href="/api/health">health</a>'
                 "</body></html>"
             )
     return app

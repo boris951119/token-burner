@@ -119,7 +119,10 @@ def probe_exported_backend(
                         # v48 尸检：合成保活首页过了 200+<a 检查（假绿）
                         # ——探针必须认得自己的兜底页并判红，快车道才
                         # 不会把整场交给占位壳。
-                        _fallback = "data-arcbench-fallback" in body
+                        _fallback = (
+                            "data-arcbench-fallback" in body
+                            or "mechanical assembly fallback" in body
+                        )
                         result["home"] = (
                             r.status == 200
                             and not _fallback

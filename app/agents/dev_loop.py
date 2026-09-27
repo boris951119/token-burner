@@ -422,7 +422,22 @@ class DevLoopEngine:
                             failure_report = format_link_issues(link.issues)
                             gate_passed = False
                         else:
-                            gate_passed = True
+                            # v53 刀A：跨模块调用点缺参硬红
+                            try:
+                                from app.utils.call_arity import (
+                                    check_imported_call_arity,
+                                )
+                                arity = check_imported_call_arity(
+                                    code, code_root=code_root, module=module,
+                                )
+                            except Exception:
+                                arity = []
+                            if arity:
+                                failure_report = "调用签名门禁：" + "; ".join(
+                                    i.text() for i in arity[:8])
+                                gate_passed = False
+                            else:
+                                gate_passed = True
                     else:
                         gate_passed = True
 

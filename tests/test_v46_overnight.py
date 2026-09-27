@@ -80,6 +80,10 @@ def test_probe_green_verify_repairs_entry_once(tmp_path, monkeypatch):
     monkeypatch.setattr(sm, "run_smoke", _smoke)
     monkeypatch.setattr(sm, "auto_repair", _repair)
     monkeypatch.setattr(sm, "run_form_probe", lambda *_a, **_k: [])
+    monkeypatch.setattr(
+        "app.utils.factory_pool.probe_author_factories",
+        lambda *_a, **_k: [],
+    )
     ok, report = sm.verify_delivery(
         tmp_path, "req", settings=type("S", (), {"models": []})(),
         probe_green=True,
@@ -103,6 +107,10 @@ def test_probe_green_form_mismatch_exits_fast_lane(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sm, "run_form_probe",
                         lambda *_a, **_k: ["POST /login missing"])
+    monkeypatch.setattr(
+        "app.utils.factory_pool.probe_author_factories",
+        lambda *_a, **_k: [],
+    )
     monkeypatch.setattr(sm, "auto_repair",
                         lambda *_a, **_k: called.__setitem__("repair", 1) or (True, ""))
     monkeypatch.setattr(sm, "run_smoke", _smoke)
@@ -167,9 +175,21 @@ def test_main_does_not_shadow_threading_locally():
 
 def test_main_skips_verify_when_probe_green(monkeypatch):
     """探针判定本身：绿探针为真；本测试不启动验收线程。"""
-    import main as m
+    import importlib
+    import sys
+    from pathlib import Path
 
-    calls = {"verify": 0}
+    root = Path(__file__).resolve().parents[1]
+    # 清掉被 platform_export 用例导入的 backend/main.py 占位
+    for key in list(sys.modules):
+        mod = sys.modules[key]
+        path = getattr(mod, "__file__", "") or ""
+        if key == "main" or path.endswith("/backend/main.py"):
+            del sys.modules[key]
+    # 强制从仓库根加载参赛入口
+    sys.path = [str(root)] + [p for p in sys.path if p != str(root)]
+    m = importlib.import_module("main")
+    assert hasattr(m, "_export_official_layout"), getattr(m, "__file__", None)
 
     def _fake_export(*_a, **_k):
         return {
@@ -180,16 +200,7 @@ def test_main_skips_verify_when_probe_green(monkeypatch):
             "export_probe": {"ok": True, "health": True, "home": True},
         }
 
-    def _boom_verify(*_a, **_k):
-        calls["verify"] += 1
-        raise AssertionError("must skip verify on probe green")
-
     monkeypatch.setattr(m, "_export_official_layout", _fake_export)
     monkeypatch.setattr(m, "_probe_green", lambda s: True)
-    # 只测分支语义：模拟 early 后的决策
     early = _fake_export()
     assert m._probe_green(early) is True
-    # 若走进 else 会调 verify；这里断言辅助函数路径
-    monkeypatch.setattr(
-        "app.arcbench_smoke.verify_delivery", _boom_verify, raising=False)
-    assert calls["verify"] == 0

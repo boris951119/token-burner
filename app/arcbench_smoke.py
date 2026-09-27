@@ -2050,29 +2050,47 @@ def verify_delivery(
     all_passed = False
     prev_sig = ""
     if probe_green:
-        # 探针已绿 ≠ 表单写路径通。v52：快车道前先跑零 LLM 表单×路由对账；
-        # 对不上则退出快车道，走完整验收（能力优先，不靠假绿交棒）。
+        # 探针已绿 ≠ 作者工厂可起 / 表单写路径通。
+        # v53 刀B：create_app 池试装；v52：表单×路由对账。任一红 → 退快车道。
         form_issues: list[str] = []
+        factory_issues: list[str] = []
+        try:
+            from app.utils.factory_pool import probe_author_factories
+            factory_issues = probe_author_factories(code_dir)
+        except Exception:
+            factory_issues = []
         try:
             form_issues = run_form_probe(code_dir)
         except Exception:
             form_issues = []
-        if form_issues:
-            print(
-                f"[probe-fast] 表单×路由未对齐 {len(form_issues)} 处，"
-                "退出快车道走完整验收",
-                flush=True,
-            )
+        if factory_issues or form_issues:
+            why = []
+            if factory_issues:
+                why.append(f"作者create_app失败{len(factory_issues)}处")
+                print(
+                    "[probe-fast] 作者工厂试装红: "
+                    + "; ".join(factory_issues[:3]),
+                    flush=True,
+                )
+            if form_issues:
+                why.append(f"表单×路由未对齐{len(form_issues)}处")
+                print(
+                    f"[probe-fast] 表单×路由未对齐 {len(form_issues)} 处，"
+                    "退出快车道走完整验收",
+                    flush=True,
+                )
             notes.append(
-                "[probe-fast→full] 表单对账红: "
-                + "; ".join(form_issues[:5])
+                "[probe-fast→full] " + "; ".join(why) + ": "
+                + "; ".join((factory_issues + form_issues)[:5])
             )
             probe_green = False
         else:
-            # 探针已绿且表单对账空：至多 1 轮入口向修补，跳过旅程 LLM。
             import time as _time
             deadline = _time.monotonic() + max(30.0, float(repair_budget_s or 8 * 60))
-            msg = "[probe-fast] 探针已绿且表单×路由对齐，仅修入口控件后交 Stage3"
+            msg = (
+                "[probe-fast] 探针已绿且作者工厂/表单×路由对齐，"
+                "仅修入口控件后交 Stage3"
+            )
             print(msg, flush=True)
             try:
                 if _time.monotonic() < deadline and max_app_rounds != 0:

@@ -785,15 +785,48 @@ def test_export_failure_keeps_previous_backend(tmp_path, project,
     assert (out / ".export-backend.new").is_dir()
 
 
-def test_export_probe_reports_health_and_home(tmp_path, project, monkeypatch):
-    """v44 P0：终局导出后起服探针——health+首页都绿才算 ok。"""
+def test_export_probe_reports_health_and_home(tmp_path, monkeypatch):
+    """v44 P0：终局导出后起服探针——health+真首页都绿才算 ok。
+
+    v53：机械壳首页带 data-arcbench-fallback，探针必须判红；本例用作者
+    真 Flask /（create_app 挂在包 __init__ 上，与 probe_entries 同口径）。
+    """
+    monkeypatch.setenv("TB_EXPORT_PROBE", "1")
+    monkeypatch.setenv("TB_EXPORT_PROBE_WINDOW", "25")
+    proj = tmp_path / "aproj"
+    pkg = proj / "code" / "webapp"
+    pkg.mkdir(parents=True)
+    (pkg / "__init__.py").write_text(
+        "from flask import Flask\n"
+        "def create_app():\n"
+        "    app = Flask(__name__)\n"
+        "    @app.route('/api/health')\n"
+        "    def health():\n"
+        "        return {'status': 'ok'}\n"
+        "    @app.route('/')\n"
+        "    def home():\n"
+        "        return '<html><body><a href=\"/x\">Q3 Sales</a></body></html>'\n"
+        "    return app\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "out"
+    summary = export_platform_layout(out, proj)
+    probe = summary.get("export_probe") or {}
+    assert probe.get("health") is True, probe
+    assert probe.get("ok") is True, probe
+    assert probe.get("detail") != "home-is-fallback-shell", probe
+
+
+def test_export_probe_reds_mechanical_fallback_home(tmp_path, project, monkeypatch):
+    """作者 create_app() 空实现 → 机械壳首页 → 探针不得 ok（045fe 假绿防线）。"""
     monkeypatch.setenv("TB_EXPORT_PROBE", "1")
     monkeypatch.setenv("TB_EXPORT_PROBE_WINDOW", "25")
     out = tmp_path / "out"
     summary = export_platform_layout(out, project)
     probe = summary.get("export_probe") or {}
     assert probe.get("health") is True, probe
-    assert probe.get("ok") is True, probe
+    assert probe.get("ok") is False, probe
+    assert probe.get("detail") == "home-is-fallback-shell", probe
 
 
 def test_export_probe_skipped_under_pytest_by_default(tmp_path, project):

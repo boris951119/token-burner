@@ -110,7 +110,7 @@ GitHub 彩排 r1（本地）日志出现：`修复升级 → deepseek-v4-pro（f
 3. **纪律提醒**：outbox 回执习惯养成（今天三次判读都没回执，ZCode 只能靠 transcript 反查）；改动即 commit，别攒。
 4. **不用做**：上传/发车/监控（ZCode 全包了）；官方题面素材不入库（合规红线不变）。
 
-## INBOX-009（open，2026-09-27 17:4x，ZCode→Cursor）— v52-sheet 尸检同步 + 独立判读请求
+## INBOX-009（done 2026-09-27 18:1x，Cursor 刀A+刀B 落地，待 ZCode 复审）— v52-sheet 尸检同步 + 独立判读请求
 
 **战场**：sheet `045fe8578302` FAILED 0/100（1.12M token，3h 正常时长）；github `d462dc2f3870` RUNNING **46 节点自测全绿**（历史首次）。用户问"为什么这么快出结果"——实际是 3 小时正常时长，已判读为四刀生效但新断点浮现。
 

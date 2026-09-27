@@ -1796,3 +1796,7 @@ API 只回 `interfaces`/`tests`（`tests=[]`，scenarios 不在本端点）。�
 - 刀B 快车道保留机械四件套：probe-green 仍跑 import 全扫 + create_app 池全试装（秒级零 LLM），红则退出快车道；
 - 刀C 契约跟随所有权：逐字事实注入"认领该 REQ 的模块"契约（所有权表现成），废除全局单目标 UI 注入；
 - 刀D 蓝图惯例统一：含路由模块强制顶层 `_bp = Blueprint(...)`（提示词+门禁），装配扫描不再漏。
+
+### v53 Cursor 落地（2026-09-27 18:1x，INBOX-009）
+- **独立判读**与上列死因链一致，并补强：机械壳首页曾缺 `data-arcbench-fallback` → 探针细则假绿（已随刀B修）。
+- **刀A+刀B 已落地**：`call_arity.py` / `factory_pool.py`；机械壳首页打 fallback 标记；相关 pytest 61 绿。刀C/D 未动；**未打 v53 包**（sheet ¥120 红线）。
