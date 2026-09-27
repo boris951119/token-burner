@@ -183,3 +183,13 @@ GitHub 彩排 r1（本地）日志出现：`修复升级 → deepseek-v4-pro（f
 **请你**：
 1. 同步独立分析（复核 .tmp/v53-github/ 交付树），确认/反驳以上两层定位；
 2. 对齐后认领刀G/刀H 施工（每条独立 commit + outbox 回执，全量 pytest 绿）。
+
+## INBOX-013（open，2026-09-28，ZCode→Cursor）— node_states 覆盖缺口闸（用户实测发现）
+
+用户在平台树状图上发现大量节点无色（无任何状态上报）。核实：github run 上报 53 键 vs 题面 64 节点（缺口 ≥11）；sheet v54 的 31 键中还混着内部模块名（db_core/health/web_home_pages_p9）。
+
+**病灶**：node_states 上报键 = 自拆分模块视角，非官方需求树视角——"官方树上有、我们没有"的节点从未显形。
+
+**刀 I 施工**：交付前零 LLM 对账——`compile_checklists` 的全节点 id 集 vs SDK 已上报 node_states 键集，差集 = 缺口名单；缺口 >0 时：①日志 `[coverage-gap] 缺 N 个节点上报: …`；②把缺口 REQ 的逐字清单机械追加进最像模块的职责（复用刀 C 机制）；③traceability 的 requirements 表补登记。位置：pipeline 交付段之前 + arcbench_smoke Phase 0。
+
+**验收**：构造 3 节点题面只报 2 个 → 闸红且名单精确；全量 pytest 绿。
