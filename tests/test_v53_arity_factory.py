@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
-"""v53 刀A 调用签名 + 刀B 作者工厂试装。"""
+"""v53 刀A 调用签名 + 刀B 作者工厂试装（v54 P1-3 子进程）。"""
 from __future__ import annotations
 
 from pathlib import Path
 
 from app.utils.call_arity import check_imported_call_arity
-from app.utils.factory_pool import probe_author_factories
+from app.utils.factory_pool import (
+    probe_author_factories,
+    probe_author_factories_safe,
+)
 
 
 def _pkg(root: Path, name: str, src: str) -> None:
@@ -60,10 +63,61 @@ def test_probe_author_factory_reports_typeerror(tmp_path):
         "def create_app():\n"
         "    return object()\n",
     )
-    fails = probe_author_factories(code)
+    result = probe_author_factories(code)
+    assert result["infra_error"] is False
+    fails = result["failures"]
     assert fails
     assert any("webui_app" in f and "TypeError" in f for f in fails)
     assert not any("app_main" in f for f in fails)
+    assert result["tried"] >= 1
+
+
+def test_probe_author_factory_safe_ok(tmp_path):
+    code = tmp_path / "code"
+    code.mkdir()
+    _pkg(code, "webui_app",
+         "def create_app():\n    return object()\n")
+    issues, infra = probe_author_factories_safe(code)
+    assert infra is False
+    assert issues == []
+
+
+def test_probe_subprocess_timeout_is_infra_fail(tmp_path, monkeypatch):
+    """子进程超时 → fail-closed（带 probe基础设施失败 前缀）。"""
+    import subprocess
+
+    code = tmp_path / "code"
+    code.mkdir()
+
+    def _boom(*_a, **_k):
+        raise subprocess.TimeoutExpired(cmd="py", timeout=240)
+
+    monkeypatch.setattr(subprocess, "run", _boom)
+    result = probe_author_factories(code)
+    assert result["infra_error"] is True
+    assert any("probe基础设施失败" in f for f in result["failures"])
+
+    issues, infra = probe_author_factories_safe(code)
+    assert infra is True
+    assert any("probe基础设施失败" in f for f in issues)
+
+
+def test_probe_subprocess_bad_json_is_infra_fail(tmp_path, monkeypatch):
+    """子进程输出非 JSON → fail-closed。"""
+    import subprocess
+    from types import SimpleNamespace
+
+    code = tmp_path / "code"
+    code.mkdir()
+
+    monkeypatch.setattr(
+        subprocess, "run",
+        lambda *_a, **_k: SimpleNamespace(
+            stdout="not-json-at-all\n", stderr="", returncode=0),
+    )
+    issues, infra = probe_author_factories_safe(code)
+    assert infra is True
+    assert any("probe基础设施失败" in f for f in issues)
 
 
 def test_probe_green_exits_when_author_factory_red(tmp_path, monkeypatch):
@@ -72,8 +126,8 @@ def test_probe_green_exits_when_author_factory_red(tmp_path, monkeypatch):
     called = {"repair": 0}
 
     monkeypatch.setattr(
-        "app.utils.factory_pool.probe_author_factories",
-        lambda *_a, **_k: ["webui_app.create_app: TypeError: boom"],
+        "app.utils.factory_pool.probe_author_factories_safe",
+        lambda *_a, **_k: (["webui_app.create_app: TypeError: boom"], False),
     )
     monkeypatch.setattr(sm, "run_form_probe", lambda *_a, **_k: [])
     monkeypatch.setattr(
@@ -96,3 +150,20 @@ def test_probe_green_exits_when_author_factory_red(tmp_path, monkeypatch):
     )
     assert called["repair"] == 0
     assert "probe-fast→full" in report or "create_app" in report
+
+
+def test_probe_parent_does_not_import_generated_code(tmp_path):
+    """父进程不得把生成包塞进 sys.modules（P1-3 根因回归）。"""
+    import sys
+
+    code = tmp_path / "code"
+    code.mkdir()
+    # 故意起名叫 app——旧实现会 del sys.modules['app'] 毒死 agent
+    _pkg(code, "app",
+         "def create_app():\n    raise RuntimeError('gen boom')\n")
+    before = {k for k in sys.modules if k == "app" or k.startswith("app.")}
+    result = probe_author_factories(code)
+    after = {k for k in sys.modules if k == "app" or k.startswith("app.")}
+    assert after == before, "父进程 sys.modules 被生成包污染"
+    assert result["infra_error"] is False
+    assert any("RuntimeError" in f for f in result["failures"])

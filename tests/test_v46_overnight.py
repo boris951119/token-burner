@@ -81,8 +81,8 @@ def test_probe_green_verify_repairs_entry_once(tmp_path, monkeypatch):
     monkeypatch.setattr(sm, "auto_repair", _repair)
     monkeypatch.setattr(sm, "run_form_probe", lambda *_a, **_k: [])
     monkeypatch.setattr(
-        "app.utils.factory_pool.probe_author_factories",
-        lambda *_a, **_k: [],
+        "app.utils.factory_pool.probe_author_factories_safe",
+        lambda *_a, **_k: ([], False),
     )
     ok, report = sm.verify_delivery(
         tmp_path, "req", settings=type("S", (), {"models": []})(),
@@ -108,8 +108,8 @@ def test_probe_green_form_mismatch_exits_fast_lane(tmp_path, monkeypatch):
     monkeypatch.setattr(sm, "run_form_probe",
                         lambda *_a, **_k: ["POST /login missing"])
     monkeypatch.setattr(
-        "app.utils.factory_pool.probe_author_factories",
-        lambda *_a, **_k: [],
+        "app.utils.factory_pool.probe_author_factories_safe",
+        lambda *_a, **_k: ([], False),
     )
     monkeypatch.setattr(sm, "auto_repair",
                         lambda *_a, **_k: called.__setitem__("repair", 1) or (True, ""))
