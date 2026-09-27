@@ -111,3 +111,16 @@ FAILED 0/100、feature 0/47、~2.12M token / ~4.8h；**自测绿与官方灭并�
 - **门禁**：`pkg_name_collision.check_pkg_name_call_collision` → `dev_loop`；旧无条件自引用 / 无别名时 `from X import Y; Y()` 且 Y 为子模块 → 硬红；新 shim 同名函数可调用 → 绿。
 - **测试**：`tests/test_v53_pkg_shim.py`（最小复现 + 门禁红/绿 + 无同名函数时自引用仍在）。
 - **未打 v53 包**；待 ZCode 复审。
+
+---
+
+## v54 四刀施工回执（09-28 00:12，批次#78）
+
+| 刀 | commit | 要点 |
+|---|---|---|
+| 修1 P1-3 | `06ff95a` | factory_pool 子进程试装，父进程零 import 生成码 |
+| 修2 P1-2 | `d9ed6c0` | json_mode 降级仅 response_format 400；超时禁降级；梯 //2 |
+| 修3 P1-5 | `e03ed91` | RepoFixer stop_check；probe-fast join 超时置旗停写 |
+| 修4 P2-8 | `e2530c0` | _compose_from_blueprints 全收顶层 Blueprint |
+
+未 push；未动密钥；未上平台。
