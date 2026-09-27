@@ -1844,3 +1844,22 @@ API 只回 `interfaces`/`tests`（`tests=[]`，scenarios 不在本端点）。�
 - P1-4 视觉转写在剥代理之前执行（代理环境截图转写静默归零）+ 视觉 token 不入预算闸；
 - P1-5 probe-fast 8 分钟 join 超时后不终止修补线程，与终局导出竞态（撕裂写入）；
 - P2-1 resume 不重建 peer_exports + interfaces.json 双源漂移；P2-4 接口依赖不一致硬 raise 丢弃整份拆分（应机械覆写）；P2-7 `_modnames` 前缀误伤 main_window/manager_ui；P2-8 组合兜底每模块只收第一个 Blueprint；P2-11 config 档位无 profile 概念（试跑/正式共用文件的结构性根因）；P2-12 测试盲区清单（overflow 分册集成/resume 契约漂移/降级梯墙钟等）。
+
+## 批次#79：v52-github 尸检（ZCode，09-28 00:2x）——契约到了、模型没执行 + 所有权错配
+
+**终态**：FAILED 0/100、feature 0/47、2.0M token、~4.8h。**自测 76/77 全绿**（历史最好）与官方全灭并存。
+
+**结构面全面好转（六刀实证）**：零幻影 import；Blueprint 覆盖 **28/28**（刀 D 读数上线）；机械壳注册 28 蓝图；作者工厂失败大声喊话（`app_assembler: TypeError: initialize_seed() missing 1 required positional argument`）。
+
+**死因链（交付树 .tmp/v53-github/ 解剖 + 本地起服对照）**：
+1. 作者工厂 `app_assembler.py:48` 调 `data_seed.initialize_seed()` 无参，真实签名 `initialize_seed(db_path)` → TypeError 暴毙（**模块属性调用形态是 call_arity 盲区**——刀 A 只扫 `from peer import fn` 与本地调用）；
+2. 机械壳接管，28 蓝图全挂（含真 UI），**但真首页仍是幻觉装饰的搜索页**："42.2k results (173 ms)"、"Advanced Security Secret Ops" 等 LLM 编造的 GitHub chrome；
+3. 题面 REQ-1-1-1 要求首页是登录页且带唯一链接 **"Create an account"** → 注册表单六件套（Username/Email/Password/Confirm password/Agree to the terms/Create account 逐字）；
+4. 契约投递核查：ui_home.md（真首页模块）**含全部字面量**（锚点摘要通道送达 ✓）；shared_core.md 不含（刀 C 按所有权注给了 shared_core——**所有权错配**：REQ-1-1-1 被认领到 shared_core）；
+5. **生成的 ui_home.py 里 "Create an account" = 0 处**——契约在场、模型无视，用幻觉装饰填充页面。
+
+**产品缺失的环节（本次尸检回答用户之问）**：
+- 环节一（所有权路由）：UI 流程类 REQ（control_labels 非空）禁止归入 core/data/seed 类模块——normalize 时机械重路由到 ui_* 模块；
+- 环节二（文案落地门禁）：写码门禁新增"清单字面量落地检查"——模块契约里的 N 条锚点文案在生成源码中出现数 < 阈值（如 <50%）→ 门禁红重写。当前"契约在场但生成无视"没有任何机械拦截。
+
+### v53 增补刀G（所有权 UI 路由）+ 刀H（文案落地门禁）——待 Cursor 同步分析后施工
