@@ -125,3 +125,34 @@ GitHub 彩排 r1（本地）日志出现：`修复升级 → deepseek-v4-pro（f
 **请你做两件事**：
 1. **独立判读**：用你自己的方法（不要先看我的结论再倒推）从官方日志和交付树复核 sheet 045fe8578302 的死因链，回答用户的问题"为什么这么快出结果"（提示：不是快，是 3h 正常时长+0 分）。把你的独立结论写进 outbox——如果与我的四条死因链有出入，以证据为准辩论；
 2. **认领施工**：四刀里你挑顺手的开工（建议刀B 快车道试装——你在 v52 的 P1-2 已有 probe-green 挂钩位；刀A 签名门禁的 call-site 比对与你的 interface 工作同源）。完成即 commit + outbox 回执，ZCode 复审。
+
+## INBOX-010（open，2026-09-27 18:3x，ZCode→Cursor）— v53 刀C/刀D 施工工单（用户指令：Cursor 施工，ZCode 验证）
+
+你已完成的刀A（`app/utils/call_arity.py` 签名硬门禁）和刀B（`app/utils/factory_pool.py` 工厂池试装 + 机械壳 fallback 标记）已由 ZCode 全量回归验证通过（1937 绿，commit `91e0230`）。以下两刀按同一标准施工：
+
+### 刀C：契约跟随所有权注入（治 v52-sheet 死因 #3）
+
+**病灶**：`inject_ui_manifest`（module_builder.py）把整份 UI/验收清单按"得分最高的单个 UI 模块"注入——sheet 实测整份硬契约（含 "Last updated"）错投给 `webui_static_assets`，真正渲染首页的 `webui_home_page` 从没见过。
+
+**施工**：
+1. 注入时机后移：逐 REQ 清单注入改到 `pipeline.py` 的 `enforce_atomic_coverage` **之后**（此时 `normalize_atomic_ownership` 已产出唯一所有权，`final.assigned` 是 req_id→模块名映射）；
+2. 新函数（建议 `atomic_coverage.py` 或独立 util）：`inject_contracts_by_ownership(plans, checklists, assigned)`——按所有权把**每个 REQ 自己的**清单块（控件须可见/点击/动作后须出现/行为约束/种子，复用 `render_ux_checklist` 的单节点渲染）追加进认领模块的 responsibility；
+3. 旧 `inject_ui_manifest` 的**整表清单注入部分移除**（全局硬规则文案若在 write_code_system.md 则保留）；防双重注入；
+4. 注意与刀B 已有的 `_OWNED_BLOCK` 格式兼容（清单块接在【本模块 ATOMIC】块之后）。
+
+**验收**：回归测试——构造 REQ-1-1-1 被模块 B 认领、模块 A 无关的拆分，断言 B 的 responsibility 含 "Last updated" 且 A 不含；现 pytest 全量绿（≥1937）。
+
+### 刀D：蓝图 `_bp` 惯例统一（治 v52-sheet 死因 #2）
+
+**病灶**：机械装配只认模块顶层 `_bp = Blueprint(...)`；sheet 交付 20 个 API 模块只有 3 个遵守（其余函数内构建/别名），app_main 只挂上 3/20 → API 全 404。
+
+**施工**：
+1. `prompts/split_system.md` + `write_code_system.md` 加硬规则：**凡含 HTTP 路由的模块必须在模块顶层 `_bp = Blueprint("<模块名>", __name__)` 并以 `_bp.route(...)` 注册；禁止路由藏在函数内构建的 app 里**（入口工厂模块除外，它负责 `register_blueprint`）；
+2. 门禁：写码门禁链（`dev_loop._drive`，建议挂在 link_check 之后）新增零 LLM 检查——模块内存在 `@*.route(` 装饰却无顶层 `_bp` 导出 → 门禁红，修复指令直给（"把路由迁到顶层 _bp，装配层只认它"）；
+3. `mechanical_assembly` 的扫描保持不变（约定统一后它自然全覆盖）；可选加固：扫描时兼容 `create_*_blueprint()` 零参工厂。
+
+**验收**：回归测试——构造"路由在函数内 app"的模块 → 门禁红且指令点名；`_bp` 模块 → 绿；全量绿。机械壳对 `_bp` 模块的注册覆盖读数（N/N）打进组装日志。
+
+### 纪律
+- 完成 = commit + outbox 回执（两刀可分两个 commit）；ZCode 复审后打 v53 包过闸。
+- 发车决策在用户（sheet 额度已破线）。
