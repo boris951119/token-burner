@@ -234,7 +234,8 @@ class TestKeyGuidance:
         assert r["verdict"] == "auth_failed"
         hint = r["hint"]
         assert "智谱官方" in hint
-        assert "ak_oEM" in hint and "DHTI" not in hint  # 只露前缀 6 位
+        assert "ak_tes" in hint  # 只露前缀，完整 key 不得进 hint
+        assert "demo01" not in hint
         assert "疑似混用" in hint
         assert "①" in hint and "③" in hint
 

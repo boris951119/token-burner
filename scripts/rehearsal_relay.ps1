@@ -18,9 +18,29 @@ param(
 )
 $ErrorActionPreference = "Continue"
 Set-Location F:\token-burner
-$env:OPENAI_API_KEY = "***REMOVED***"
-$env:OPENAI_BASE_URL = "https://api.arc-bench.com/v1"
-$env:MODEL = "openai/deepseek-v4-pro"
+# 密钥从环境变量或仓库根 .env 读取——禁止把真实 key 写进脚本入库
+if (-not $env:OPENAI_API_KEY) {
+    $dotenv = Join-Path (Get-Location) ".env"
+    if (Test-Path $dotenv) {
+        Get-Content $dotenv | ForEach-Object {
+            if ($_ -match '^\s*OPENAI_API_KEY\s*=\s*(.+)\s*$') {
+                $env:OPENAI_API_KEY = $Matches[1].Trim().Trim('"').Trim("'")
+            }
+            if ($_ -match '^\s*OPENAI_BASE_URL\s*=\s*(.+)\s*$' -and -not $env:OPENAI_BASE_URL) {
+                $env:OPENAI_BASE_URL = $Matches[1].Trim().Trim('"').Trim("'")
+            }
+        }
+    }
+}
+if (-not $env:OPENAI_API_KEY) {
+    throw "缺少 OPENAI_API_KEY：请 export 或写入仓库根 .env（已 gitignore）"
+}
+if (-not $env:OPENAI_BASE_URL) {
+    $env:OPENAI_BASE_URL = "https://api.arc-bench.com/v1"
+}
+if (-not $env:MODEL) {
+    $env:MODEL = "openai/deepseek-v4-pro"
+}
 $env:ARCBENCH_OUTPUT_DIR = "F:\token-burner\$OutputDir"
 $env:ARCBENCH_VISION = "on"
 $py = "F:\token-burner\.venv\Scripts\python.exe"
