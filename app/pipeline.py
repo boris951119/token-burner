@@ -607,6 +607,10 @@ class Pipeline:
                     enforce_atomic_coverage, persist_coverage_report,
                 )
                 coverage_report = enforce_atomic_coverage(requirement, plans)
+                # P0-1（评审发现）：normalize 可能追加 `*_p2` 溢出分册模块，
+                # 而 order 在覆盖闸之前算好——分册若不重算进 order，永远不进
+                # 开发循环：报告全绿、盘上无代码。覆盖闸后必须重算。
+                order = builder.build_order(plans)
                 # v53 刀C：所有权已唯一 → 按主人注入逐 REQ 验收清单
                 # （废除 inject_ui_manifest 整表灌进单一 UI 模块）
                 try:
