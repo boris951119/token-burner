@@ -1775,3 +1775,24 @@ API 只回 `interfaces`/`tests`（`tests=[]`，scenarios 不在本端点）。�
 - v52 = 四刀通气工程（`d356cac`，Cursor 实现 ZCode 复审）：P0-1 peer_exports 死线接通 / P0-2 幻影 import 门禁 / P1-1 schema 唯一权威源 / P1-2 probe-green 后强制表单×路由对账。全量 1932 绿 + 闸 A+B+C 全绿。
 - 平台交互备忘：Run 按钮触发原生 confirm() 会冻结页面线程——Playwright 必须发起点击后循环 getJsDialog accept，不能同步 await click。
 - 预算：余额约 ¥350（双 run 各 ~¥15-60）。
+
+## 批次#74：v52-sheet 尸检（0/100）——四刀全部生效，新断点在"签名与路由"（09-27 17:3x，ZCode）
+
+### 战场状态
+- sheet `045fe8578302`：FAILED 0/100，1.12M token，~3h（正常时长，非速败）。
+- **github `d462dc2f3870`：RUNNING，46 节点自测全过、零失败（历史首次）**——四刀在 LLM 友好域全面生效。
+
+### 四刀生效实证（对照 v49/v50）
+零幻影 import（v50 的 auth/sheets 消失）；24 个小模块（重复=0 延续）；**真 UI 工厂 webui_app 生成且契约含 Last updated**（刀1 的 desc 通道把事实送到了模块契约——但送错了模块，见下）；机械装配 app_main 正常产出。
+
+### 死因链（交付树 .tmp/v52-sheet/ 解剖）
+1. `webui_app.py:45` 调 `seed_db()` 无参，`db_seed.py:107` 定义 `seed_db(conn)` 必传 → **TypeError 毒死真 UI 工厂**（跨模块签名漂移；check_implementation 对签名不一致只警告不阻断）。
+2. 机械壳 app_main 接管，但只注册 3/20 蓝图（装配只认顶层 `_bp` 惯例，其余模块蓝图在函数内/别名不可见）→ API 全 404。
+3. **"Last updated" 进了 webui_static_assets（静态资源模块）的契约**——刀1 抽到了事实，但单目标注入路由错位（刀2 模块变多后单目标更易错）；真正渲染首页的模块从没见过它。
+4. probe-green 快车道跳过 create_app 池试装 → #1 的 TypeError 被掩盖（v50 同款掩盖机制）。
+
+### v53 施工图（全部生成侧，零 LLM）
+- 刀A 签名硬门禁：门禁期调用点实参数 vs 被调函数真实 def 签名比对，缺参=门禁红（check_implementation 从警告升级）；
+- 刀B 快车道保留机械四件套：probe-green 仍跑 import 全扫 + create_app 池全试装（秒级零 LLM），红则退出快车道；
+- 刀C 契约跟随所有权：逐字事实注入"认领该 REQ 的模块"契约（所有权表现成），废除全局单目标 UI 注入；
+- 刀D 蓝图惯例统一：含路由模块强制顶层 `_bp = Blueprint(...)`（提示词+门禁），装配扫描不再漏。
