@@ -14,7 +14,12 @@ from pathlib import Path
 
 
 def probe_author_factories(code_dir: Path) -> list[str]:
-    """试装所有作者 create_app；返回失败描述（空=作者工厂均可起或没有）。"""
+    """试装所有作者 create_app；返回失败描述（空=作者工厂均可起或没有）。
+
+    v53.1（批次#78 评审 #1）：基础设施异常**不得**返回空列表——空=快车道
+    放行，守卫失败开放就是假绿后门。探测自身出错时返回带
+    `probe基础设施失败` 前缀的非空红项，调用方据此退出快车道（fail-closed）。
+    """
     code_dir = Path(code_dir).resolve()
     if not code_dir.is_dir():
         return []
@@ -89,3 +94,16 @@ def probe_author_factories(code_dir: Path) -> list[str]:
     if tried == 0:
         return []  # 无作者工厂：不据此拦快车道（骨架/单文件另论）
     return failures
+
+
+def probe_author_factories_safe(code_dir: Path) -> tuple[list[str], bool]:
+    """带基础设施隔离的试装包装：探测自身异常 ≠「无工厂」。
+
+    返回 (issues, infra_failed)。infra_failed=True 时调用方必须视为
+    fail-closed（退出快车道），不得当作绿。
+    """
+    try:
+        return probe_author_factories(code_dir), False
+    except Exception as exc:
+        return ([f"probe基础设施失败: {type(exc).__name__}: {exc!r}"[:200]],
+                True)

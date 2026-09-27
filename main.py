@@ -189,11 +189,19 @@ def _probe_green(export_summary: dict | None) -> bool:
 
 
 def _has_product_code(project_dir) -> bool:
-    """盘上是否真写着模块代码（__init__.py 只是包标记，不算交付物）。"""
+    """盘上是否真写着模块代码（__init__.py 只是包标记，不算交付物）。
+
+    v53.1（批次#78 评审 #4）：`_shared/` 里的公共内核也不算——只有内核
+    没有任何业务模块时，salvage 出来的是个没有业务面的壳，交付它换不来
+    分数还占一次评测。至少要有 1 个 `_shared` 之外的业务 .py。
+    """
     if not project_dir:
         return False
     code = Path(project_dir) / "code"
-    return any(p.name != "__init__.py" for p in code.rglob("*.py"))
+    return any(
+        p.name != "__init__.py" and "_shared" not in p.relative_to(code).parts
+        for p in code.rglob("*.py")
+    )
 
 
 def _salvage_export(workdir: Path) -> bool:
@@ -792,12 +800,37 @@ def main(argv: list[str] | None = None) -> int:
                         "交付完成（内部验收未通过，已尽力修复——详情见 verify "
                         "报告尾部）: " + report[-200:]
                     )
+        # v53.1（批次#78 评审 #3）：probe-fast 路径下，入口修补可能把 boot
+        # 弄坏——终局导出前对当前项目树重探针一次；boot 已坏则**跳过终局
+        # 导出**，保住抢先交付那份探针全绿的版本（早期导出已在 workdir）。
+        _skip_final_export = False
+        if _probe_green(early) and result.project_dir is not None:
+            try:
+                from app.platform_export import probe_exported_backend
+                _re = probe_exported_backend(
+                    Path(result.project_dir) / "code", window_s=45.0)
+                if not _re.get("ok"):
+                    _skip_final_export = True
+                    print(
+                        "[probe-fast] 终局重探针未过，跳过终局导出——"
+                        "保留抢先交付的绿灯版本"
+                        f"（detail={_re.get('detail')}）", flush=True)
+                    result.deliverable_summary = (
+                        (result.deliverable_summary or "交付完成")
+                        + "（probe-fast：终局重探针未过，保留抢先交付版本）")
+                else:
+                    print("[probe-fast] 终局重探针 PASS（修补后仍可起服）",
+                          flush=True)
+            except Exception as _rexc:
+                print(f"[probe-fast] 终局重探针异常（照常终局导出）: "
+                      f"{_rexc!r}"[:160], flush=True)
         # 官方 runner 布局适配（6 平台提交取证：布局违约是主死因——
         # 内部 verify PASS 也因缺 frontend//backend/ 被判模板不完整）。
         # 次序（9/23 交付路径审计取证）：先换入最终态、后报 run_completed
         # ——平台若在完成事件处取件，先报事件交出去的就是验收前的旧代码。
-        _export_official_layout(workdir, result.project_dir,
-                                requirement=requirement)
+        if not _skip_final_export:
+            _export_official_layout(workdir, result.project_dir,
+                                    requirement=requirement)
         if (result.project_dir is not None
                 and not (Path(workdir) / "backend" / "main.py").is_file()):
             # 只留痕不改判：exit 1 = 不评分，与「有产物但判它失败」等价，

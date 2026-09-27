@@ -1008,7 +1008,10 @@ def health():
 
 @app.route("/")
 def home():
-    return ("<html><body><h1>No application was generated</h1>"
+    # v53.1（批次#78 评审 #5）：骨架首页带判红标记——探针/组合防线认得
+    # 它不是活应用，防止「诚实骨架被当健康交付」的假绿。
+    return ("<html><body data-arcbench-fallback=\"1\">"
+            "<h1>No application was generated</h1>"
             "<p>This delivery is the run's fallback skeleton. See "
             "ARCBENCH_SKELETON.txt for why.</p></body></html>"), 200, {
                 "Content-Type": "text/html; charset=utf-8"}

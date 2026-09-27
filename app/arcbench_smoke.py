@@ -2052,17 +2052,19 @@ def verify_delivery(
     if probe_green:
         # 探针已绿 ≠ 作者工厂可起 / 表单写路径通。
         # v53 刀B：create_app 池试装；v52：表单×路由对账。任一红 → 退快车道。
+        # v53.1（批次#78 评审 #1）：守卫**失败关闭**——基础设施异常视为红，
+        # 不得静默 [] 放行（异常=不知道，不知道=不能放）。
         form_issues: list[str] = []
         factory_issues: list[str] = []
         try:
-            from app.utils.factory_pool import probe_author_factories
-            factory_issues = probe_author_factories(code_dir)
-        except Exception:
-            factory_issues = []
+            from app.utils.factory_pool import probe_author_factories_safe
+            factory_issues, _infra = probe_author_factories_safe(code_dir)
+        except Exception as exc:
+            factory_issues = [f"工厂池探针基础设施失败: {exc!r}"[:200]]
         try:
             form_issues = run_form_probe(code_dir)
-        except Exception:
-            form_issues = []
+        except Exception as exc:
+            form_issues = [f"表单对账探针基础设施失败: {exc!r}"[:200]]
         if factory_issues or form_issues:
             why = []
             if factory_issues:
