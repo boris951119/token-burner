@@ -264,3 +264,29 @@ _SQL_KEYWORDS = {
     "into", "distinct", "case", "when", "then", "else", "end", "exists",
     "in", "like", "between", "is", "update", "insert", "delete", "having",
 }
+
+
+def format_schema_authority(code_dir: Path, *, max_tables: int = 24) -> str:
+    """把盘上 CREATE TABLE 压成写码提示用的权威摘要（空=尚无 DDL）。
+
+    v52 通气刀3：各模块禁止各猜一套列名；提示词里只给一份清单。
+    """
+    code_dir = Path(code_dir)
+    if not code_dir.is_dir():
+        return ""
+    try:
+        tables = collect_ddl(code_dir)
+    except Exception:
+        return ""
+    if not tables:
+        return ""
+    lines: list[str] = []
+    for name in sorted(tables)[:max_tables]:
+        info = tables[name]
+        cols = ", ".join(info.get("columns") or []) or "(无列)"
+        src = ", ".join((info.get("sources") or [])[:2])
+        lines.append(f"- {name}({cols})" + (f"  ← {src}" if src else ""))
+    more = len(tables) - max_tables
+    if more > 0:
+        lines.append(f"- …另有 {more} 张表，见盘上 CREATE TABLE")
+    return "\n".join(lines)

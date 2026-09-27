@@ -667,22 +667,45 @@ class Pipeline:
             # 任何异常静默吞掉——约束注入是增强，不能阻塞主流程
             try:
                 if interfaces:
+                    # 优先按 plans 开发顺序，再补 interfaces 里多出的名
+                    ordered = [p.name for p in plans] if plans else list(
+                        interfaces.keys())
+                    seen: set[str] = set()
+                    names: list[str] = []
+                    for n in ordered:
+                        if n not in seen:
+                            seen.add(n)
+                            names.append(n)
+                    for n in interfaces:
+                        if n not in seen:
+                            names.append(n)
+                    inventory = (
+                        "## 本项目模块清单（硬约束）\n"
+                        "只允许 `import` / `from … import` 下列模块名"
+                        "（另加 `_shared` 与标准库/已知第三方）。"
+                        "**禁止**发明清单外的兄弟模块名"
+                        "（实测：`from auth import bp` / `from sheets import bp`"
+                        "在清单无此名时会毒死组装工厂）。\n"
+                        + "- " + ", ".join(names) + "\n"
+                    )
                     peer_lines = []
-                    for mod_name, mod_contract in interfaces.items():
+                    for mod_name in names:
+                        mod_contract = interfaces.get(mod_name) or {}
                         if not isinstance(mod_contract, dict):
+                            peer_lines.append(f"- {mod_name}: （无契约）")
                             continue
                         exports = mod_contract.get("exports") or []
                         if exports:
                             peer_lines.append(
-                                f"- {mod_name}: {', '.join(exports[:8])}")
-                    if peer_lines:
-                        # peer_exports 在 _develop_and_deliver 里新建 DevLoop，
-                        # 这里只把摘要挂到 pipeline 临时属性，下面传入
-                        self._peer_exports_summary = (
-                            "## 全模块导出符号清单（组装模块将按这些名字 import，"
-                            "你的模块必须导出契约中列出的符号）\n"
-                            + "\n".join(peer_lines)
-                        )
+                                f"- {mod_name}: {', '.join(str(x) for x in exports[:8])}")
+                        else:
+                            peer_lines.append(f"- {mod_name}: （exports 未声明）")
+                    # peer_exports 在 _develop_and_deliver 里挂到 DevLoop
+                    self._peer_exports_summary = (
+                        inventory
+                        + "\n## 全模块导出符号清单（组装/跨模块 import 必须用这些名字）\n"
+                        + "\n".join(peer_lines)
+                    )
             except Exception:
                 pass
 
@@ -791,6 +814,14 @@ class Pipeline:
         if peer:
             dev_loop.peer_exports_summary = peer
             self._peer_exports_summary = ""
+        # v52：schema 权威摘要进写码提示（盘上已有 CREATE TABLE）
+        try:
+            from app.utils.schema_audit import format_schema_authority
+            schema = format_schema_authority(project_root / "code")
+            if schema:
+                dev_loop.schema_authority_summary = schema
+        except Exception:
+            pass
         self._bind_executor_project(team.project_id)
         # 14.4：_shared/ 内容签名基线（变更检测）
         shared_baseline = self.file_manager.shared_signature(team.project_id)
@@ -814,6 +845,14 @@ class Pipeline:
 
         def _develop_one(name: str) -> None:
             plan = next(p for p in plans if p.name == name)
+            # 模块落地后 DDL 可能更新——刷新写码侧 schema 权威
+            try:
+                from app.utils.schema_audit import format_schema_authority
+                schema = format_schema_authority(project_root / "code")
+                if schema:
+                    dev_loop.schema_authority_summary = schema
+            except Exception:
+                pass
             try:
                 module_results[name] = dev_loop.run_module(
                     name,

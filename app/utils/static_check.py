@@ -17,6 +17,25 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 
+# 竞赛 Web 交付常见第三方（不在此列且不在 project_modules/stdlib
+# → 按「幽灵兄弟模块」阻断。v50 尸检：from auth/sheets import bp
+# 被当成第三方 warning 静默放行，毒死唯一 create_app。）
+_ALLOWED_THIRD_PARTY: frozenset[str] = frozenset({
+    "flask", "fastapi", "uvicorn", "starlette", "werkzeug", "jinja2",
+    "pydantic", "sqlalchemy", "aiosqlite", "httpx", "requests", "yaml",
+    "PIL", "pillow", "dotenv", "multipart", "python_multipart",
+    "itsdangerous", "click", "blinker", "markupsafe", "greenlet",
+    "passlib", "bcrypt", "cryptography", "jwt", "jose", "pyjwt",
+    "wtforms", "email_validator", "bleach", "markdown", "orjson",
+    "ujson", "aiofiles", "dateutil", "pytz", "numpy", "pandas",
+    "redis", "pymongo", "bson", "psycopg2", "psycopg2_binary",
+    "mysql", "MySQLdb", "openai", "litellm",
+})
+
+# 始终允许的项目内特殊包名
+_ALWAYS_PROJECT: frozenset[str] = frozenset({"_shared"})
+
+
 @dataclass
 class StaticCheckResult:
     """静态检查结果（阻断 issues + 提示 warnings）。"""
@@ -40,11 +59,13 @@ def check_imports(
     project_modules: set[str],
     declared_deps: set[str] | None = None,
 ) -> list[str]:
-    """import / 引用核验（契约驱动）。
+    """import / 引用核验（契约驱动 + 模块清单通气）。
 
     - 契约声明依赖某模块但项目无此模块 → 幽灵引用（阻断）；
     - 代码 import 了项目模块但契约未声明 → 未声明跨模块依赖（阻断）；
-    - 非 stdlib 非项目的未知 import → 第三方提示（不阻断，warning 层）。
+    - 代码 import 的根名不在清单、不是 stdlib、不是已知第三方 →
+      幽灵兄弟模块（阻断；v50 断流点）；
+    - 已知第三方 → 提示（不阻断，由 requirements.txt 管理）。
     """
     try:
         tree = ast.parse(code)
@@ -60,9 +81,12 @@ def check_imports(
         elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
             imported_roots.add(node.module.split(".")[0])
 
+    known = set(project_modules) | _ALWAYS_PROJECT
+    stdlib = _stdlib_modules()
+
     if declared_deps is not None:
         for dep in declared_deps:
-            if dep not in project_modules:
+            if dep not in project_modules and dep not in _ALWAYS_PROJECT:
                 issues.append(
                     f"幽灵引用：契约声明依赖 {dep!r} 但项目中不存在该模块"
                 )
@@ -71,6 +95,19 @@ def check_imports(
                 issues.append(
                     f"未声明的跨模块依赖：代码 import 了 {root!r} 但契约 dependencies 未声明"
                 )
+
+    # v52：模块清单非空时，陌生根名不得静默当第三方
+    if project_modules:
+        for root in sorted(imported_roots):
+            if root in known or root in stdlib:
+                continue
+            if root in _ALLOWED_THIRD_PARTY:
+                continue
+            issues.append(
+                f"幽灵兄弟模块：import {root!r} 不在本项目模块清单 "
+                f"{sorted(project_modules)!r} 内，也不是标准库/已知第三方——"
+                f"请改用清单内模块或先在拆分里增加该模块"
+            )
     return issues
 
 
@@ -90,19 +127,24 @@ def run_static_check(
 
     issues.extend(check_imports(code, project_modules, declared_deps))
 
-    # 第三方依赖提示（不阻断）
+    # 已知第三方提示（不阻断）
     try:
         tree = ast.parse(code)
         for node in ast.walk(tree):
+            roots: list[str] = []
             if isinstance(node, ast.Import):
-                for alias in node.names:
-                    root = alias.name.split(".")[0]
-                    if root not in project_modules and root not in _stdlib_modules():
-                        warnings.append(f"第三方依赖提示: {alias.name}（须在 requirements.txt 声明）")
+                roots = [a.name.split(".")[0] for a in node.names]
             elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
-                root = node.module.split(".")[0]
-                if root not in project_modules and root not in _stdlib_modules():
-                    warnings.append(f"第三方依赖提示: {node.module}（须在 requirements.txt 声明）")
+                roots = [node.module.split(".")[0]]
+            for root in roots:
+                if (
+                    root not in project_modules
+                    and root not in _ALWAYS_PROJECT
+                    and root not in _stdlib_modules()
+                    and root in _ALLOWED_THIRD_PARTY
+                ):
+                    warnings.append(
+                        f"第三方依赖提示: {root}（须在 requirements.txt 声明）")
     except SyntaxError:
         pass
 

@@ -185,6 +185,9 @@ class DevLoopEngine:
         self._style_prompt = code_style_prompt(settings.contract_style)
         # M15-3：auto 风格已回写模块（一次性防震荡——同引擎内每模块至多回写一次）
         self._style_adapted: set[str] = set()
+        # v52 通气：pipeline 注入的跨模块图纸（写码提示用；默认空）
+        self.peer_exports_summary: str = ""
+        self.schema_authority_summary: str = ""
 
     # ------------------------------------------------------------------
 
@@ -214,6 +217,19 @@ class DevLoopEngine:
                 + "\n\n## 已有公共层代码（code/_shared/，直接 import 使用，"
                 "不要重复实现；若需修改请用 _shared 标记块给出完整新版本）\n"
                 + shared
+            )
+        # v52 通气：全模块清单/导出符号——pipeline 已构建却长期未注入写码提示
+        peer = getattr(self, "peer_exports_summary", "") or ""
+        if peer:
+            base = base + "\n\n" + peer
+        # schema 权威摘要（已落盘的 CREATE TABLE；写码须对齐列名）
+        schema = getattr(self, "schema_authority_summary", "") or ""
+        if schema:
+            base = (
+                base
+                + "\n\n## 数据库表结构权威（全项目唯一口径；"
+                "SELECT/INSERT 列名必须与此一致，禁止另起同义列）\n"
+                + schema
             )
         # M10-3：Researcher 研究参考段（内容已含数据边界标记与超长截断，
         # 此处仅拼接；空上下文零改动——researcher_enabled 关闭时行为不变）

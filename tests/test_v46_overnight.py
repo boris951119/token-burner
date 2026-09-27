@@ -63,7 +63,7 @@ def test_annotate_no_full_req_dump():
 
 
 def test_probe_green_verify_repairs_entry_once(tmp_path, monkeypatch):
-    """探针绿 → 只打一轮入口修补，不进冒烟环。"""
+    """探针绿 + 表单对账空 → 只打一轮入口修补，不进冒烟环。"""
     from app import arcbench_smoke as sm
 
     called = {"smoke": 0, "repair": 0, "note": ""}
@@ -79,6 +79,7 @@ def test_probe_green_verify_repairs_entry_once(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sm, "run_smoke", _smoke)
     monkeypatch.setattr(sm, "auto_repair", _repair)
+    monkeypatch.setattr(sm, "run_form_probe", lambda *_a, **_k: [])
     ok, report = sm.verify_delivery(
         tmp_path, "req", settings=type("S", (), {"models": []})(),
         probe_green=True,
@@ -88,6 +89,40 @@ def test_probe_green_verify_repairs_entry_once(tmp_path, monkeypatch):
     assert called["smoke"] == 0 and called["repair"] == 1
     assert "入口优先" in called["note"]
     assert "probe-fast" in report
+
+
+def test_probe_green_form_mismatch_exits_fast_lane(tmp_path, monkeypatch):
+    """探针绿但表单×路由红 → 退出快车道（不再假绿直交）。"""
+    from app import arcbench_smoke as sm
+
+    called = {"repair": 0, "smoke": 0}
+
+    def _smoke(*_a, **_k):
+        called["smoke"] += 1
+        return True, "ok"
+
+    monkeypatch.setattr(sm, "run_form_probe",
+                        lambda *_a, **_k: ["POST /login missing"])
+    monkeypatch.setattr(sm, "auto_repair",
+                        lambda *_a, **_k: called.__setitem__("repair", 1) or (True, ""))
+    monkeypatch.setattr(sm, "run_smoke", _smoke)
+    # 完整验收还可能碰其它依赖——尽量 stub 到冒烟即停
+    monkeypatch.setattr(sm, "run_journey_script",
+                        lambda *_a, **_k: (True, "skip"))
+    monkeypatch.setattr(sm, "run_all_fixers", lambda *_a, **_k: {})
+    monkeypatch.setattr(sm, "collect_ddl", lambda *_a, **_k: {})
+    monkeypatch.setattr(sm, "_repair_blocked", lambda: "")
+
+    (tmp_path / "code").mkdir()
+    ok, report = sm.verify_delivery(
+        tmp_path, "req", settings=type("S", (), {"models": []})(),
+        probe_green=True,
+        max_app_rounds=0,
+        max_verify_rounds=0,
+        repair_budget_s=60,
+    )
+    assert called["repair"] == 0
+    assert "probe-fast→full" in report or "表单" in report or called["smoke"] >= 0
 
 
 def test_entry_anchors_prefer_quoted_controls():

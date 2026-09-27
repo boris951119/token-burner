@@ -2050,28 +2050,46 @@ def verify_delivery(
     all_passed = False
     prev_sig = ""
     if probe_green:
-        # 探针已绿：不做 precheck/旅程/自测（那些会静默几十分钟）。
-        # 只给一轮入口向的 LLM 修补，并且调用方用线程墙钟再兜一层。
-        import time as _time
-        deadline = _time.monotonic() + max(30.0, float(repair_budget_s or 8 * 60))
-        msg = "[probe-fast] 探针已绿，仅修入口控件后交 Stage3"
-        print(msg, flush=True)
+        # 探针已绿 ≠ 表单写路径通。v52：快车道前先跑零 LLM 表单×路由对账；
+        # 对不上则退出快车道，走完整验收（能力优先，不靠假绿交棒）。
+        form_issues: list[str] = []
         try:
-            if _time.monotonic() < deadline and max_app_rounds != 0:
-                from app.utils.checklist_priority import checklist_priority_note
-                note = checklist_priority_note(requirement, max_nodes=4)
-                auto_repair(
-                    project_dir, settings, max_rounds=1,
-                    requirement=requirement,
-                    priority_note=(
-                        "【入口优先】官方评测从首页进。先让首页出现需求里的"
-                        "入口控件（可点击的链接或按钮，文案逐字），再谈其它。\n"
-                        + note
-                    ),
-                )
-        except Exception as exc:
-            msg += f"（修补降级: {exc!r}"[:120] + "）"
-        return True, msg
+            form_issues = run_form_probe(code_dir)
+        except Exception:
+            form_issues = []
+        if form_issues:
+            print(
+                f"[probe-fast] 表单×路由未对齐 {len(form_issues)} 处，"
+                "退出快车道走完整验收",
+                flush=True,
+            )
+            notes.append(
+                "[probe-fast→full] 表单对账红: "
+                + "; ".join(form_issues[:5])
+            )
+            probe_green = False
+        else:
+            # 探针已绿且表单对账空：至多 1 轮入口向修补，跳过旅程 LLM。
+            import time as _time
+            deadline = _time.monotonic() + max(30.0, float(repair_budget_s or 8 * 60))
+            msg = "[probe-fast] 探针已绿且表单×路由对齐，仅修入口控件后交 Stage3"
+            print(msg, flush=True)
+            try:
+                if _time.monotonic() < deadline and max_app_rounds != 0:
+                    from app.utils.checklist_priority import checklist_priority_note
+                    note = checklist_priority_note(requirement, max_nodes=4)
+                    auto_repair(
+                        project_dir, settings, max_rounds=1,
+                        requirement=requirement,
+                        priority_note=(
+                            "【入口优先】官方评测从首页进。先让首页出现需求里的"
+                            "入口控件（可点击的链接或按钮，文案逐字），再谈其它。\n"
+                            + note
+                        ),
+                    )
+            except Exception as exc:
+                msg += f"（修补降级: {exc!r}"[:120] + "）"
+            return True, msg
     _beat(project_dir, "验收-启动")
 
     # --- Phase 0: 体检前移（v42-3，零 LLM、秒级）---

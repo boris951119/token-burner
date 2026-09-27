@@ -36,12 +36,13 @@ class TestImportCheck:
 
     def test_ghost_project_import_reported(self):
         # 引用核验（契约驱动）：契约声明依赖某模块但项目无此模块 → 幽灵
+        # v52 另加「幽灵兄弟」同根名阻断，可 ≥1 条
         code = "import ghost_module\n"
         issues = check_imports(
             code, project_modules={"user", "data"}, declared_deps={"ghost_module"}
         )
-        assert len(issues) == 1
-        assert "ghost_module" in issues[0]
+        assert issues
+        assert any("ghost_module" in i for i in issues)
 
     def test_undeclared_project_import_reported(self):
         # 代码 import 了项目模块但契约未声明 → 未声明跨模块依赖
@@ -55,11 +56,38 @@ class TestImportCheck:
         assert check_imports(code, project_modules=set()) == []
 
     def test_third_party_import_allowed_but_flagged_info(self):
-        # 第三方依赖不阻断（由 requirements 管理），仅提示
+        # 无模块清单时：第三方不阻断（由 requirements 管理），仅提示
         code = "import numpy\n"
         result = run_static_check(code, project_modules=set())
         assert result.passed is True  # 不算失败
         assert any("numpy" in i for i in result.warnings)
+
+    def test_ghost_brother_module_blocked_when_inventory_set(self):
+        # v50：from auth import bp 在清单无 auth 时必须阻断（不能当第三方）
+        code = "from auth import bp\nfrom sheets import bp as s\n"
+        result = run_static_check(
+            code, project_modules={"web_shell", "db_infra", "app_factory"},
+            declared_deps=set(),
+        )
+        assert result.passed is False
+        blob = " ".join(result.issues)
+        assert "auth" in blob and "sheets" in blob
+        assert "幽灵兄弟" in blob
+
+    def test_known_third_party_still_ok_with_inventory(self):
+        code = "from flask import Flask\n"
+        result = run_static_check(
+            code, project_modules={"web_shell"}, declared_deps=set(),
+        )
+        assert result.passed is True
+        assert any("flask" in w.lower() for w in result.warnings)
+
+    def test_shared_package_always_allowed(self):
+        code = "from _shared.db import get_conn\n"
+        result = run_static_check(
+            code, project_modules={"web_shell"}, declared_deps=set(),
+        )
+        assert result.passed is True
 
     def test_relative_import_within_module_ok(self):
         code = "from . import helper\n"
