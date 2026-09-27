@@ -48,13 +48,18 @@ def test_oversized_skips_whole_file_llm_repair(tmp_path, capsys):
     assert (handle.root / "code" / "webui_pages" / "webui_pages.py").is_file()
 
 
-def test_annotate_puts_missing_at_top():
+def test_annotate_no_full_req_dump():
+    """置顶只写规则+抽样，禁止整表 `- REQ-…` 可抄清单。"""
     report = SpecReqReport(
-        required=["REQ-1", "REQ-2"], mentioned=[], missing=["REQ-1", "REQ-2"],
+        required=[f"REQ-{i}" for i in range(1, 25)],
+        mentioned=[],
+        missing=[f"REQ-{i}" for i in range(1, 25)],
     )
     out = annotate_spec_with_missing("# Spec\n\nbody only\n", report)
     assert out.index("必须认领的 ATOMIC") < out.index("body only")
-    assert "REQ-1" in out and "REQ-2" in out
+    assert "spec_req_coverage.json" in out
+    assert "每模块最多" in out or "≤3" in out or "最多 **3**" in out
+    assert out.count("\n- REQ-") == 0
 
 
 def test_probe_green_verify_repairs_entry_once(tmp_path, monkeypatch):

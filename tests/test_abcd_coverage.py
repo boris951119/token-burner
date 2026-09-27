@@ -6,7 +6,11 @@ from pathlib import Path
 
 from app.agents.module_builder import ModulePlan
 from app.utils.atomic_coverage import (
-    audit_atomic_coverage, enforce_atomic_coverage,
+    MAX_ATOMICS_PER_MODULE,
+    audit_atomic_coverage,
+    enforce_atomic_coverage,
+    req_ids_in_plan,
+    validate_split_atomics,
 )
 from app.utils.checklist_priority import checklist_priority_note
 from app.utils.domain_kernels import (
@@ -55,9 +59,70 @@ def test_enforce_assigns_uncovered_into_plans():
     ]
     report = enforce_atomic_coverage(_REQ, plans)
     assert not report.uncovered, report
+    assert not report.duplicates, report.duplicates
     owned_text = " ".join(p.responsibility for p in plans)
     assert "REQ-1-1-1" in owned_text and "REQ-2-1-1" in owned_text
-    assert report.assigned
+    for plan in plans:
+        assert len(req_ids_in_plan(plan)) <= MAX_ATOMICS_PER_MODULE, plan.name
+
+
+def test_normalize_dedupes_and_splits_overflow():
+    """整表抄进多模块 → 唯一主人 + 超限拆册。"""
+    dump = (
+        "全站 UI\nREQ-1-1-1 REQ-2-1-1 REQ-2-1-2 "
+        "REQ-3-1-1 REQ-3-1-2 REQ-3-1-3 REQ-3-1-4"
+    )
+    # 扩展题面到 7 条，逼出 overflow
+    req = _REQ + """
+## 模块：REQ-3 Extra
+### REQ-3-1-1 A（验收标准）
+a
+### REQ-3-1-2 B（验收标准）
+b
+### REQ-3-1-3 C（验收标准）
+c
+### REQ-3-1-4 D（验收标准）
+d
+"""
+    plans = [
+        ModulePlan(name="web_shell", responsibility=dump,
+                   dependencies=[], priority=1),
+        ModulePlan(name="web_shell_copy", responsibility=dump,
+                   dependencies=[], priority=2),
+    ]
+    report = enforce_atomic_coverage(req, plans)
+    assert not report.uncovered, report
+    assert not report.duplicates, report.duplicates
+    assert any(p.name.startswith("web_shell_p") for p in plans)
+    for plan in plans:
+        n = len(req_ids_in_plan(plan))
+        assert n <= MAX_ATOMICS_PER_MODULE, (plan.name, n)
+
+
+def test_validate_split_rejects_dup_and_oversize():
+    dump = "REQ-1-1-1 REQ-2-1-1 REQ-2-1-2"
+    plans = [
+        ModulePlan(name="a", responsibility=dump, dependencies=[], priority=1),
+        ModulePlan(name="b", responsibility=dump, dependencies=[], priority=2),
+    ]
+    problems = validate_split_atomics(_REQ, plans)
+    assert problems
+    assert any("重复" in p or "上限" in p or "3" in p for p in problems)
+
+
+def test_annotate_no_full_req_bullet_dump():
+    from app.utils.spec_req_audit import (
+        annotate_spec_with_missing, SpecReqReport,
+    )
+    missing = [f"REQ-{i}" for i in range(1, 25)]
+    report = SpecReqReport(
+        required=missing, mentioned=[], missing=missing,
+    )
+    out = annotate_spec_with_missing("# Spec\n\nbody only\n", report)
+    assert "必须认领的 ATOMIC" in out
+    assert "spec_req_coverage.json" in out
+    assert out.count("\n- REQ-") == 0
+    assert "body only" in out
 
 
 def test_main_journeys_extracted():

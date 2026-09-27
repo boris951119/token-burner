@@ -22,4 +22,9 @@
 拆分自查：需求总条数 ÷3 ≲ 模块数；某个模块的职责描述里出现了「以及」「还有」
 「同时负责」这类连接词，通常意味着它该被再切一层。
 
+**禁止**把 spec 文首/文末的「必须认领的 ATOMIC」整表 REQ id 抄进多个模块的
+responsibility（实测会令覆盖闸报「重复=N」且 UI 模块膨胀到 800+ 行后被冻结）。
+每条 ATOMIC 只能出现在**一个**模块的职责里；完整清单在
+sessions/spec_req_coverage.json，按题面 FOLDER 分配即可。
+
 注意：模块名不得使用系统保留名（code、tests、modules、changelog、sessions、logs、_shared、conftest、spec 等）——这些是项目目录结构名，模块须以功能命名。

@@ -57,13 +57,17 @@ def audit_spec_req_coverage(requirement: str, spec_md: str) -> SpecReqReport:
 
 
 def annotate_spec_with_missing(spec_md: str, report: SpecReqReport) -> str:
-    """缺项追加：未点名 ATOMIC 置顶（拆分先看见）+ 尾注留痕；已有对账段则替换。"""
+    """缺项提示：只写规则与抽样，禁止把整表 REQ id 贴进 spec 正文。
+
+    6d28 取证：旧版把 missing 全量 `- REQ-…` 置顶 → 拆分把整表抄进每个
+    模块 responsibility → coverage「重复=24」。完整 id 只落
+    sessions/spec_req_coverage.json，拆分按 FOLDER 唯一分配。
+    """
     body = (spec_md or "").rstrip()
     if "【spec↔REQ 对账" in body or "【必须认领的 ATOMIC" in body:
         body = re.split(
             r"\n## 【(?:spec↔REQ 对账|必须认领的 ATOMIC)",
             body, maxsplit=1)[0].rstrip()
-        # 也清掉可能落在文首的旧头
         body = re.sub(
             r"^## 【必须认领的 ATOMIC[\s\S]*?\n(?=## |\Z)",
             "", body).rstrip()
@@ -73,16 +77,20 @@ def annotate_spec_with_missing(spec_md: str, report: SpecReqReport) -> str:
             "题面 ATOMIC 均已在 spec 中点名。\n"
         )
         return body + note
-    lines = "\n".join(f"- {rid}" for rid in report.missing)
+    sample = ", ".join(report.missing[:3])
+    if len(report.missing) > 3:
+        sample += " …"
     header = (
         f"## 【必须认领的 ATOMIC · 缺 {len(report.missing)}/{len(report.required)}】\n"
-        "下列 ATOMIC 在收敛 spec 正文中未被点名（讨论层摘要盲区）。"
-        "拆分时每个 id 必须有模块主人；写码不得当不存在：\n"
-        f"{lines}\n\n"
+        f"共 {len(report.missing)} 条未在正文点名。"
+        "完整 id 清单只在 `sessions/spec_req_coverage.json` 的 `missing` 字段"
+        "（抽样：" + sample + "）。\n"
+        "拆分硬约束：每条 ATOMIC **唯一**主人；每模块最多 **3** 条；"
+        "**禁止**把整表 REQ id 抄进多个模块的 responsibility。\n\n"
     )
     note = (
         f"\n\n## 【spec↔REQ 对账 {report.ratio}·缺 {len(report.missing)}】\n"
-        "同上清单已置顶，此处留痕供排障。\n"
+        "缺项规则见文首；勿在模块职责里粘贴整表 id。\n"
     )
     return header + body + note
 

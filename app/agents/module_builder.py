@@ -400,6 +400,36 @@ class ModuleBuilder:
                 if not plans:
                     break
             if plans:
+                # v50：程序校验每模块 ≤3 ATOMIC + 无重复认领（交由重试提示）
+                atom_problems: list[str] = []
+                if requirement.strip():
+                    try:
+                        from app.utils.atomic_coverage import (
+                            validate_split_atomics,
+                        )
+                        atom_problems = validate_split_atomics(
+                            requirement, plans)
+                    except Exception as exc:
+                        print(
+                            f"[split] ATOMIC 校验跳过（{type(exc).__name__}）",
+                            flush=True,
+                        )
+                if atom_problems:
+                    last_error = "；".join(atom_problems)
+                    if attempt < attempts - 1:
+                        user_content = (
+                            user_content
+                            + "\n\n【上次拆分被程序拒收，请按下列硬约束重出 JSON】\n"
+                            + "\n".join(f"- {p}" for p in atom_problems)
+                            + "\n每条 ATOMIC 只能出现在一个模块；每模块最多 3 条；"
+                            "禁止抄整表 REQ id。"
+                        )
+                        continue
+                    print(
+                        f"[split] ATOMIC 校验未过仍采用拆分，"
+                        f"交由 coverage 归一: {last_error}",
+                        flush=True,
+                    )
                 inject_ui_manifest(plans, requirement)
                 from app.utils.seed_contract import inject_seed_contract
                 seed_target = inject_seed_contract(plans, requirement)
