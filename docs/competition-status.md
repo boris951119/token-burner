@@ -1752,3 +1752,16 @@ API 只回 `interfaces`/`tests`（`tests=[]`，scenarios 不在本端点）。�
 - 双刀构成：11f0245（Cursor 刀2：拆分校验+归一，ZCode 复审通过）+ 9927446（ZCode 刀1：description 逐字契约通道+占位符黑名单）；全量 1923 绿 + 闸 ABC 全绿（C 段复跑确认早上的 FAIL 是百炼网关抖动）。
 - 增量证明（对 v49 官方失败簇）：v49 死于首页首断言（"Last updated" 等 desc 契约缺失）+ 拆分重复认领（24/24）+ web_shell 超尺寸冻结——v50 三者全中。预期读数：首页含 "Last updated" 字样、coverage 重复=0、单文件无 >600 行冻结。
 - sheet 累计花费 ~¥60/¥120（v48+v49 各 ~¥15-20 + 更早若干），本发为额度内最后一发。
+
+## 批次#72：v50 尸检 → v51 组合防线（ZCode，09-27 午）
+
+### v50（run 4376f7aaf644）终态与死因
+- 终态 FAILED 0/100、feature 0/24、1.03M token、~2.9h。**刀1/刀2 生成侧增益实证**：coverage `重复=0`（v49=24）、模块小而多、web_ui 真蓝图产出——但全没上场。
+- 死因链（拉回交付树 .tmp/v50-delivered/ 本地解剖）：`app_factory.py` 幽灵 import（`from auth/sheets import bp`，模块不存在）→ 唯一真工厂炸 → 候选池全员无 `/`（pivot_api 迷你 app 赢路由数）→ 保活合成首页 → **入口文案注入把合成页替换成锚点页，顺带洗掉判红标记** → 探针假绿 PASS → 官方 0/100。
+- v50 树三层并发缺陷：①工厂幽灵 import ②workbook_query import 级 SQL 炸（schema 漂移：`cells.workbook_id` 列不存在）③多数 API 模块 app 为函数内构建（`_make_app()`），模块级扫描不可见。
+
+### v51 修复（commit `31c46c8`，launcher 三连）
+1. 工厂失败必须喊出死因（`create_app 工厂失败 …` 可 grep）；
+2. **组合防线**：候选池全员无 `/` 时机械组合全部模块 Blueprint + 迷你 app 路由 + 零参 `make_app` 收割 → 真应用兜底（v50 真题树实测：7 蓝图、真 UI 壳上场、/api/health 绿）；
+3. **注入政策反转**：入口文案注入只许替换带 `data-arcbench-fallback` 标记的合成兜底页，真实作者页/组合 SPA 壳永不洗白（v49/v50 两轮 0 分的共同最后一击）。
+验证：+2 真题复现测试，全量 **1926 绿**（既有 perf_baseline macOS 路径红除外）；v50 真题树用新 launcher 起服实证。**v51 包闸 A+B+C 全绿**（C 段 rc=0、run_completed、GET / 200），包在 `~/Desktop/token-burner-v51.zip`，未发车——sheet 额度已破线（~¥133/¥120 上限），发车待用户拍板。
