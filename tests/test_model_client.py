@@ -42,7 +42,10 @@ class FakeCompletion:
     def __call__(self, model: str, messages: list, **kwargs):
         self.calls.append({"model": model, "messages": messages, **kwargs})
         if self.fail_on_response_format and "response_format" in kwargs:
-            raise RuntimeError("response_format is not supported by this model")
+            raise RuntimeError(
+                "Error code: 400 - Bad Request: response_format is not "
+                "supported by this model"
+            )
         return self.responses[min(len(self.calls) - 1, len(self.responses) - 1)]
 
 
@@ -310,3 +313,114 @@ class TestTransientDecodeErrors:
         )
         resp = client.chat("gpt-4o", [{"role": "user", "content": "a"}])
         assert resp.content == "recovered"
+
+
+class TestJsonModeDegradeGuard:
+    """v54 P1-2：json_mode 降级只认 response_format 不支持；超时禁降级；梯减半。"""
+
+    def test_timeout_does_not_degrade_json_mode(self, gpt_key):
+        class AlwaysTimeout:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, model, messages, **kwargs):
+                self.calls += 1
+                raise TimeoutError("wall clock exceeded")
+
+        fake = AlwaysTimeout()
+        client = ModelClient(
+            Settings(models=["gpt-4o"], llm_max_retries=4, retry_backoff_base=0),
+            completion_fn=fake,
+        )
+        with pytest.raises(RuntimeError):
+            client.chat(
+                "gpt-4o", [{"role": "user", "content": "hi"}], json_mode=True,
+            )
+        # 超时在 _call_with_retry 立即上抛，不整梯重跑，更不降级第二梯
+        assert fake.calls == 1
+
+    def test_response_format_400_degrades_with_half_retries(self, gpt_key):
+        class RfThenOk:
+            def __init__(self):
+                self.calls = []
+
+            def __call__(self, model, messages, **kwargs):
+                self.calls.append(kwargs)
+                if "response_format" in kwargs:
+                    raise RuntimeError(
+                        "Error code: 400 - Bad Request: "
+                        "'response_format' is not supported"
+                    )
+                return make_response(content='{"ok":true}')
+
+        fake = RfThenOk()
+        client = ModelClient(
+            Settings(models=["gpt-4o"], llm_max_retries=4, retry_backoff_base=0),
+            completion_fn=fake,
+        )
+        result = client.chat(
+            "gpt-4o", [{"role": "user", "content": "hi"}], json_mode=True,
+        )
+        assert result.content == '{"ok":true}'
+        assert "response_format" in fake.calls[0]
+        assert "response_format" not in fake.calls[1]
+        # 首梯 1 次（非瞬态立即抛）+ 降级梯至多 half+1；此处首发即成功 → 共 2
+        assert len(fake.calls) == 2
+
+    def test_degrade_ladder_retries_halved(self, gpt_key):
+        """降级梯 max_retries = llm_max_retries//2（至少 1）。"""
+        from app.utils.model_client import _is_response_format_unsupported
+
+        assert _is_response_format_unsupported(
+            RuntimeError("400 Bad Request: response_format unsupported")
+        )
+        assert not _is_response_format_unsupported(
+            RuntimeError("LLM 调用失败: TimeoutError('wall')")
+        )
+
+        class AlwaysConnFail:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, model, messages, **kwargs):
+                self.calls += 1
+                raise RuntimeError("Connection error: refused")
+
+        fake = AlwaysConnFail()
+        client = ModelClient(
+            Settings(models=["gpt-4o"], llm_max_retries=4, retry_backoff_base=0),
+            completion_fn=fake,
+        )
+        with pytest.raises(RuntimeError):
+            client.chat(
+                "gpt-4o", [{"role": "user", "content": "hi"}], json_mode=True,
+            )
+        # 连接错误：首梯重试 4 次 = 5 次尝试，禁止降级第二梯
+        assert fake.calls == 5
+
+    def test_degrade_half_retries_on_transient_after_rf_strip(self, gpt_key):
+        """剥掉 response_format 后瞬态失败：降级梯只用 half 次重试。"""
+        class RfThenTransient:
+            def __init__(self):
+                self.calls = 0
+
+            def __call__(self, model, messages, **kwargs):
+                self.calls += 1
+                if "response_format" in kwargs:
+                    raise RuntimeError(
+                        "400 Bad Request: response_format not allowed"
+                    )
+                raise RuntimeError("429 rate limit")
+
+        fake = RfThenTransient()
+        # llm_max_retries=4 → half=2 → 降级梯 attempt 0..2 = 3 次
+        client = ModelClient(
+            Settings(models=["gpt-4o"], llm_max_retries=4, retry_backoff_base=0),
+            completion_fn=fake,
+        )
+        with pytest.raises(RuntimeError):
+            client.chat(
+                "gpt-4o", [{"role": "user", "content": "hi"}], json_mode=True,
+            )
+        # 1（带 rf 立刻非瞬态抛）+ 3（降级梯 half=2 → 3 attempts）= 4
+        assert fake.calls == 4

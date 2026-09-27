@@ -79,6 +79,36 @@ def _is_timeout(exc: BaseException) -> bool:
     return any("timeout" in c.__name__.lower() for c in type(exc).__mro__)
 
 
+def _is_response_format_unsupported(exc: BaseException) -> bool:
+    """仅当错误像「response_format / json_object 不被支持」才允许 json_mode 降级。
+
+    v54 P1-2：超时/连接类错误禁止整梯重跑（单调用最坏 60-80 分钟）。
+    判定：消息含 400 或 bad request，且含 response_format 或 json（大小写不敏感）。
+    """
+    cur: BaseException | None = exc
+    seen: set[int] = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if _is_timeout(cur):
+            return False
+        cur = cur.__cause__ or cur.__context__
+
+    text = f"{type(exc).__name__} {exc}".lower()
+    # 超时/连接：即便包进 RuntimeError 也禁止降级整梯
+    if any(m in text for m in ("timeout", "timed out")):
+        return False
+    if any(m in text for m in ("connection", "connect error", "connecttimeout")):
+        if "response_format" not in text and "json_object" not in text:
+            return False
+    has_bad_req = ("400" in text) or ("bad request" in text)
+    has_rf = (
+        "response_format" in text
+        or "json_object" in text
+        or "json mode" in text
+    )
+    return has_bad_req and has_rf
+
+
 def _is_transient(exc: Exception) -> bool:
     """判断异常是否为瞬态（可退避重试）。"""
     if isinstance(exc, TimeoutError):
@@ -278,6 +308,7 @@ class ModelClient:
         kwargs: dict[str, Any],
         model: str,
         error_prefix: str,
+        max_retries: int | None = None,
     ) -> Any:
         """调用 LLM 接口（9 章韧性：瞬态错误指数退避重试）。
 
@@ -285,8 +316,10 @@ class ModelClient:
           退避 sleep = retry_backoff_base * 2**attempt；
         - 非瞬态错误（参数/鉴权类）立即上抛（重试无意义，徒耗预算）；
         - 重试耗尽抛 RuntimeError（含尝试次数，可观测）。
+        - max_retries 可覆盖（json_mode 降级梯用 max_retries//2）。
         """
-        max_retries = self.settings.llm_max_retries
+        if max_retries is None:
+            max_retries = self.settings.llm_max_retries
         for attempt in range(max_retries + 1):
             # M8-5：每次尝试（含 429 重试与续写）先取令牌——排队控节奏，
             # 与 9 章退避重试互补；未启用限流时零开销直通
@@ -384,12 +417,15 @@ class ModelClient:
             result = self._call_with_retry(
                 _call_and_build, kwargs, model, "LLM 调用失败"
             )
-        except RuntimeError:
-            if use_json:
-                # 15.1：模型不支持 response_format 时降级为普通调用
+        except RuntimeError as exc:
+            # v54 P1-2：json_mode 降级只允许 response_format 不支持类错误；
+            # 超时/连接禁止整梯重跑；降级梯重试次数减半（至少 1）。
+            if use_json and _is_response_format_unsupported(exc):
                 kwargs.pop("response_format", None)
+                half = max(1, self.settings.llm_max_retries // 2)
                 result = self._call_with_retry(
-                    _call_and_build, kwargs, model, "LLM 调用失败"
+                    _call_and_build, kwargs, model, "LLM 调用失败",
+                    max_retries=half,
                 )
             else:
                 raise
