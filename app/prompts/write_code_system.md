@@ -84,6 +84,15 @@
 - 入口工厂模块（含 `create_app` + `register_blueprint`）除外：它负责把各
   模块的 `_bp` 挂进应用，自身可以不导出 `_bp`。
 
+
+【工厂内初始化的上下文硬规则（实测 seed 链炸工厂的死法）】
+- 入口工厂 `create_app` 内调用 `init_db` / seed / 任何触库函数时，必须包在
+  `with app.app_context():` 内（先 `app = Flask(...)` 再进上下文再初始化）；
+- 或者让 init/seed 函数**自管 sqlite3 连接**（函数内自行 connect/close），
+  两种二选一；
+- **禁止**让触库函数依赖 `flask.g` / `current_app` 却在工厂裸调——
+  `Working outside of application context` 会把整个真工厂毒死（实测死法）。
+
 （接口契约风格约束段由系统按 contract_style 配置运行时拼接——
 见 app/utils/contract_style.py）
 仅输出代码本身（无解释、无围栏）。
