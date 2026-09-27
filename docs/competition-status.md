@@ -1765,3 +1765,13 @@ API 只回 `interfaces`/`tests`（`tests=[]`，scenarios 不在本端点）。�
 2. **组合防线**：候选池全员无 `/` 时机械组合全部模块 Blueprint + 迷你 app 路由 + 零参 `make_app` 收割 → 真应用兜底（v50 真题树实测：7 蓝图、真 UI 壳上场、/api/health 绿）；
 3. **注入政策反转**：入口文案注入只许替换带 `data-arcbench-fallback` 标记的合成兜底页，真实作者页/组合 SPA 壳永不洗白（v49/v50 两轮 0 分的共同最后一击）。
 验证：+2 真题复现测试，全量 **1926 绿**（既有 perf_baseline macOS 路径红除外）；v50 真题树用新 launcher 起服实证。**v51 包闸 A+B+C 全绿**（C 段 rc=0、run_completed、GET / 200），包在 `~/Desktop/token-burner-v51.zip`，未发车——sheet 额度已破线（~¥133/¥120 上限），发车待用户拍板。
+
+## 批次#73：v52 双线发车（09-27 14:06，用户拍板）
+
+- 提交：token-burner-v52 = `12ab00ba296f`（official_evaluation，deepseek-v4-pro）
+- **双发成功**（比赛页 "Run 2 remaining tasks" 一键按钮，确认框 accept 后生效）：
+  - sheet：run `045fe8578302` RUNNING
+  - github：run `d462dc2f3870` RUNNING（**GitHub 题历史首跑**）
+- v52 = 四刀通气工程（`d356cac`，Cursor 实现 ZCode 复审）：P0-1 peer_exports 死线接通 / P0-2 幻影 import 门禁 / P1-1 schema 唯一权威源 / P1-2 probe-green 后强制表单×路由对账。全量 1932 绿 + 闸 A+B+C 全绿。
+- 平台交互备忘：Run 按钮触发原生 confirm() 会冻结页面线程——Playwright 必须发起点击后循环 getJsDialog accept，不能同步 await click。
+- 预算：余额约 ¥350（双 run 各 ~¥15-60）。
