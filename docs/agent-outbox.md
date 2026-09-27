@@ -15,6 +15,7 @@
 | 09-28 00:08 | v54 修1·P1-3 | factory_pool 子进程化；超时/infra fail-closed；相关+全量绿（本提交） |
 | 09-28 00:09 | v54 修2·P1-2 | json_mode 降级仅 400+response_format；超时/连接禁降级；梯减半；相关+全量绿（本提交） |
 | 09-28 00:10 | v54 修3·P1-5 | RepoFixer stop_check + probe-fast join 超时置旗；相关+全量绿（本提交） |
+| 09-28 00:12 | v54 修4·P2-8 | 组合兜底全收顶层 Blueprint；双蓝图两套路由进应用；相关+全量绿（本提交） |
 
 ---
 

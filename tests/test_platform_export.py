@@ -945,6 +945,41 @@ def test_phantom_import_factory_triggers_blueprint_composition(tmp_path, capsys)
     assert "机械组合" in out, out
 
 
+def test_compose_registers_all_top_level_blueprints(tmp_path, capsys):
+    """v54 P2-8：双蓝图模块两套路由都进组合应用（不再 break 只收第一个）。"""
+    from app.platform_export import _BACKEND_MAIN
+
+    be = tmp_path / "backend"
+    be.mkdir()
+    # 无 / 的迷你 app 占池 → 逼进 _compose_from_blueprints
+    (be / "pivot_api.py").write_text(
+        "from flask import Flask\n"
+        "app = Flask('pivot_api')\n"
+        "app.add_url_rule('/p0', 'p0', lambda: 'p')\n",
+        encoding="utf-8")
+    (be / "dual_bp.py").write_text(
+        "from flask import Blueprint\n"
+        "api_bp = Blueprint('dual_api', __name__)\n"
+        "@api_bp.route('/api/items')\n"
+        "def items():\n    return 'items-ok'\n"
+        "ui_bp = Blueprint('dual_ui', __name__)\n"
+        "@ui_bp.route('/')\n"
+        "def home():\n    return 'dual-home'\n",
+        encoding="utf-8")
+    (be / "requirements.txt").write_text("flask\n", encoding="utf-8")
+    (be / "main.py").write_text(_BACKEND_MAIN, encoding="utf-8")
+    mod = _exec_entry(be, "runner_v54_dual_bp")
+    rules = {r.rule for r in mod.app.url_map.iter_rules()}
+    assert "/" in rules, rules
+    assert "/api/items" in rules, rules
+    body = mod.app.test_client().get("/").get_data(as_text=True)
+    assert "dual-home" in body
+    items = mod.app.test_client().get("/api/items").get_data(as_text=True)
+    assert "items-ok" in items
+    out = capsys.readouterr().out
+    assert "机械组合" in out, out
+
+
 def test_injected_entry_page_keeps_fallback_marker(tmp_path):
     """入口文案注入页必须保留 data-arcbench-fallback 标记——v50 实证注入
     替换会洗掉标记骗过探针（假绿）。"""

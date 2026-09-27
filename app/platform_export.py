@@ -425,7 +425,9 @@ def _compose_from_blueprints():
     composed = Flask("arcbench_composed")
     seen, ok = set(), 0
     for _mod in list(sys.modules.values()):
-        _bp = None
+        # v54 P2-8：每模块收集全部顶层 Blueprint（去掉只收第一个的 break），
+        # 与 mechanical_assembly 全收口径一致；名字冲突跳过。
+        _bps = []
         for _k in dir(_mod):
             if _k.startswith("_"):
                 continue
@@ -434,8 +436,8 @@ def _compose_from_blueprints():
             except Exception:
                 continue
             if type(_v).__name__ == "Blueprint":
-                _bp = _v
-                break
+                _bps.append(_v)
+                continue
             # 蓝图工厂（web_ui.create_web_ui_blueprint 式）：名字带 blueprint
             # 的 callable 且零参可调，产物是 Blueprint 就收
             if (callable(_v) and "blueprint" in _k.lower()
@@ -445,16 +447,20 @@ def _compose_from_blueprints():
                 except Exception:
                     continue
                 if type(_r).__name__ == "Blueprint":
-                    _bp = _r
-                    break
-        if _bp is not None and getattr(_bp, "name", None) not in seen:
+                    _bps.append(_r)
+        _registered_any = False
+        for _bp in _bps:
+            if _bp is None or getattr(_bp, "name", None) in seen:
+                continue
             seen.add(getattr(_bp, "name", None))
             try:
                 composed.register_blueprint(_bp)
                 ok += 1
-                continue
+                _registered_any = True
             except Exception:
                 pass
+        if _registered_any:
+            continue
         # 迷你 app 路由并入（v50 实证：API 模块各自带 Flask app，不并入则
         # SPA 的 fetch 全 404）。模块级 app + 零参工厂函数（_make_app/
         # make_app/build_app，v50 树 workbook_crud 式）都收。
