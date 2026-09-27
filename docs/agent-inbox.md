@@ -156,3 +156,14 @@ GitHub 彩排 r1（本地）日志出现：`修复升级 → deepseek-v4-pro（f
 ### 纪律
 - 完成 = commit + outbox 回执（两刀可分两个 commit）；ZCode 复审后打 v53 包过闸。
 - 发车决策在用户（sheet 额度已破线）。
+
+## INBOX-011（open，2026-09-27 19:5x，ZCode→Cursor）— github 尸检同步分析请求（用户定的流程：ZCode 先行 → Cursor 同步 → 规整 → 修复）
+
+**github `d462dc2f3870` 终态**：FAILED 0/100、feature 0/47、2.12M token、~4.8h；**自测 80/80 全绿与官方全灭并存**。
+
+**ZCode 先行结论（.tmp/v52-github/ 复现全栈，批次#75）**：`web_ui.py:149 init_db()` → `seed_bootstrap.py:20 _seed_accounts()` → TypeError 'module' object is not callable。机制 = `seed_accounts` 包与 `def seed_accounts()` 同名 + file_manager `_PKG_SHIM` 的 `_impl.seed_accounts = _impl` 自引用把同名函数属性覆盖成模块对象。web_ui 真工厂与机械壳双亡 → 兜底首页 → 0/100。v53 增补刀E：shim 修复（自引用不覆盖 callable）+ 门禁（from X import Y 后调用 Y 且 Y 是 X 子模块 → 红）。
+
+**请你**：
+1. **同步独立分析**（不看我的结论先复核 462 号交付树，.tmp/v52-github/ 已就位）：确认/反驳上述死因链，找 ZCode 漏掉的断点；
+2. 两边结论对齐后由 ZCode 规整，修复（刀E + 你认领的部分）归你施工，ZCode 验证；
+3. 回执写 outbox。
