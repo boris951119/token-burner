@@ -1832,3 +1832,15 @@ API 只回 `interfaces`/`tests`（`tests=[]`，scenarios 不在本端点）。�
 - 五刀全部有真题树尸检背书（sheet 045fe / github d462 两棵交付树），全量 1947 绿 + 闸 A+B+C 全绿。
 - 真题树回归记录：github 树全量替换 42 个旧 shim 后 module-not-callable 绝迹；剩余 arity/app-context 层已被刀 A 与刀 F 覆盖（新产物门禁/提示词侧）。
 - 预算：余额 ~¥350 减双 run 消耗。
+
+## 批次#78：PM 视角全线评审（09-27 晚，ZCode；与新刀无关的新发现）
+
+**P0-1（已修 `909ac06`）**：coverage 归一追加的 `*_p2` 溢出分册**永不进开发循环**——`build_order` 在覆盖闸之前算好，normalize 追加分册后 order 不重算 → 报告全绿、盘上无代码（47 需求级大题几乎必触发）。修复：覆盖闸后重算 order。
+**P1-1（已修同 commit）**：ingest 需求文本规则 7/8/9 教模型写 `bp = Blueprint`，刀 D 门禁只认 `_bp`——两套提示词正面打架，v53 在飞双 run 正被烧修复轮。修复：三处文本对齐 `_bp`。
+
+**其余发现（待排期，按优先级）**：
+- P1-2 json_mode 降级整梯重跑（单调用最坏 60-80 分钟，打穿 wind-down 标定）；
+- P1-3 factory_pool 在 agent 主进程 import 生成代码 + del sys.modules 同名键（生成包叫 app/config 时逐出 agent 自身模块，probe-fast 成果静默不落交付）——应回子进程探针；
+- P1-4 视觉转写在剥代理之前执行（代理环境截图转写静默归零）+ 视觉 token 不入预算闸；
+- P1-5 probe-fast 8 分钟 join 超时后不终止修补线程，与终局导出竞态（撕裂写入）；
+- P2-1 resume 不重建 peer_exports + interfaces.json 双源漂移；P2-4 接口依赖不一致硬 raise 丢弃整份拆分（应机械覆写）；P2-7 `_modnames` 前缀误伤 main_window/manager_ui；P2-8 组合兜底每模块只收第一个 Blueprint；P2-11 config 档位无 profile 概念（试跑/正式共用文件的结构性根因）；P2-12 测试盲区清单（overflow 分册集成/resume 契约漂移/降级梯墙钟等）。
