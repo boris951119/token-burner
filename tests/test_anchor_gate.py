@@ -152,7 +152,7 @@ class TestAutoRepairExtraIssue:
 
         class _Fixer:
             def __init__(self, llm, project_dir, test_cmd=None,
-                         max_rounds=3):
+                         max_rounds=3, stop_check=None):
                 pass
 
             def fix(self, issue):
