@@ -629,7 +629,9 @@ def test_home_backfilled_when_author_omits_it(tmp_path, capsys):
 
 
 def test_weak_home_gains_requirement_anchors(tmp_path):
-    """首页是 JSON/空壳、题面入口不在 DOM 里时，补可见链接。"""
+    """v50 尸检改策：注入只作用于合成兜底页；真实作者页（哪怕是 JSON 空壳）
+    一律不动——v50 实证注入把真应用洗成占位页=0/100。锚点 enrich 只发生在
+    _ensure_home 的合成页上。"""
     import json
 
     be = _plain_backend(tmp_path, (
@@ -645,9 +647,28 @@ def test_weak_home_gains_requirement_anchors(tmp_path):
         json.dumps({"anchors": ["New sheet"]}), encoding="utf-8")
     mod = _exec_entry(be, "runner_entry_wrap")
     body = mod.app.test_client().get("/").get_data(as_text=True)
-    assert "New sheet" in body
-    assert "<a " in body
+    # 作者页必须原样活着（不替换、不洗白）
+    assert '"ok"' in body and "New sheet" not in body
     assert mod.app.test_client().get("/sheets").get_data(as_text=True) == "grid"
+
+
+def test_fallback_home_gains_anchors(tmp_path):
+    """合成兜底页（有标记）必须被 enrich 成带锚点的可见链接页。"""
+    import json
+
+    be = _plain_backend(tmp_path, (
+        "from flask import Flask\n"
+        "app = Flask(__name__)\n"
+        "@app.route('/api/health')\n"
+        "def h():\n    return {'status': 'ok'}\n"
+        "@app.route('/sheets')\n"
+        "def sheets():\n    return 'grid'\n"))
+    (be / "arcbench_entry.json").write_text(
+        json.dumps({"anchors": ["New sheet"]}), encoding="utf-8")
+    mod = _exec_entry(be, "runner_entry_fallback")
+    body = mod.app.test_client().get("/").get_data(as_text=True)
+    assert 'data-arcbench-fallback="1"' in body
+    assert "New sheet" in body and "<a " in body
 
 
 def test_home_that_already_shows_anchor_is_kept(tmp_path):
@@ -846,3 +867,69 @@ def test_fallback_home_is_flagged_and_lists_routes(tmp_path):
     body = mod.app.test_client().get("/").get_data(as_text=True)
     assert 'data-arcbench-fallback="1"' in body
     assert 'href="/workbooks"' in body, "保活页必须铺真实路由链接"
+
+
+# ---- v50 尸检复现（run 4376f7aaf644，0/100）--------------------------------
+# app_factory 幽灵 import（from auth/sheets import bp，模块不存在）毒死唯一
+# 真工厂 → 候选池全员无 / → 路由数捡了 pivot_api 迷你 app → 合成首页。
+
+def test_phantom_import_factory_triggers_blueprint_composition(tmp_path, capsys):
+    """工厂被幽灵 import 炸掉时：①日志必须喊出死因；②机械组合 Blueprint
+    兜底成真应用，web_ui 的 / 要活着。"""
+    from app.platform_export import _BACKEND_MAIN
+
+    be = tmp_path / "backend"
+    be.mkdir()
+    (be / "app_factory.py").write_text(
+        "from flask import Flask\n"
+        "def create_app():\n"
+        "    from auth import bp as auth_bp\n"      # 幽灵模块
+        "    from sheets import bp as sheets_bp\n"  # 幽灵模块
+        "    a = Flask('composed_real')\n"
+        "    return a\n",
+        encoding="utf-8")
+    (be / "pivot_api.py").write_text(
+        "from flask import Flask\n"
+        "app = Flask('pivot_api')\n"
+        "for i in range(6):\n"
+        "    app.add_url_rule('/p%d' % i, 'p%d' % i, lambda: '')\n",
+        encoding="utf-8")
+    (be / "web_ui.py").write_text(
+        "from flask import Blueprint\n"
+        "def create_web_ui_blueprint():\n"
+        "    bp = Blueprint('web_ui', __name__)\n"
+        "    @bp.route('/')\n"
+        "    def home():\n        return '<h1>real ui home</h1>'\n"
+        "    return bp\n",
+        encoding="utf-8")
+    (be / "requirements.txt").write_text("flask\n", encoding="utf-8")
+    (be / "main.py").write_text(_BACKEND_MAIN, encoding="utf-8")
+    mod = _exec_entry(be, "runner_v50_phantom")
+    out = capsys.readouterr().out
+    assert "create_app 工厂失败" in out and "auth" in out, out
+    body = mod.app.test_client().get("/").get_data(as_text=True)
+    assert "real ui home" in body, "蓝图组合必须救回真 UI 首页"
+    assert "机械组合" in out, out
+
+
+def test_injected_entry_page_keeps_fallback_marker(tmp_path):
+    """入口文案注入页必须保留 data-arcbench-fallback 标记——v50 实证注入
+    替换会洗掉标记骗过探针（假绿）。"""
+    from app.platform_export import _BACKEND_MAIN
+
+    be = tmp_path / "backend"
+    be.mkdir()
+    (be / "onlymod.py").write_text(
+        "from flask import Flask\n"
+        "app = Flask('onlymod')\n"
+        "@app.route('/workbooks')\n"
+        "def wb():\n    return 'ok'\n",
+        encoding="utf-8")
+    (be / "arcbench_entry.json").write_text(
+        '{"anchors": ["Q3 Sales"]}', encoding="utf-8")
+    (be / "requirements.txt").write_text("flask\n", encoding="utf-8")
+    (be / "main.py").write_text(_BACKEND_MAIN, encoding="utf-8")
+    mod = _exec_entry(be, "runner_v50_marker")
+    body = mod.app.test_client().get("/").get_data(as_text=True)
+    assert 'data-arcbench-fallback="1"' in body
+    assert "Q3 Sales" in body
