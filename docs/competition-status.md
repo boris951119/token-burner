@@ -1744,3 +1744,11 @@ API 只回 `interfaces`/`tests`（`tests=[]`，scenarios 不在本端点）。�
 - **刀2 拆分程序校验**：重复认领>50% 打回重拆（现 report-only）；模块契约交叉校验——认领 REQ 的编译清单事实必须在职责文本中出现（零 LLM 可查），缺则把该 REQ 的逐字事实块机械补进职责。
 - 附带：filter_engine.py:170 `"" (right)` 字符串当函数调用（SyntaxWarning 实证）；tests 登记为 0（快车道跳过自测登记，功能率 0/24 的直接原因——参考指标，顺手在快车道补登记）。
 - 预算：sheet 已烧 ~¥60/上限 ¥120，v50 为最后一发额度——两刀落地 + 本地 web_home 探针（首页必须含题面 description 逐字契约抽检）全绿才发。
+
+### v50 发车记录（08:40，ZCode 按"闸绿即发"常设授权执行）
+
+- 提交：token-burner-v50 = `f7005097e1ea`（official_evaluation，deepseek-v4-pro）
+- **发车：run `4376f7aaf644`，sheet 任务，08:40:31 RUNNING**
+- 双刀构成：11f0245（Cursor 刀2：拆分校验+归一，ZCode 复审通过）+ 9927446（ZCode 刀1：description 逐字契约通道+占位符黑名单）；全量 1923 绿 + 闸 ABC 全绿（C 段复跑确认早上的 FAIL 是百炼网关抖动）。
+- 增量证明（对 v49 官方失败簇）：v49 死于首页首断言（"Last updated" 等 desc 契约缺失）+ 拆分重复认领（24/24）+ web_shell 超尺寸冻结——v50 三者全中。预期读数：首页含 "Last updated" 字样、coverage 重复=0、单文件无 >600 行冻结。
+- sheet 累计花费 ~¥60/¥120（v48+v49 各 ~¥15-20 + 更早若干），本发为额度内最后一发。
