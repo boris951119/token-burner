@@ -607,6 +607,33 @@ class Pipeline:
                     enforce_atomic_coverage, persist_coverage_report,
                 )
                 coverage_report = enforce_atomic_coverage(requirement, plans)
+                # v53 刀C：所有权已唯一 → 按主人注入逐 REQ 验收清单
+                # （废除 inject_ui_manifest 整表灌进单一 UI 模块）
+                try:
+                    from app.acceptance_compile import (
+                        compile_checklists_from_text,
+                    )
+                    from app.utils.atomic_coverage import (
+                        inject_contracts_by_ownership,
+                    )
+                    owner = dict(coverage_report.owned or {})
+                    # owned 为空时退回补挂映射（骨架拆分）
+                    for rid, mod in (coverage_report.assigned or {}).items():
+                        owner.setdefault(rid, mod)
+                    cks = compile_checklists_from_text(requirement)
+                    injected = inject_contracts_by_ownership(
+                        plans, cks, owner)
+                    if injected:
+                        print(
+                            "[coverage] 契约按所有权注入: "
+                            + ", ".join(
+                                f"{m}×{n}" for m, n in
+                                list(injected.items())[:12]),
+                            flush=True,
+                        )
+                except Exception as exc:
+                    print(f"[coverage] 契约所有权注入降级: {exc!r}",
+                          flush=True)
                 handle = self.file_manager.get_project(team.project_id)
                 if handle is not None:
                     persist_coverage_report(handle.root, coverage_report)

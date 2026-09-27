@@ -28,3 +28,9 @@ responsibility（实测会令覆盖闸报「重复=N」且 UI 模块膨胀到 80
 sessions/spec_req_coverage.json，按题面 FOLDER 分配即可。
 
 注意：模块名不得使用系统保留名（code、tests、modules、changelog、sessions、logs、_shared、conftest、spec 等）——这些是项目目录结构名，模块须以功能命名。
+
+【蓝图惯例（写进职责、写码必须遵守）】凡承接 HTTP 路由的业务模块，
+实现时必须在模块顶层导出 `_bp = Blueprint("<模块名>", __name__)` 并以
+`@_bp.route(...)` 注册全部端点；禁止把路由藏在函数内构建的 app 里。
+入口组装模块（create_app）负责 `register_blueprint`，其它模块只交 `_bp`。
+机械装配只扫描顶层 `_bp`，漏导出 = 该模块 API 全 404。

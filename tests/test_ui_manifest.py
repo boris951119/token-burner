@@ -31,10 +31,17 @@ class TestInjectUiManifest:
 
 
 class TestUxChecklistInjection:
-    """9/22 keep#2 取证：锚点摊平丢 GWT 归属——逐节点清单须随契约注入。"""
+    """9/22 keep#2 取证：锚点摊平丢 GWT 归属——逐节点清单须随契约注入。
 
-    def test_structured_checklist_injected(self):
-        from app.agents.module_builder import ModulePlan, inject_ui_manifest
+    v53 刀C：整表清单不再经 inject_ui_manifest 单目标灌入，改走
+    inject_contracts_by_ownership（见 test_v53_ownership_bp）。
+    """
+
+    def test_structured_checklist_follows_ownership(self):
+        from app.acceptance_compile import compile_checklists_from_text
+        from app.agents.module_builder import ModulePlan
+        from app.utils.atomic_coverage import inject_contracts_by_ownership
+
         req = "\n".join([
             "## 模块：M1 Notes",
             "依赖：无",
@@ -52,10 +59,14 @@ class TestUxChecklistInjection:
             ModulePlan(name="view", responsibility="组装页面与静态资源",
                        dependencies=["data_core"], priority=2),
         ]
-        assert inject_ui_manifest(plans, req) == "view"
+        cks = compile_checklists_from_text(req)
+        injected = inject_contracts_by_ownership(
+            plans, cks, {"REQ-1.1": "view"})
+        assert injected.get("view", 0) >= 1
         r = plans[1].responsibility
         assert "验收节点逐字清单" in r
         assert "REQ-1.1" in r and '"Take a note"' in r and '"Note created"' in r
+        assert "验收节点逐字清单" not in plans[0].responsibility
 
     def test_plain_text_requirement_unaffected(self):
         from app.agents.module_builder import ModulePlan, inject_ui_manifest

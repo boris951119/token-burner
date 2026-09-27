@@ -26,8 +26,28 @@ class ModuleSurface:
     blueprints: list[tuple[str, str]] = field(default_factory=list)  # (file_stem, var)
     routers: list[tuple[str, str]] = field(default_factory=list)  # FastAPI (file_stem, var)
     inits: list[tuple[str, str, bool]] = field(default_factory=list)  # (file_stem, func, takes_app)
+    # v53 刀D 可选：零参 create_*_blueprint() 工厂 → 装配时调用再 register
+    bp_factories: list[tuple[str, str]] = field(default_factory=list)  # (stem, fn)
+    has_routes: bool = False  # 模块内存在 @*.route 装饰
     parse_errors: list[str] = field(default_factory=list)
     path: Path | None = None
+
+
+def _has_route_decorator(tree: ast.AST) -> bool:
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        for dec in node.decorator_list:
+            call = dec if isinstance(dec, ast.Call) else None
+            attr = None
+            if call is not None and isinstance(call.func, ast.Attribute):
+                attr = call.func
+            elif isinstance(dec, ast.Attribute):
+                attr = dec
+            if attr is not None and attr.attr in (
+                    "route", "get", "post", "put", "patch", "delete"):
+                return True
+    return False
 
 
 def _scan_package(pkg_dir: Path, name: str) -> ModuleSurface:
@@ -36,10 +56,13 @@ def _scan_package(pkg_dir: Path, name: str) -> ModuleSurface:
         if py.name.startswith("_"):
             continue
         try:
-            tree = ast.parse(py.read_text(encoding="utf-8", errors="replace"))
+            src = py.read_text(encoding="utf-8", errors="replace")
+            tree = ast.parse(src)
         except SyntaxError as exc:
             surface.parse_errors.append(f"{py.name}: {exc}")
             continue
+        if _has_route_decorator(tree):
+            surface.has_routes = True
         for node in tree.body:
             if isinstance(node, ast.Assign):
                 for t in node.targets:
@@ -53,6 +76,13 @@ def _scan_package(pkg_dir: Path, name: str) -> ModuleSurface:
                         elif fn == "APIRouter":
                             surface.routers.append((py.stem, t.id))
             elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                # v53：零参 create_*_blueprint 工厂兼容
+                if (re.match(r"create_\w+_blueprint$", node.name)
+                        and not node.args.args
+                        and not node.args.kwonlyargs
+                        and not node.args.vararg
+                        and not node.args.kwarg):
+                    surface.bp_factories.append((py.stem, node.name))
                 if node.name.startswith("init_"):
                     args = [a.arg for a in node.args.args]
                     # 签名甄别（2026-09-20 取证：seed_data.init_db 要的是
@@ -81,7 +111,8 @@ def scan_surfaces(code_dir: Path) -> list[ModuleSurface]:
         if not (child / "__init__.py").exists():
             continue
         surface = _scan_package(child, child.name)
-        if surface.blueprints or surface.routers or surface.inits:
+        if (surface.blueprints or surface.routers or surface.inits
+                or surface.bp_factories or surface.has_routes):
             surfaces.append(surface)
     return surfaces
 
@@ -128,6 +159,22 @@ def generate_app_main(surfaces: list[ModuleSurface]) -> str:
             bp_reg.append(
                 f"    if {alias} is not None:\n"
                 f"        app.register_blueprint({alias})")
+        for stem, fn in s.bp_factories:
+            # 已有顶层 Blueprint 变量时不重复调工厂
+            if any(st == stem for st, _ in s.blueprints):
+                continue
+            imp = _sub_import(s, stem)
+            alias = f"_bpf_{_alias_part(s)}_{stem}_{fn}"
+            imports.append(_guarded(f"from {imp} import {fn} as {alias}",
+                                    alias))
+            bp_reg.append(
+                f"    if {alias} is not None:\n"
+                f"        try:\n"
+                f"            _made = {alias}()\n"
+                f"            if _made is not None:\n"
+                f"                app.register_blueprint(_made)\n"
+                f"        except Exception as _e:\n"
+                f"            print(f'[assemble] {alias}() 失败: {{_e!r}}')")
         for stem, fn, takes_app in s.inits:
             imp = _sub_import(s, stem)
             alias = f"_init_{_alias_part(s)}_{stem}_{fn}"
@@ -347,8 +394,14 @@ def assemble(code_dir: Path, scaffold: bool = False,
     dropped = sorted({str(x) for x in exclude})
     surfaces = [s for s in scan_surfaces(code_dir) if s.name not in dropped]
     n_bp = sum(len(s.blueprints) for s in surfaces)
+    n_bpf = sum(len(s.bp_factories) for s in surfaces)
     n_r = sum(len(s.routers) for s in surfaces)
-    if n_bp == 0 and n_r > 0:
+    n_route_mods = sum(1 for s in surfaces if s.has_routes)
+    n_covered = sum(
+        1 for s in surfaces
+        if s.has_routes and (s.blueprints or s.bp_factories or s.routers)
+    )
+    if n_bp == 0 and n_bpf == 0 and n_r > 0:
         content = generate_app_main_fastapi(surfaces)
         framework = "fastapi"
     else:
@@ -363,11 +416,20 @@ def assemble(code_dir: Path, scaffold: bool = False,
             "from app_main.app_main import *  # noqa: F401,F403\n",
             encoding="utf-8")
     (target / "app_main.py").write_text(content, encoding="utf-8")
+    # v53：装配覆盖读数 N/N（有路由的模块 vs 扫到可挂载蓝图/工厂的）
+    print(
+        f"[assemble] Blueprint 覆盖 {n_covered}/{n_route_mods}"
+        f"（变量={n_bp} 工厂={n_bpf} router={n_r}）",
+        flush=True,
+    )
     return {
         "framework": framework,
         "modules": [s.name for s in surfaces],
         "blueprints": n_bp,
+        "bp_factories": n_bpf,
         "routers": n_r,
+        "route_modules": n_route_mods,
+        "bp_coverage": f"{n_covered}/{n_route_mods}",
         "inits": sum(len(s.inits) for s in surfaces),
         "scaffolded": stubs,
         "excluded": dropped,

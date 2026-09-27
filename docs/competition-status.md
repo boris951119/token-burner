@@ -1800,3 +1800,8 @@ API 只回 `interfaces`/`tests`（`tests=[]`，scenarios 不在本端点）。�
 ### v53 Cursor 落地（2026-09-27 18:1x，INBOX-009）
 - **独立判读**与上列死因链一致，并补强：机械壳首页曾缺 `data-arcbench-fallback` → 探针细则假绿（已随刀B修）。
 - **刀A+刀B 已落地**：`call_arity.py` / `factory_pool.py`；机械壳首页打 fallback 标记；相关 pytest 61 绿。刀C/D 未动；**未打 v53 包**（sheet ¥120 红线）。
+
+### v53 Cursor 刀C+刀D（2026-09-27 18:4x，INBOX-010）
+- **刀C**：`inject_contracts_by_ownership` 在 coverage 归一后按主人注入逐 REQ 清单；`inject_ui_manifest` 不再整表灌 checklist。
+- **刀D**：`_bp` 提示词 + `blueprint_convention` 门禁；装配兼容零参 `create_*_blueprint` + 覆盖 N/N 日志。
+- 四刀齐；**未打 v53 包**（发车在用户）。

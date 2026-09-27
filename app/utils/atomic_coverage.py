@@ -120,6 +120,9 @@ _COVERAGE_BLOCK = re.compile(
 _OWNED_BLOCK = re.compile(
     r"\n\n【本模块 ATOMIC（唯一主人[^\n]*）】\n[\s\S]*?(?=\n\n【|\Z)",
 )
+_UX_CHECKLIST_BLOCK = re.compile(
+    r"\n\n【验收节点逐字清单[^\n]*】\n[\s\S]*?(?=\n\n【|\Z)",
+)
 
 
 def strip_req_tokens(text: str) -> str:
@@ -127,10 +130,51 @@ def strip_req_tokens(text: str) -> str:
     out = text or ""
     out = _COVERAGE_BLOCK.sub("", out)
     out = _OWNED_BLOCK.sub("", out)
+    out = _UX_CHECKLIST_BLOCK.sub("", out)
     out = _REQ_TOKEN.sub("", out)
     out = re.sub(r"[ \t]{2,}", " ", out)
     out = re.sub(r"\n{3,}", "\n\n", out)
     return out.strip()
+
+
+def inject_contracts_by_ownership(
+    plans,
+    checklists,
+    assigned: dict[str, str] | None,
+) -> dict[str, int]:
+    """v53 刀C：按 req→模块所有权注入逐节点验收清单（废除单目标整表灌）。
+
+    每个 REQ 的控件/点击/动作后/行为约束/种子块只进认领模块的
+    responsibility，接在【本模块 ATOMIC】之后。返回 {模块名: 注入条数}。
+    """
+    if not plans or not checklists or not assigned:
+        return {}
+    try:
+        from app.acceptance_compile import render_ux_checklist
+    except Exception:
+        return {}
+
+    by_mod: dict[str, list] = {}
+    for ck in checklists:
+        rid = getattr(ck, "req_id", "") or ""
+        mod = assigned.get(rid)
+        if not mod:
+            continue
+        by_mod.setdefault(mod, []).append(ck)
+
+    plan_by = {getattr(p, "name", ""): p for p in plans}
+    counts: dict[str, int] = {}
+    for mod, cks in by_mod.items():
+        plan = plan_by.get(mod)
+        if plan is None:
+            continue
+        body = render_ux_checklist(list(cks), max_nodes=max(48, len(cks)))
+        if not body:
+            continue
+        resp = _UX_CHECKLIST_BLOCK.sub("", plan.responsibility or "")
+        plan.responsibility = resp.rstrip() + body
+        counts[mod] = len(cks)
+    return counts
 
 
 def req_ids_in_plan(plan) -> list[str]:

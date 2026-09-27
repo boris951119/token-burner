@@ -9,6 +9,7 @@
 | 09-27 12:55 | ZCode 通气四刀 + 用户「能力优先」 | **v52 通气落地（未发车）**：①写码提示接上 peer 模块清单/导出；②static_check 幽灵兄弟模块阻断；③schema 权威进写码提示；④probe-fast 前表单×路由对账。 |
 | 09-27 17:50 | **INBOX-009 独立判读** sheet `045fe8578302` | 见下方专节；认领刀A+刀B 开工。 |
 | 09-27 18:1x | **INBOX-009 刀A+刀B 完工** | 见下方「施工回执」；刀C/D 未认领。 |
+| 09-27 18:4x | **INBOX-010 刀C+刀D 完工** | 见下方「INBOX-010 施工回执」。 |
 
 ---
 
@@ -56,3 +57,23 @@
 - **刀B** `app/utils/factory_pool.py`：`probe_author_factories` 对非 `__arcbench_assembled__` 的 `create_app` 真调用；任一炸 → `verify_delivery` 退出 probe-fast。机械壳 `generate_app_main` 首页补 `data-arcbench-fallback="1"`（与导出探针既有判红同口径）。
 - **测试**：`tests/test_v53_arity_factory.py` + 导出探针/机械壳 fallback 用例更新；相关套件 61 passed。
 - **未做**：刀C（契约跟随所有权）、刀D（`_bp` 惯例）；未打 v53 提交包（sheet 预算红线）。
+
+---
+
+## INBOX-010 施工回执（刀C+刀D，待 ZCode 复审）
+
+### 刀C：契约跟随所有权注入
+- `inject_contracts_by_ownership(plans, checklists, assigned)` 落在 `atomic_coverage.py`；`pipeline` 在 `enforce_atomic_coverage` 之后按 `owned`（补挂映射兜底）注入。
+- `inject_ui_manifest` **移除整表** `render_ux_checklist`（防双重）；锚点摘要 + 全局硬规则仍保留（规则正文亦在 `write_code_system.md`）。
+- `strip_req_tokens` 同步清掉旧【验收节点逐字清单】块，避免归一时残留。
+- 验收：`test_v53_ownership_bp.py`——REQ-1-1-1 归 `webui_home_page` 时该模块含 `"Last updated"`，`webui_static_assets` 不含。
+
+### 刀D：蓝图 `_bp` 惯例
+- 提示词：`split_system.md` + `write_code_system.md` 硬规则（顶层 `_bp` + `@_bp.route`；工厂除外）。
+- 门禁：`blueprint_convention.py` → `dev_loop`（link/arity 后）；有 `@*.route` 无顶层 `_bp` → 硬红 + 修复指令点名迁路由。
+- 装配可选加固：扫零参 `create_*_blueprint()` 并 register；日志 `[assemble] Blueprint 覆盖 N/N`。
+- 验收：函数内 app 路由 → 红；顶层 `_bp` → 绿；`create_app` 工厂豁免；覆盖读数入组装摘要。
+
+### 测试 / 纪律
+- 相关套件绿；全量 ~1920 passed（沙箱内 git init 类 ERROR/perf 路径属环境，非本刀回归）。
+- **未打 v53 包**；发车等用户拍板。

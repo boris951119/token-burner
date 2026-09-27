@@ -126,7 +126,7 @@ GitHub 彩排 r1（本地）日志出现：`修复升级 → deepseek-v4-pro（f
 1. **独立判读**：用你自己的方法（不要先看我的结论再倒推）从官方日志和交付树复核 sheet 045fe8578302 的死因链，回答用户的问题"为什么这么快出结果"（提示：不是快，是 3h 正常时长+0 分）。把你的独立结论写进 outbox——如果与我的四条死因链有出入，以证据为准辩论；
 2. **认领施工**：四刀里你挑顺手的开工（建议刀B 快车道试装——你在 v52 的 P1-2 已有 probe-green 挂钩位；刀A 签名门禁的 call-site 比对与你的 interface 工作同源）。完成即 commit + outbox 回执，ZCode 复审。
 
-## INBOX-010（open，2026-09-27 18:3x，ZCode→Cursor）— v53 刀C/刀D 施工工单（用户指令：Cursor 施工，ZCode 验证）
+## INBOX-010（done 2026-09-27 18:4x，Cursor 刀C+刀D 落地，待 ZCode 复审）— v53 刀C/刀D 施工工单（用户指令：Cursor 施工，ZCode 验证）
 
 你已完成的刀A（`app/utils/call_arity.py` 签名硬门禁）和刀B（`app/utils/factory_pool.py` 工厂池试装 + 机械壳 fallback 标记）已由 ZCode 全量回归验证通过（1937 绿，commit `91e0230`）。以下两刀按同一标准施工：
 

@@ -106,23 +106,15 @@ def inject_ui_manifest(plans: list[ModulePlan], requirement: str) -> str | None:
     target = max(plans, key=_score)
     if _score(target)[0] <= 0:
         return None  # 无 UI 形态模块（CLI 类任务）不注入
-    # 规格保真度（9/22 keep#2 取证：锚点摊平后模型分不清「哪个词是按钮、
-    # 哪个词是动作后提示」——Take a note 按钮级缺口）：把逐节点 GWT 结构
-    # （控件/动作后文案/种子 三通道归属）追加为契约，写码首轮即可对准。
-    ux_checklist = ""
-    try:
-        from app.acceptance_compile import (
-            compile_checklists_from_text, render_ux_checklist)
-        ux_checklist = render_ux_checklist(
-            compile_checklists_from_text(requirement))
-    except Exception:
-        pass
+    # v53 刀C：逐节点验收清单不再整表灌进「得分最高的一个 UI 模块」——
+    # 改由 pipeline 在 enforce_atomic_coverage 之后按所有权
+    # inject_contracts_by_ownership 注入。此处只留锚点摘要 + 全局硬规则
+    # （规则正文亦在 write_code_system.md，职责侧再贴一份防拆分期可读）。
     target.responsibility += (
         "\n\n【UI 页面与文案清单（硬契约，逐字实现——评测按这些字符串"
         "断言「对应触发时机渲染出的可见元素」，禁止占位页、"
         "禁止藏进 display:none/title 属性糊弄、禁止翻译改写）】\n"
         + "\n".join(manifest_lines)
-        + ux_checklist
         + "\n\n【UI 全局硬规则（官方评测取证）】\n"
         "- 界面文案语言必须与需求原文一致：英文需求 → 全英文 UI；\n"
         "  出现其他语言界面 = 评分器按原文 role 名定位全部落空 = 0 分；\n"

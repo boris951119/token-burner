@@ -440,6 +440,19 @@ class DevLoopEngine:
                                 gate_passed = True
                     else:
                         gate_passed = True
+                    # v53 刀D：含路由却无顶层 _bp → 硬红（不依赖 code_root）
+                    if gate_passed:
+                        try:
+                            from app.utils.blueprint_convention import (
+                                check_blueprint_convention,
+                            )
+                            bp_issues = check_blueprint_convention(
+                                code, module=module or "")
+                        except Exception:
+                            bp_issues = []
+                        if bp_issues:
+                            failure_report = "; ".join(bp_issues[:4])
+                            gate_passed = False
 
             if gate_passed:
                 # M15-3：auto 契约风格自适应——首轮实现到达接口门禁时，
