@@ -461,6 +461,16 @@ def main(argv: list[str] | None = None) -> int:
           f"single={settings.single_model_mode} "
           f"wall_clock={settings.llm_wall_clock_seconds} "
           f"budget={settings.max_task_tokens}", flush=True)
+    # P2-11 档位防呆（批次#78）：平台注入 MODEL = 正式赛跑。试跑档的两个
+    # 旋钮（token 硬帽、自测 spec 开关）若还留在私有 key 试跑位，正式跑
+    # 会被砍口粮/关保分闸——v43 曾因此 1/3 处断气。只告警不阻断（试跑
+    # 私有 key 场景 MODEL 同样来自环境，靠 MODEL 来源区分不可行）。
+    _trial_caps = getattr(settings, "max_task_tokens_cap", 0) or 0
+    _specs_on = getattr(settings, "selftest_specs_enabled", True)
+    if os.environ.get("MODEL") and (_trial_caps > 0 or not _specs_on):
+        print("[config] ⚠ 档位告警：MODEL 来自平台注入（正式赛），但 config.json "
+              f"仍带试跑参数（cap={_trial_caps}, specs={_specs_on}）——"
+              "正式档应为 cap=0 / specs=true，请核对提交包档位", flush=True)
     # 题面横幅打在预检之前：预检全灭的那次跑同样会在日志里留下「读到了什么
     # 题面、给了多大信封」——那是排障者手里唯一的第一手事实，而上一行打印的
     # budget= 是配置口径（官方零 config 时 200k），不代表这一跑真正用的信封。
