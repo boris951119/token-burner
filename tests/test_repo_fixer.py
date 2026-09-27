@@ -338,3 +338,74 @@ class TestDiscardedFrontendGuard:
     def test_plan_prompt_names_the_real_ui_landing_zone(self):
         src = inspect.getsource(RepoFixer._plan)
         assert "frontend/" in src and "最小壳" in src
+
+
+def test_stop_check_blocks_writes_after_join_timeout(repo):
+    """v54 P1-5：停止旗置位后，修复轮不再写文件。"""
+    stop = {"flag": True}
+    before = (repo / "calc.py").read_text(encoding="utf-8")
+    fixer = RepoFixer(
+        FakeLLM(PLAN, [FIXED_CALC]),
+        repo,
+        test_cmd=[sys.executable, "-c", "raise SystemExit(1)"],
+        max_rounds=2,
+        stop_check=lambda: stop["flag"],
+    )
+    result = fixer.fix("fix add")
+    after = (repo / "calc.py").read_text(encoding="utf-8")
+    assert after == before == BUGGY_CALC
+    assert "停止旗" in (result.error or "")
+    assert result.ok is False
+
+
+def test_stop_flag_set_on_probe_fast_join_timeout(tmp_path, monkeypatch):
+    """probe-fast join 超时分支必须置停止旗，且修复不再写盘。"""
+    import time
+
+    from app import arcbench_smoke as sm
+
+    (tmp_path / "code").mkdir()
+    seen = {"stop_passed": False, "flag_true": False, "writes": 0}
+
+    def _slow_repair(*_a, **kw):
+        stop_check = kw.get("stop_check")
+        seen["stop_passed"] = stop_check is not None
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if stop_check and stop_check():
+                seen["flag_true"] = True
+                return False, "stopped"
+            time.sleep(0.05)
+        seen["writes"] += 1
+        return True, "late"
+
+    # deadline = t0+30；下一次 monotonic 逼近 deadline → join 几乎立即超时
+    mono_vals = [1000.0, 1029.99]
+
+    def _mono():
+        return mono_vals.pop(0) if mono_vals else 2000.0
+
+    monkeypatch.setattr(time, "monotonic", _mono)
+    monkeypatch.setattr(
+        "app.utils.factory_pool.probe_author_factories_safe",
+        lambda *_a, **_k: ([], False),
+    )
+    monkeypatch.setattr(sm, "run_form_probe", lambda *_a, **_k: [])
+    monkeypatch.setattr(sm, "auto_repair", _slow_repair)
+
+    ok, report = sm.verify_delivery(
+        tmp_path, "req",
+        settings=type("S", (), {"models": []})(),
+        probe_green=True,
+        max_app_rounds=1,
+        repair_budget_s=30,
+    )
+    assert ok is True
+    assert seen["stop_passed"] is True
+    # join 超时置旗后，子线程需再轮询一次才置 flag_true
+    wait_until = time.time() + 2.0
+    while time.time() < wait_until and not seen["flag_true"]:
+        time.sleep(0.05)
+    assert seen["flag_true"] is True
+    assert seen["writes"] == 0
+    assert "停止旗" in report or "超时" in report

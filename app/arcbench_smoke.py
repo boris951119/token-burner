@@ -2087,16 +2087,28 @@ def verify_delivery(
             )
             probe_green = False
         else:
+            import threading
             import time as _time
-            deadline = _time.monotonic() + max(30.0, float(repair_budget_s or 8 * 60))
+            deadline = _time.monotonic() + max(
+                30.0, float(repair_budget_s or 8 * 60))
             msg = (
                 "[probe-fast] 探针已绿且作者工厂/表单×路由对齐，"
                 "仅修入口控件后交 Stage3"
             )
             print(msg, flush=True)
-            try:
-                if _time.monotonic() < deadline and max_app_rounds != 0:
-                    from app.utils.checklist_priority import checklist_priority_note
+            # v54 P1-5：修补放子线程 + join 超时置停止旗，避免超时后仍写盘
+            # 与终局导出竞态撕裂文件。
+            stop_box = {"stop": False}
+            result_box: dict = {}
+
+            def _stop_check() -> bool:
+                return bool(stop_box["stop"])
+
+            def _repair_worker() -> None:
+                try:
+                    from app.utils.checklist_priority import (
+                        checklist_priority_note,
+                    )
                     note = checklist_priority_note(requirement, max_nodes=4)
                     auto_repair(
                         project_dir, settings, max_rounds=1,
@@ -2106,9 +2118,32 @@ def verify_delivery(
                             "入口控件（可点击的链接或按钮，文案逐字），再谈其它。\n"
                             + note
                         ),
+                        stop_check=_stop_check,
                     )
-            except Exception as exc:
-                msg += f"（修补降级: {exc!r}"[:120] + "）"
+                    result_box["ok"] = True
+                except Exception as exc:
+                    result_box["exc"] = exc
+
+            if max_app_rounds != 0:
+                remaining = deadline - _time.monotonic()
+                if remaining > 0:
+                    t = threading.Thread(
+                        target=_repair_worker, daemon=True,
+                        name="probe-fast-repair",
+                    )
+                    t.start()
+                    t.join(timeout=remaining)
+                    if t.is_alive():
+                        stop_box["stop"] = True
+                        msg += "（修补超时已置停止旗）"
+                        print(
+                            "[probe-fast] join 超时 → 置停止旗，不再写文件",
+                            flush=True,
+                        )
+                    elif "exc" in result_box:
+                        msg += (
+                            f"（修补降级: {result_box['exc']!r}"[:120] + "）"
+                        )
             return True, msg
     _beat(project_dir, "验收-启动")
 
@@ -2537,12 +2572,14 @@ def auto_repair(
     verify_timeout: int | None = None,
     requirement: str = "",
     priority_note: str = "",
+    stop_check=None,
 ) -> tuple[bool, str]:
     """冒烟失败后的定向自动修复（RepoFixer 通道）。
 
     test_cmd 缺省 = 基础冒烟；旅程验收传入旅程脚本命令复用同一循环。
     extra_issue 非空时为锚点修复等非冒烟场景服务——冒烟通过也不早退，
     以 extra_issue 为主体构造修复指令。
+    stop_check：callable → bool；True 时 RepoFixer 停止写文件（v54 P1-5）。
     """
     from app.agents.repo_fixer import RepoFixer
     from app.utils.budget import BudgetExceededError, TaskCancelledError
@@ -2629,6 +2666,7 @@ def auto_repair(
         llm, project_dir,
         test_cmd=test_cmd,
         max_rounds=max_rounds,
+        stop_check=stop_check,
         **({"test_timeout": verify_timeout} if verify_timeout else {}),
     )
     result = fixer.fix(issue)

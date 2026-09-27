@@ -23,6 +23,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 from app.utils.parse import parse_json
 
@@ -84,12 +85,24 @@ class RepoFixer:
         test_cmd: list[str] | None = None,
         max_rounds: int = 3,
         test_timeout: int = 300,
+        stop_check: Callable[[], bool] | None = None,
     ):
         self.llm = llm
         self.repo = Path(repo_path).resolve()
         self.test_cmd = list(test_cmd or DEFAULT_TEST_CMD)
         self.max_rounds = max_rounds
         self.test_timeout = test_timeout
+        # v54 P1-5：probe-fast join 超时置旗后，修复轮/写文件前检查即停，
+        # 避免与终局导出竞态撕裂写入。
+        self.stop_check = stop_check
+
+    def _should_stop(self) -> bool:
+        if self.stop_check is None:
+            return False
+        try:
+            return bool(self.stop_check())
+        except Exception:
+            return False
 
     # ---- 公共入口 ----
 
@@ -98,6 +111,8 @@ class RepoFixer:
         # r4 取证：此前此处硬拒绝，而平台入口 enable_git=False（平台侧
         # 统一走 runtime.git），导致交付修复安全网在参赛路径恒为死路
         # （0 轮即返，LocalProxy 类组装缺陷无人生还）。
+        if self._should_stop():
+            return RepoFixResult(ok=False, error="修复已停止（停止旗）")
         plan = self._plan(issue)
         if plan is None:
             return RepoFixResult(ok=False, error="修复方案解析失败")
@@ -118,6 +133,10 @@ class RepoFixer:
         # 逐文件生成完整新版(plan 只给清单与意图,内容在这里产出)
         changed: dict[str, str] = {}
         for path, change in planned:
+            if self._should_stop():
+                return RepoFixResult(
+                    ok=False, changed_files=list(changed),
+                    skipped_paths=skipped, error="修复已停止（停止旗）")
             fp = self.repo / path
             current = (fp.read_text(encoding="utf-8", errors="replace")
                        [:_MAX_FILE_CHARS] if fp.exists() else "")
@@ -133,6 +152,10 @@ class RepoFixer:
         detail = ""
         last_sig: str | None = None
         for attempt in range(1, self.max_rounds + 1):
+            if self._should_stop():
+                result.error = "修复已停止（停止旗）"
+                result.diff = self._diff()
+                return result
             result.rounds = attempt
             rejected = self._apply(changed)
             # 被拒文件的草稿退回磁盘现行版：下一轮从**真实内容**出发重出，
@@ -183,6 +206,10 @@ class RepoFixer:
                     + "\n".join(f"- {rel}: {msg}" for rel, msg in rejected)
                     + "\n上述文件磁盘上仍是修改前的旧版，必须整文件重发，"
                       "且先自检 Python 语法（括号/缩进/引号闭合）再输出。")
+            if self._should_stop():
+                result.error = "修复已停止（停止旗）"
+                result.diff = self._diff()
+                return result
             repatched = self._repatch(issue, changed, failure)
             if repatched:
                 # 修复轮不得让文件集缩水：模型漏发的文件沿用上一版内容，
@@ -283,6 +310,9 @@ class RepoFixer:
         """
         rejected: list[tuple[str, str]] = []
         for rel, content in changed.items():
+            if self._should_stop():
+                rejected.append((rel, "修复已停止（停止旗），未写入"))
+                continue
             target = self.repo / rel
             if _is_discarded_frontend(rel) and (self.repo / "code").is_dir():
                 # keep 彩排实测：修复环在仓库根 frontend/ 写过 23-43KB 的
@@ -332,6 +362,9 @@ class RepoFixer:
                 print(f"[repo_fix] 拒收疑似截断的修复内容 {rel}: {why}",
                       flush=True)
                 rejected.append((rel, why))
+                continue
+            if self._should_stop():
+                rejected.append((rel, "修复已停止（停止旗），未写入"))
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(content, encoding="utf-8")

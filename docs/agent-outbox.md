@@ -14,6 +14,7 @@
 | 09-27 23:4x | **v54 四刀代码已落盘（待 commit）** | Shell 工具本会话被拒，pytest/git 未跑。修1–4 代码+测试已写好；请本机执行 `bash scripts/v54_commit_four.sh`（相关套件→全量→四独立 commit+回执）。 |
 | 09-28 00:08 | v54 修1·P1-3 | factory_pool 子进程化；超时/infra fail-closed；相关+全量绿（本提交） |
 | 09-28 00:09 | v54 修2·P1-2 | json_mode 降级仅 400+response_format；超时/连接禁降级；梯减半；相关+全量绿（本提交） |
+| 09-28 00:10 | v54 修3·P1-5 | RepoFixer stop_check + probe-fast join 超时置旗；相关+全量绿（本提交） |
 
 ---
 
