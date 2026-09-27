@@ -495,13 +495,18 @@ class ModuleBuilder:
                 raise SplitError(
                     f"模块 {plan.name} 接口契约缺少必要字段 {_INTERFACE_FIELDS}"
                 )
-            # 12.2：接口依赖须与拆分依赖一致（确定性校验）
+            # 12.2→v53.1：接口依赖与拆分依赖不一致时，**以拆分为准机械覆写**
+            # （评审 P2-4：拆分是全场最贵的 LLM 产物，一票否决丢弃整份图纸
+            # 性价比极低；覆写后同步进契约，避免提示层仍见旧 deps）
             iface_deps = set(value["dependencies"])
-            if iface_deps != spec_deps[plan.name]:
-                raise SplitError(
-                    f"模块 {plan.name} 的接口依赖 {sorted(iface_deps)} "
-                    f"与拆分依赖 {sorted(spec_deps[plan.name])} 不一致"
+            spec_dep = spec_deps.get(plan.name)
+            if spec_dep is not None and iface_deps != spec_dep:
+                print(
+                    f"[interfaces] {plan.name} 依赖不一致，已按拆分覆写: "
+                    f"{sorted(iface_deps)} → {sorted(spec_dep)}",
+                    flush=True,
                 )
+                value["dependencies"] = sorted(spec_dep)
             interfaces[plan.name] = {f: value[f] for f in _INTERFACE_FIELDS}
 
         if project_id:

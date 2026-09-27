@@ -241,8 +241,10 @@ class TestInterfaces:
         llm = ScriptedLLM([split_json()] + [iface] * 3)
         builder = make_builder(llm, fm)
         plans = builder.split_spec("spec", project_id=project_id)
-        with pytest.raises(SplitError, match="一致"):
-            builder.generate_interfaces(plans, project_id=project_id)
+        # v53.1：不再 raise——幽灵依赖被按拆分覆写掉
+        ifaces = builder.generate_interfaces(plans)
+        assert all("ghost_module" not in i["dependencies"]
+                   for i in ifaces.values())
 
     def test_build_order_respects_dependencies(self, fm):
         # 3.5：优先级 + 依赖拓扑 → 构建顺序（user/data 先于 auth）
@@ -398,11 +400,12 @@ class TestGatewayResilience:
             make_chain_builder(llm, fm).generate_interfaces(plans)
         assert len(llm.calls) == 4
 
-    def test_interface_validation_failure_still_fails_fast(self, fm):
-        # 依赖不一致是契约违规不是网关抖动：不重试、原样抛（口径不变）
+    def test_interface_dep_mismatch_overwritten_from_split(self, fm):
+        # v53.1（评审 P2-4）：依赖不一致不再一票否决——以拆分为准机械覆写，
+        # 并打印覆写留痕；拆分产物不再被整场丢弃。
         plans = [ModulePlan(name="a", responsibility="r",
                             dependencies=["b"], priority=1)]
         llm = FlakyLLM([iface_json([])], default=iface_json([]))
-        with pytest.raises(SplitError, match="一致"):
-            make_chain_builder(llm, fm).generate_interfaces(plans)
+        interfaces = make_chain_builder(llm, fm).generate_interfaces(plans)
         assert len(llm.calls) == 1
+        assert interfaces["a"]["dependencies"] == ["b"]
