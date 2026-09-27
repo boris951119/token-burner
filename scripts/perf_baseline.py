@@ -173,7 +173,10 @@ def run_baseline(out_path: Path | str | None = None) -> dict:
         "cases": [],
     }
     with tempfile.TemporaryDirectory(prefix="tb-perf-") as tmp:
-        root = Path(tmp) / "projects"
+        # resolve()：macOS 把 /var 符号链接到 /private/var——不统一的话
+        # 管线内部 resolve 过的路径与外部未 resolve 的根做 relative_to
+        # 会抛 "not in the subpath"（评审批次#78 存证的既有红）。
+        root = Path(tmp).resolve() / "projects"
         for case in CASES:
             report["cases"].append(run_case(case, root))
 
