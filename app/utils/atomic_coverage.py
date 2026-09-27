@@ -86,14 +86,25 @@ def _best_plan(plans, req_id: str, requirement: str):
         return None
     # 找该 ATOMIC 所在 ## 模块段标题
     folder_hint = ""
+    has_controls = False
     try:
         from app.acceptance_compile import compile_checklists_from_text
         for c in compile_checklists_from_text(requirement):
             if c.req_id == req_id:
                 folder_hint = (c.module_id or "") + " " + (c.req_name or "")
+                has_controls = _checklist_is_ui_flow(c)
                 break
     except Exception:
         folder_hint = req_id
+
+    # 刀G：UI 流程 REQ 择优池先缩到 UI 模块（有则排除 core/data/seed）
+    pool = list(plans)
+    if has_controls:
+        ui_pool = [p for p in plans if is_ui_like_module(p)]
+        if ui_pool:
+            pool = ui_pool
+        else:
+            pool = [p for p in plans if not is_core_like_module(p)] or pool
 
     def score(plan) -> int:
         text = f"{plan.name} {plan.responsibility} {folder_hint}".lower()
@@ -107,12 +118,20 @@ def _best_plan(plans, req_id: str, requirement: str):
         for token in re.findall(r"[a-z]{3,}", folder_hint.lower()):
             if token in text:
                 s += 1
+        if has_controls and is_ui_like_module(plan):
+            s += 5
+        if has_controls and is_core_like_module(plan):
+            s -= 20
         return s
 
-    return max(plans, key=score)
+    return max(pool, key=score)
 
 
 MAX_ATOMICS_PER_MODULE = 3
+
+# v53 刀G：UI 流程 REQ 禁止落在数据内核类模块
+_CORE_MARKERS = ("core", "data", "seed", "db", "kernel")
+_UI_MARKERS = ("ui", "page", "web", "view")
 
 _COVERAGE_BLOCK = re.compile(
     r"\n\n【覆盖补挂·必须实现】REQ-[\w.-]+[\s\S]*?(?=\n\n【|\Z)",
@@ -123,6 +142,82 @@ _OWNED_BLOCK = re.compile(
 _UX_CHECKLIST_BLOCK = re.compile(
     r"\n\n【验收节点逐字清单[^\n]*】\n[\s\S]*?(?=\n\n【|\Z)",
 )
+
+
+def _plan_text(plan) -> str:
+    return f"{getattr(plan, 'name', '')} {getattr(plan, 'responsibility', '')}"
+
+
+def _has_marker(text: str, markers: tuple[str, ...]) -> bool:
+    blob = (text or "").lower()
+    return any(m in blob for m in markers)
+
+
+def is_core_like_module(plan) -> bool:
+    """名称/职责含 core/data/seed/db/kernel，且不是 UI 命名模块。"""
+    name = (getattr(plan, "name", "") or "").lower()
+    if _has_marker(name, _UI_MARKERS):
+        return False
+    return _has_marker(_plan_text(plan), _CORE_MARKERS)
+
+
+def is_ui_like_module(plan) -> bool:
+    """名称/职责含 ui/page/web/view。"""
+    return _has_marker(_plan_text(plan), _UI_MARKERS)
+
+
+def _checklist_is_ui_flow(c) -> bool:
+    """UI 流程 REQ：有点击控件，或 desc 里多条引号契约（labeled 字段进 behavior 通道）。"""
+    if getattr(c, "control_labels", None):
+        return True
+    beh = getattr(c, "behavior_expectations", None) or []
+    return len(beh) >= 4
+
+
+def _ui_flow_req_ids(requirement: str) -> set[str]:
+    """control_labels 非空（或 desc 多锚点）= UI 流程类 REQ。"""
+    try:
+        from app.acceptance_compile import compile_checklists_from_text
+        return {
+            c.req_id
+            for c in compile_checklists_from_text(requirement)
+            if getattr(c, "req_id", None) and _checklist_is_ui_flow(c)
+        }
+    except Exception:
+        return set()
+
+
+def _pick_ui_owner(plans, req_id: str, requirement: str):
+    """在 UI 类模块里择优；没有则返回 None（不强制改挂）。"""
+    ui_plans = [p for p in (plans or []) if is_ui_like_module(p)]
+    if not ui_plans:
+        return None
+    return _best_plan(ui_plans, req_id, requirement) or ui_plans[0]
+
+
+def reroute_ui_ownership(
+    owner: dict[str, str],
+    plans,
+    requirement: str,
+) -> dict[str, str]:
+    """刀G：UI 流程 REQ 若挂在 core/data/seed 模块 → 重路由到 ui/page/web/view。"""
+    if not owner or not plans:
+        return owner
+    ui_reqs = _ui_flow_req_ids(requirement)
+    if not ui_reqs:
+        return owner
+    plan_by = {getattr(p, "name", ""): p for p in plans}
+    out = dict(owner)
+    for rid, mod in list(out.items()):
+        if rid not in ui_reqs:
+            continue
+        cur = plan_by.get(mod)
+        if cur is None or not is_core_like_module(cur):
+            continue
+        alt = _pick_ui_owner(plans, rid, requirement)
+        if alt is not None and getattr(alt, "name", "") != mod:
+            out[rid] = alt.name
+    return out
 
 
 def strip_req_tokens(text: str) -> str:
@@ -276,6 +371,9 @@ def normalize_atomic_ownership(
         else:
             plan = _best_plan(plans, rid, requirement) or plans[0]
             owner[rid] = plan.name
+
+    # 刀G：UI 流程类 REQ 禁挂 core/data/seed → 重路由到 ui/page/web/view
+    owner = reroute_ui_ownership(owner, plans, requirement)
 
     by_mod: dict[str, list[str]] = {}
     for rid, mod in owner.items():

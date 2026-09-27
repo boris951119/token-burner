@@ -270,6 +270,7 @@ class DevLoopEngine:
             module, project_id, code, tests, fix_attempts=0,
             user_feedback=user_feedback, contract=contract,
             project_modules=project_modules, feedback_pending=True,
+            responsibility=responsibility or "",
         )
 
     def resume_with_feedback(
@@ -339,6 +340,7 @@ class DevLoopEngine:
         contract: dict | None,
         project_modules: set[str] | None,
         feedback_pending: bool,
+        responsibility: str = "",
     ) -> ModuleResult:
         """统一推进循环：门禁 → 执行 →（反馈判定）→ 修复，直至终态。
 
@@ -350,6 +352,10 @@ class DevLoopEngine:
         """
         failure_report = ""
         gate_passed = False
+        # 刀H：resume/regress 未带职责时从 modules/<name>.md 回读
+        if not (responsibility or "").strip():
+            responsibility = self._load_module_responsibility(
+                project_id, module)
 
         while True:
             # 前置门禁：静态验证（语法 / import 核验）
@@ -467,6 +473,22 @@ class DevLoopEngine:
                             coll = []
                         if coll:
                             failure_report = "; ".join(coll[:4])
+                            gate_passed = False
+                    # v53 刀H：契约锚点文案落地率 <50% → 硬红 + 逐条缺失
+                    if gate_passed:
+                        try:
+                            from app.utils.manifest_landing import (
+                                check_manifest_landing,
+                            )
+                            land = check_manifest_landing(
+                                code,
+                                responsibility=responsibility or "",
+                                module=module or "",
+                            )
+                        except Exception:
+                            land = []
+                        if land:
+                            failure_report = "; ".join(land[:4])
                             gate_passed = False
 
             if gate_passed:
@@ -882,6 +904,27 @@ class DevLoopEngine:
         return self._split_shared(_extract_code(response.content))
 
     # ------------------------------------------------------------------
+
+    def _load_module_responsibility(
+        self, project_id: str | None, module: str,
+    ) -> str:
+        """从 modules/<module>.md 回读职责（刀H resume/regress 回落）。"""
+        if not project_id or not module:
+            return ""
+        handle = self.file_manager.get_project(project_id)
+        if handle is None:
+            return ""
+        path = handle.root / "modules" / f"{module}.md"
+        if not path.is_file():
+            return ""
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            return ""
+        # 取 ## 职责 段至下一 ##
+        m = re.search(
+            r"##\s*职责\s*\n([\s\S]*?)(?=\n##\s|\Z)", text)
+        return (m.group(1).strip() if m else text)
 
     def _fix_context(self, module: str) -> str:
         """M15-4：修复轮上下文增强——接口地图全文 + 依赖方调用示例。

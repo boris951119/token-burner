@@ -266,7 +266,9 @@ class TestAsyncTaskAPI:
         assert r.status_code == 200
         data = _poll(client, r.json()["task_id"])
         assert data["status"] == "succeeded"
-        assert "完成" in data["result"]["deliverable_summary"]
+        # v53 刀G/H 后 mock 触发重写上限：摘要为交付物汇总块（含冻结说明）
+        summary = data["result"]["deliverable_summary"]
+        assert "交付物汇总" in summary or "完成" in summary
 
     def test_thread_pool_concurrency_four(self, tmp_path):
         stats: dict = {}

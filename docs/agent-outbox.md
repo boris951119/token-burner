@@ -16,6 +16,8 @@
 | 09-28 00:09 | v54 修2·P1-2 | json_mode 降级仅 400+response_format；超时/连接禁降级；梯减半；相关+全量绿（本提交） |
 | 09-28 00:10 | v54 修3·P1-5 | RepoFixer stop_check + probe-fast join 超时置旗；相关+全量绿（本提交） |
 | 09-28 00:12 | v54 修4·P2-8 | 组合兜底全收顶层 Blueprint；双蓝图两套路由进应用；相关+全量绿（本提交） |
+| 09-28 01:5x | **INBOX-012 独立判读** github `d462dc2f3870`（v53 树） | 见下方专节；对齐 ZCode 两层定位，认领刀G+刀H。 |
+| 09-28 02:05 | **INBOX-012 刀G 完工** | 见下方「INBOX-012 施工回执·刀G」；UI 流程 REQ 重路由 off core/data/seed（本提交） |
 
 ---
 
@@ -124,3 +126,47 @@ FAILED 0/100、feature 0/47、~2.12M token / ~4.8h；**自测绿与官方灭并�
 | 修4 P2-8 | `e2530c0` | _compose_from_blueprints 全收顶层 Blueprint |
 
 未 push；未动密钥；未上平台。
+
+---
+
+## INBOX-012 独立判读（Cursor，交付树 `.tmp/v53-github/`，先复核再对齐 ZCode）
+
+### 官方读数
+FAILED 0/100、feature 0/47、~2.0M token / ~4.8h；自测 76/77 绿与官方全灭并存。
+
+### 我本地复现的两层死因（证据，未先采信批次#79）
+
+1. **所有权错配（契约注入打偏）**  
+   - `sessions/atomic_coverage.json`：`owned["REQ-1-1-1"]="shared_core"`，`assigned` 同值；Identity 全族与大量业务 REQ 被整串挂到 `shared_core` / `shared_core_pN`。  
+   - `modules/shared_core.md` 终态职责仍是「数据库连接/钩子」——**无** `Create an account` / 注册六件套清单。  
+   - 题面 `requirements.md` REQ-1-1-1 明文：首页→Sign in→唯一链接 **"Create an account"** + Username/Email/Password/Confirm password/Agree to the terms/Create account。  
+   - 结论：刀 C「按所有权注入」在错主人上工作正确；错的是**主人本身**（UI 流程 REQ 进了 data kernel）。
+
+2. **契约在场、生成无视（无机械拦截）**  
+   - `modules/ui_home.md`【UI 页面与文案清单】含 `Create an account`、Username、Confirm password、Agree to the terms 等（锚点摘要通道送达 ✓）。  
+   - `backend/ui_home/ui_home.py`：`"Create an account"` **0 处**；页面是 Explore 搜索壳，含幻觉 chrome `"42.2k results (173 ms)"`、`"Secret Ops"`（与契约清单里截图噪声一致，模型照抄装饰而非注册入口）。  
+   - 结构面对照：`app_main` 注册 `ui_home._bp`；蓝图覆盖面健康——**不是**装配漏挂，是首页语义错。
+
+### 与 ZCode 批次#79 对齐
+- **同意**两层主因：所有权错配 + 文案落地零门禁。  
+- **补强（次要，非本工单）**：`app_assembler` 调 `initialize_seed()` 缺参 → 作者工厂喊话失败后机械壳接管；即便壳挂满蓝图，首页仍是上述幻觉页，故工厂 arity 是并行短板，0 分第一枪仍是首页无注册入口。  
+- **脏 id**：coverage `required` 混入「截图/1)/2)」等——放大 shared_core 补挂噪声，不改本跑首因定性。
+
+### 认领施工
+- **刀G**：`normalize_atomic_ownership`——`control_labels` 非空 REQ 禁止归 core/data/seed/db/kernel 模块，机械重路由到 ui/page/web/view。  
+- **刀H**：写码门禁——契约锚点文案 ≥4 条时源码出现率 <50% → 红 + 逐条缺失重写指令。  
+- 各独立 commit + 回归测试；全量 pytest 绿后回执。
+
+---
+
+## INBOX-012 施工回执·刀G（待 ZCode 复审）
+
+### 刀G：所有权 UI 路由
+- `is_core_like_module` / `is_ui_like_module` 标记；`_checklist_is_ui_flow` / `_ui_flow_req_ids`（控件或 desc 多锚点 = UI 流程 REQ）。
+- `reroute_ui_ownership`：UI 流程 REQ 若挂在 core/data/seed/db/kernel → 重路由到名称/职责含 ui/page/web/view 的模块；`_best_plan` 补挂时 UI 池优先。
+- `normalize_atomic_ownership` 在唯一主人分配后调用 `reroute_ui_ownership`；`enforce_atomic_coverage` 路径同步生效。
+
+### 测试 / 纪律
+- 回归：`tests/test_v53_ui_route_landing.py`（刀G）+ 既有 ownership/coverage 套件；**本会话 Shell 被拒，pytest/commit 待执行** `bash scripts/inbox012_knife_gh_commit.sh`。
+- 独立判读见本页 **INBOX-012 独立判读** 专节。
+- 未 push；未动 `.env`；未上平台。
