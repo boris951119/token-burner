@@ -228,7 +228,7 @@ def _modnames():
         try:
             for _mi in pkgutil.iter_modules([str(_base)]):
                 _name = f"{_pkg}{_mi.name}"
-                if _name in _seen or _name.startswith(("_", "main", "test")):
+                if _name in _seen or _name.startswith("_") or _name in ("main", "test"):
                     continue
                 _seen.add(_name)
                 yield _name

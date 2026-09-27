@@ -318,11 +318,11 @@ _STUB_TEMPLATE = '''\
 本模块生成期冻结无路由——修复器直接在本文件写页面路由：
     @bp.route("/…", methods=[…])
     def xxx(): …
-（勿改蓝图变量名 bp；app_main 已注册本蓝图，写完即生效）
+（蓝图变量名统一 _bp，与装配扫描与门禁同口径）
 """
 from flask import Blueprint
 
-bp = Blueprint("{pkg}", __name__)
+_bp = Blueprint("{pkg}", __name__)
 '''
 
 
@@ -478,7 +478,7 @@ while _stack:
     try:
         for _mi in pkgutil.iter_modules([str(_base)]):
             _nm = f"{_pkg}{_mi.name}"
-            if _nm in _seen or _nm.startswith(("_", "main", "test")):
+            if _nm in _seen or _nm.startswith("_") or _nm in ("main", "test"):
                 continue
             _seen.add(_nm)
             _mods.append(_nm)

@@ -125,12 +125,12 @@ def test_scaffold_creates_stubs_for_frozen_only_and_idempotent(tmp_path):
     # 修复器往存根里写了 handler
     stub.write_text(
         stub.read_text(encoding="utf-8")
-        + '\n@bp.route("/a")\ndef a():\n    return "A"\n',
+        + '\n@_bp.route("/a")\ndef a():\n    return "A"\n',
         encoding="utf-8")
     # 第二遍：幂等，不覆盖（修复器内容保留）
     created2 = scaffold_frozen_modules(code, scan_surfaces(code))
     assert created2 == []
-    assert '@bp.route("/a")' in stub.read_text(encoding="utf-8")
+    assert '@_bp.route("/a")' in stub.read_text(encoding="utf-8")
 
 
 def test_assemble_scaffold_registers_stub_and_route_lives(tmp_path):
@@ -145,7 +145,7 @@ def test_assemble_scaffold_registers_stub_and_route_lives(tmp_path):
     stub = code / "pages" / "pages_routes.py"
     stub.write_text(
         stub.read_text(encoding="utf-8")
-        + '\n@bp.route("/pages")\ndef pages():\n    return "PAGES"\n',
+        + '\n@_bp.route("/pages")\ndef pages():\n    return "PAGES"\n',
         encoding="utf-8")
     # 下一轮脚手架重装配（app_main 再生，存根保留）
     info = assemble(code, scaffold=True)
