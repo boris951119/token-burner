@@ -568,3 +568,58 @@ def test_both_seed_dialects_coexist_without_duplicates(tmp_path):
     n = _one(tmp_path, '\'Seed data: note "Gamma three". The system contains '
                        'a note titled "Delta four".\'')
     assert n.seed_entities == ["Gamma three", "Delta four"]
+
+
+# ---- description 逐字契约通道 + 官方占位符黑名单（批次#71，v50 刀1）--------
+
+DESC_YAML = """
+id: ROOT
+type: FOLDER
+children:
+  - id: REQ-1
+    name: Workbooks
+    type: FOLDER
+    children:
+      - id: REQ-1-1-1
+        name: View and Open a Workbook
+        type: ATOMIC
+        description: >
+          Users view available workbooks on the workbook home page. Each
+          record displays "Last updated: <last updated value>" and provides
+          a link whose accessible name is the workbook name. Layout flag
+          "true" is not UI copy. ![shot](img/home.png)
+        scenarios:
+          - name: s1
+            steps:
+              - keyword: GIVEN
+                content: The visitor starts at the application home page.
+              - keyword: WHEN
+                content: The user clicks the visible workbook entry "Q3 Sales".
+              - keyword: THEN
+                content: The editor shows "Sheet1" and "the requested workflow" done.
+"""
+
+
+def test_description_template_literal_becomes_anchor_stem(tmp_path):
+    """desc 里的模板字面量 "Last updated: <last updated value>" 必须进行为
+    断言，且锚取 '<' 前固定前缀（按整条字面判红永远修不好）。"""
+    cls = {c.req_id: c for c in compile_checklists(_write(tmp_path, DESC_YAML))}
+    beh = cls["REQ-1-1-1"].behavior_expectations
+    assert "Last updated" in beh, beh
+    assert not any("<" in b for b in beh), beh
+
+
+def test_description_bool_slots_are_not_ui_copy(tmp_path):
+    cls = {c.req_id: c for c in compile_checklists(_write(tmp_path, DESC_YAML))}
+    beh = cls["REQ-1-1-1"].behavior_expectations
+    assert "true" not in beh and "false" not in beh, beh
+
+
+def test_official_placeholder_garbage_blacklisted(tmp_path):
+    """"the requested workflow" 是官方出题器槽位残渣（sheet 题面 504 处），
+    全通道不得出现在清单里。"""
+    cls = {c.req_id: c for c in compile_checklists(_write(tmp_path, DESC_YAML))}
+    c = cls["REQ-1-1-1"]
+    for channel in (c.behavior_expectations, c.control_labels,
+                    c.click_controls, c.seed_entities):
+        assert not any("requested workflow" in x.lower() for x in channel), channel

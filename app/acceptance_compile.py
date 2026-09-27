@@ -54,6 +54,12 @@ _BT_STOP = {
     "GET", "POST", "PUT", "PATCH", "API", "URL", "URI", "HTTP", "HTTPS",
     "CSV", "PDF", "PNG", "JPG", "SVG", "JWT", "ORM", "SPA", "SDK", "TODO",
 }
+# 官方 sheet 题面（9/24 重写版）场景步被出题器模板槽位污染（"the requested
+# workflow" 实测 504 处）——这是占位残渣，不会出现在任何界面上。批次#71 判决：
+# 对着它抽清单 = 清单垃圾化（动作后须出现大半是乱串）。全通道拉黑。
+_PLACEHOLDER = re.compile(r"the\s+requested\s+workflow", re.I)
+# description 引号里的布尔槽位（"true"/"false"），非界面文案
+_BOOLISH = re.compile(r"^(?:true|false|yes|no|none|n/a)$", re.I)
 
 
 def _ui_like(s: str) -> bool:
@@ -168,6 +174,8 @@ def _clean_quote(s: str) -> str | None:
         return None                     # 路由/URL 是跳转目标，不是界面文案
     if _SEED_LINE.search(s) or len(s.split()) > 12:
         return None                     # 描述残渣/整句，不是 UI 文案
+    if _PLACEHOLDER.search(s):
+        return None                     # 官方模板槽位残渣，永不作为界面文案
     return s
 
 
@@ -459,6 +467,18 @@ def _facts(req_id: str, name: str, desc: str, scenarios: list[dict],
              and s not in controls]
     # THEN 里复述的种子名不算行为断言（它们由 seed 通道静态覆盖）
     behavior = [b for b in behavior if b not in seeds and b not in controls]
+    # description 逐字契约通道（批次#71 判决：sheet 题面 ~110 条双引号 UI 事实
+    # 全在 desc——"Last updated: <last updated value>" 等，官方隐藏测试按这些
+    # 断言；场景步被占位符污染后 desc 是唯一可靠来源）。模板字面量的 <...> 是
+    # 变量位，判分锚取 '<' 前固定前缀，否则按字面判红永远修不好。
+    for q in _quotes_in(desc):
+        if _BOOLISH.match(q):
+            continue
+        stem = q.split("<", 1)[0].strip().rstrip(":：,，;；")
+        fact = stem if len(stem) >= 4 else q
+        if fact in behavior or fact in seeds or fact in controls:
+            continue
+        behavior.append(fact)
     # 可点击子集必须是控件全集的子集：控件通道另有剔除口径（整句中文提示、
     # 路由串等），此处独走一套正则会判红一条主通道已经放弃的事实。
     clicks = [c for c in clicks if c in controls]
