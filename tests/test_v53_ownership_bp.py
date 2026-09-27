@@ -108,7 +108,7 @@ def make_routes():
 '''
     issues = check_blueprint_convention(bad, module="workbook_api")
     assert issues, "应门禁红"
-    assert "_bp" in issues[0] and "迁到" in issues[0]
+    assert "_bp" in issues[0] and "挂到" in issues[0]
 
 
 def test_blueprint_gate_greens_top_level_bp():
