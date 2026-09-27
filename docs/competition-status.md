@@ -1805,3 +1805,17 @@ API 只回 `interfaces`/`tests`（`tests=[]`，scenarios 不在本端点）。�
 - **刀C**：`inject_contracts_by_ownership` 在 coverage 归一后按主人注入逐 REQ 清单；`inject_ui_manifest` 不再整表灌 checklist。
 - **刀D**：`_bp` 提示词 + `blueprint_convention` 门禁；装配兼容零参 `create_*_blueprint` + 覆盖 N/N 日志。
 - 四刀齐；**未打 v53 包**（发车在用户）。
+
+## 批次#75：v52-github 尸检（ZCode 先行分析，09-27 19:4x）
+
+- 终态：FAILED 0/100、feature 0/47、2.12M token、~4.8h。**自测 80/80 全绿与官方 0/100 并存**——模块级单测不测跨模块总装，再次印证"每模块都对、总装必炸"的架构病。
+- 死因（交付树 .tmp/v52-github/ 复现全栈）：
+  1. `web_ui.py:149` `init_db()` → `seed_bootstrap.py:20` `_seed_accounts()` → **TypeError: 'module' object is not callable**；
+  2. 机制：`seed_accounts` 包 + `seed_accounts/seed_accounts.py` 内 `def seed_accounts()` 同名；file_manager 生成的 `_PKG_SHIM`（"包名即实现模块"）在 __init__ 里 `_impl.seed_accounts = _impl` **自引用覆盖了同名函数属性** → `from seed_accounts import seed_accounts` 绑定的是模块不是函数；
+  3. web_ui 真工厂与机械壳双双死于此 → 兜底首页上场 → 官方 0/100；
+  4. 结构面健康：45 小模块、零幻影 import、schema 权威源在（github 树是 v52 包，v53 刀 A-D 未入）。
+- 新断点类别：**同名冲突（函数=包=模块三重叠加 × shim 自引用覆盖）**——file_manager 基建 bug，非 LLM 能力问题。
+
+### v53 增补刀E（file_manager shim 修复）
+- shim 自引用仅在**同名属性不存在或不是 callable** 时设置；或改为不设自引用、用 sys.modules 双键注册（pkg 与 pkg.pkg 同指）——需回归"包名=函数名"的最小复现。
+- 门禁增补：`from X import Y` 后 Y 被调用且 Y 可解析为 X 的子模块 → 门禁红（"函数与包同名冲突"）。
