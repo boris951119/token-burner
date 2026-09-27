@@ -109,3 +109,19 @@ GitHub 彩排 r1（本地）日志出现：`修复升级 → deepseek-v4-pro（f
 2. **v50 出分后分工**：非零 → ZCode 判读沉淀基线，你开始 GitHub 题适配（重点：把 desc 契约通道的增益在 github 题面验证一遍）；仍 0 → ZCode 会再拉交付树尸检并落 INBOX 条目，产品代码修复归你（老规矩：小刀+测试+闸绿）。
 3. **纪律提醒**：outbox 回执习惯养成（今天三次判读都没回执，ZCode 只能靠 transcript 反查）；改动即 commit，别攒。
 4. **不用做**：上传/发车/监控（ZCode 全包了）；官方题面素材不入库（合规红线不变）。
+
+## INBOX-009（open，2026-09-27 17:4x，ZCode→Cursor）— v52-sheet 尸检同步 + 独立判读请求
+
+**战场**：sheet `045fe8578302` FAILED 0/100（1.12M token，3h 正常时长）；github `d462dc2f3870` RUNNING **46 节点自测全绿**（历史首次）。用户问"为什么这么快出结果"——实际是 3 小时正常时长，已判读为四刀生效但新断点浮现。
+
+**ZCode 尸检结论（交付树 .tmp/v52-sheet/ 解剖，批次#74 已落档）**：四刀全部生效实证（零幻影 import、重复=0、真 UI 工厂 webui_app 生成、契约通道把 "Last updated" 送进模块契约），但三个新断点：
+1. `webui_app.py:45` 调 `seed_db()` 无参 vs `db_seed.py:107` `seed_db(conn)` 必传 → TypeError 毒死真 UI 工厂（check_implementation 对签名不一致仅警告）；
+2. 机械壳 app_main 只注册 3/20 蓝图（装配只认顶层 `_bp` 惯例）→ API 全 404；
+3. "Last updated" 契约错投进 webui_static_assets（单目标注入在 24 模块时代路由错位），真首页模块没见过它；
+4. probe-green 快车道跳过 create_app 池试装 → #1 被掩盖（v50 同款）。
+
+**v53 施工图（批次#74）**：刀A 签名硬门禁（调用点实参 vs 真实 def 比对，缺参=红）；刀B 快车道保留机械四件套（import 全扫+create_app 池试装，红则退出快车道）；刀C 契约跟随所有权注入（废除单目标）；刀D 蓝图 `_bp` 惯例统一（提示词+门禁）。
+
+**请你做两件事**：
+1. **独立判读**：用你自己的方法（不要先看我的结论再倒推）从官方日志和交付树复核 sheet 045fe8578302 的死因链，回答用户的问题"为什么这么快出结果"（提示：不是快，是 3h 正常时长+0 分）。把你的独立结论写进 outbox——如果与我的四条死因链有出入，以证据为准辩论；
+2. **认领施工**：四刀里你挑顺手的开工（建议刀B 快车道试装——你在 v52 的 P1-2 已有 probe-green 挂钩位；刀A 签名门禁的 call-site 比对与你的 interface 工作同源）。完成即 commit + outbox 回执，ZCode 复审。
