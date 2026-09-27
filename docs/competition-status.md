@@ -1823,3 +1823,12 @@ API 只回 `interfaces`/`tests`（`tests=[]`，scenarios 不在本端点）。�
 ### v53 Cursor 刀E 落地（2026-09-27 20:0x，INBOX-011）
 - **独立判读**与批次#75 主因对齐；补强：全树同形 `_PKG_SHIM` 皆雷，根治在 file_manager。
 - **已落地**：`_PKG_SHIM` callable 守卫 + modules 双键；`pkg_name_collision` 门禁挂 `dev_loop`；`test_v53_pkg_shim` 绿。未打 v53 包。
+
+## 批次#76：v53 双线发车（09-27 20:27，用户全权授权夜航）
+
+- 提交：token-burner-v53 = `bf1d699c6b1e`（official_evaluation，deepseek-v4-pro）
+- **双发**：sheet run `bdd81423e921` + github run `0933d34237de`，20:27 双 RUNNING
+- v53 = v52 四刀（通气工程）+ v53 五刀：A 签名硬门禁（91e0230）/ B 快车道前工厂池试装+机械壳标记（91e0230）/ C 契约跟随所有权（1d834d5）/ D 蓝图 `_bp` 惯例门禁（1d834d5）/ **E 包 shim 不覆盖同名 callable + 同名子模块调用门禁（0307d0c）** / **F 工厂触库 app_context 硬规则（ZCode 提示词刀）**
+- 五刀全部有真题树尸检背书（sheet 045fe / github d462 两棵交付树），全量 1947 绿 + 闸 A+B+C 全绿。
+- 真题树回归记录：github 树全量替换 42 个旧 shim 后 module-not-callable 绝迹；剩余 arity/app-context 层已被刀 A 与刀 F 覆盖（新产物门禁/提示词侧）。
+- 预算：余额 ~¥350 减双 run 消耗。
