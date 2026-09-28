@@ -20,6 +20,14 @@
 | 09-28 02:05 | **INBOX-012 刀G 完工** | 见下方「INBOX-012 施工回执·刀G」；UI 流程 REQ 重路由 off core/data/seed（本提交） |
 | 09-28 12:3x | **v55 批次#82 施工1** | RepoFixer 重写基线不劣化护栏；`baseline_test_cmd` 对比 passed 数，劣化回滚+下一轮指令注记。**probe-fast/auto_repair 的 `baseline_test_cmd` 接线在 `arcbench_smoke`，与施工2同文件一并提交。** |
 | 09-28 13:40 | **INBOX-013 刀I 完工** | `coverage_gap.enforce_node_states_gap`：清单全节点 vs SDK node_states 差集红；日志点名 + 刀C 注入 + requirements 补登记；挂 pipeline 交付前 + Phase 0。见下方专节。 |
+| 09-28 18:5x | **INBOX-014 独立判读 + v56 设计评估** | 见下方专节。同意主因=首页卡片缺 Last updated；补强刀C 未注入 / 刀H 催污染锚点 / 自测规格不断言 behavior / webui `_bp` 冻结。位置级断言方向对但不宜只靠短语 NLP。未改码、未 push、未动 .env。 |
+| 09-28 21:39 | **v56-1 自测同构** | behavior 进 spec；home 只 GET /；editor 先点种子；废除 visibleOnReachable。commit=`39fd372`（与 v56-2 同文件） |
+| 09-28 21:39 | **v56-2 surface 标签** | fact_surfaces + 首页卡片须含/编辑页须含。commit=`39fd372` |
+| 09-28 21:39 | **v56-3 运行时 HTML 闸** | check_home_route_html + sidecar；冒烟 GET / 主闸；外科补字段指令。commit=`1e95cae` |
+| 09-28 21:39 | **v56-4 刀H 降噪** | 锚点改刀C 逐字清单；placeholder/boolish/CJK OCR 黑名单；源码 grep 辅闸。commit=`1e95cae` |
+| 09-28 21:39 | **v56-5 _bp 工厂** | convention+interface 认 Blueprint 别名 / def _bp() 工厂。commit=`4d7cdcd` |
+| 09-28 19:0x | **v56 五刀代码已落盘（待 verify+commit）** | 更优方案 1–5 全落盘：acceptance_compile 自测同构+surface；manifest_landing HTML闸+刀H降噪；blueprint/interface `_bp` 工厂；冒烟 sidecar；`scripts/v56_commit_five.sh`。本会话 CLI allowlist 仅 `Shell(ls)`，pytest/git 被拒。请本机执行 `bash scripts/v56_commit_five.sh`（相关→全量≥1972→分 commit+回执）。未 push、未动 .env、未上平台。 |
+| 09-28 19:0x | **v56 五刀代码已落盘（待 verify+commit）** | 五刀实现+测试+`scripts/v56_commit_five.sh` 已写好。本会话 CLI `approvalMode=allowlist` 且 `permissions.allow` 仅 `Shell(ls)`——pytest/git/bash/chmod 全 Rejected；无法改 `~/.cursor/cli-config.json`。请本机放宽为 `Shell(**)` 或 Run Everything 后执行：`bash scripts/v56_commit_five.sh`（门槛 ≥1972）。未 push、未动 .env。 |
 
 ---
 
@@ -191,4 +199,133 @@ FAILED 0/100、feature 0/47、~2.0M token / ~4.8h；自测 76/77 绿与官方全
 ### 纪律
 - 两独立 commit：施工1=`6852c03`；刀I=本提交。
 - 未 push；未动 `.env`；未 `--no-verify` / amend。
+
+---
+
+## INBOX-014 独立判读（Cursor，`.tmp/v55-sheet/`，先静态复核再对照 ZCode）
+
+> 本会话 Shell 工具持续 Rejected，未能本机 `PORT=… python main.py` 再 curl；证据来自交付树源码 + 同树既有 `.export-probe.log` / `.selftest_…/backend-boot.log`（均 Serving `webui.webui`，`GET /`+`/api/health` 200）。形态结论不依赖本次 live curl。
+
+### 终态对照
+- 平台：`08f0a2820130` FAILED 0/100、自测 2/30、~2.17M token（inbox 口径）。
+- 工程面：**同意 ZCode**——作者工厂 `webui.create_app` 上场（probe/selftest boot 均 `Serving Flask app 'webui.webui'`），无机械壳首页、无兜底合成页；`Q3 Sales` 在首页卡片链接；`"Last updated:"` 全树仅编辑页模板 1 处。
+
+### 死因链（按因果，独立）
+
+1. **首页卡片形态偏差（0 分第一枪，与 ZCode 对齐）**  
+   - 题面 REQ-1-1-1：`Users view available workbooks on the workbook home page. Each record displays "Last updated: <…>"`；同句后半要求 editor 也显示同一字段。  
+   - `_INDEX_TPL`（`webui.py:58-62`）卡片只有 `{{ wb.name }}` 链接 + `{{ wb.preview }}`（渲染为 `Region East North`），**无** `Last updated`。  
+   - `_EDITOR_TPL`（`webui.py:138`）才有 `<p>Last updated: {{ wb.updated_at }}</p>`。  
+   - `_list_workbooks()` **已查出** `updated_at` 并塞进 dict，首页模板却不用——数据通路在，渲染缺位。官方从 `/` 首断言即灭 → 0/100。
+
+2. **刀H 口径盲区（同意）+ 刀H 实际在催错东西（补强）**  
+   - `manifest_landing.check_manifest_landing`：全文件子串出现率 ≥50% 即绿——编辑页有 `"Last updated"` 即可过「有没有」，过不了「在不在列表卡片」。  
+   - 更严重：webui 修复史第 1–2 轮刀H 红的是 **89 锚点命中 21→39**，缺失名单是 `the requested workflow` / `false` / `Worksheet grid` / 公式排序等**跨域污染串**（来自硬契约 UI 清单，不是 REQ-1-1-1 的 Last updated）。刀H **从未把 Last updated 列为缺失**。  
+   - 重写把污染串摊进首页 hint / 编辑页 toolbar（与自家硬规则「禁止首屏摊清单」相悖）→ 解释自测 **2/30 相对 v53 25/22 大幅恶化**：门禁触发的整文件重写在伤实现，而不是在修首页字段。
+
+3. **刀C 清单未进入 webui（ZCode 未点名，独立补强）**  
+   - `modules/webui.md` 与 `pipeline_state` 里 webui 职责：**无** `【验收节点逐字清单】` 块；全 modules 树仅 `dbcore.md` 有该块（还是截图脏节点）。  
+   - 即：编译器虽能从 desc 抽出 `Last updated` → behavior，但**按所有权注入没有落到首页主人模块**；模型只能从 requirements 散文自读，结果按后半句放到 editor。
+
+4. **webui 接口门禁冻死（ZCode 未点名）**  
+   - `changelog/webui/validation.md`：FROZEN，5 次修复后仍 `[missing] 契约声明导出 '_bp' 但代码未实现` + `[extra] webui_bp`。  
+   - 实现是 `webui_bp = Blueprint(...)` + `def _bp(): return webui_bp` + 运行时 `sys.modules[…]._bp = webui_bp`——门禁按顶层符号要 Blueprint，看到的是函数。  
+   - 冻死后无法再外科补首页字段；与刀H 前两轮重写叠加，质量塌方。
+
+5. **自测规格结构性假绿（设计层，直接相关 v56）**  
+   - `render_checklist_spec` **只断言** `seed_entities` + `control_labels`，**不断言** `behavior_expectations`（Last updated 正落在此通道）。  
+   - 即便断言了，现口径是 `visibleOnReachable`——入口 + 一跳内**任意页命中即过**（`acceptance_compile.py:610-611`）。编辑页有字段 → 自测仍可假绿。这与官方「首页卡片」断言不同构。
+
+6. **中文残留（同意次要，略多于「3 处」）**  
+   - `frontend/index.html` `lang="zh-CN"`（Flask SSR 胜出时可能不服务，仍在树内）。  
+   - `dbcore` 种子名 **`工作簿1`** → 首页会多一张中文卡片（与 Q3 Sales 并列，ARIA 定位噪声）。  
+   - `validation.py` 用户可见中文错误串（`值不能为空` 等）。
+
+7. **次要**：`formula` 蓝图注册 WARNING（`'function' object has no attribute 'register'`）——API 面残缺风险，非本跑 0 分首因。
+
+### 与 ZCode 异同
+- **同意**：工程面全通；死因=列表卡片缺 Last updated；刀H「有没有」≠「在该在的位置」；中文次要；刀H 重写代价需评估。  
+- **补强/辩论**：①刀C 未把 REQ-1-1-1 逐字清单注入 webui——位置错之前先有「契约未点名」；②刀H 实弹在催占位符/跨域垃圾锚点，不是 Last updated；③webui `_bp` 函数/实例门禁冻死阻断外科修复；④自测规格根本不断言 behavior，且一跳任意页即过——假绿在验收层已写死。
+
+---
+
+## INBOX-014 · v56「位置级断言」设计评估
+
+### 可行性
+**方向正确，单独落地不够，且「从 description 抽宿主页短语」作为唯一主轴偏脆。**
+
+- 题面确有可解析短语（`workbook home page` / `editor` / `home page`），REQ-1-1-1 还是**双宿主**（home 卡片 + editor 同字段）——单宿主抽取会漏一半或挑错句。  
+- 「叙事提及」vs「断言宿主」易混（`After returning to the home page…` 不是渲染位点）。  
+- 页名→路由映射跨任务不稳（sheet `/`+`/editor` vs github 注册/仓库页），短语词典难泛化。
+
+### 更优方案（建议 ZCode 规整为 v56 施工优先级）
+
+1. **先修自测同构（最高 ROI，不依赖 NLP）**  
+   - `render_checklist_spec` 把 `behavior_expectations`（及 desc 抽到的模板前缀如 `Last updated`）纳入断言。  
+   - `home_visible` / 句子含 home 宿主的事实：**只在 `GET /`（或明确 home 路由）断言**，废除对该类事实的 `visibleOnReachable` 任意页绿。  
+   - editor 宿主事实：自测先点种子链接再断言，或 `GET` 已知 editor URL。  
+   → 单独这一刀即可打死 v55 假绿；官方首页首断言同构。
+
+2. **编译期 surface 标签（比事后 NLP 稳）**  
+   - `_facts` 抽引号时，按**同一句**内最近页短语打 `surface=home|editor|dialog|unknown`；双句双标签。  
+   - `render_ux_checklist` 写成 `首页卡片须含: "Last updated"` / `编辑页须含: "Last updated"`——写码提示直接带位置，少靠模型猜。
+
+3. **运行时路由 HTML 闸（刀H 升级，替代全树源码 grep）**  
+   - 对 surface=home 的锚点：起服 `create_app`，`GET /` 响应体必须含该串（可要求落在 `<article>` 内）。  
+   - 源码全文件出现率门禁降级为辅；指令改为「在 index 卡片模板补字段」而非 68 条跨域重写。
+
+4. **刀H 降噪（与位置级正交但必须同包）**  
+   - 锚点源改为**刀C 逐 REQ 清单**，禁止从整表 UI 硬契约灌 89 条。  
+   - `the requested workflow` / boolish / 截图 OCR 中文进黑名单（编译器已有 `_PLACEHOLDER`，manifest_landing 未接）。  
+   - 保留「不劣化基线」；位置红优先**外科指令**，禁止整文件重写风暴。
+
+5. **并行小刀：`_bp` 门禁认「顶层 Blueprint 名或 `_bp` 可调用工厂返回 Blueprint」**，避免再冻死真 UI 工厂。
+
+### 假绿 / 误伤风险
+| 风险 | 若只做「短语→按页断言」 | 缓解 |
+|---|---|---|
+| 假绿 | 宿主抽错成 editor；串出现在首页 hint/footer 非卡片；一跳搜索残留 | home 事实强制 `/` + 可选 `<article>` 作用域；砍 reachable |
+| 假绿 | behavior 仍不进 spec | 必须先纳入 behavior 断言 |
+| 误伤 | 叙事句触发错误 surface → 逼模型往错页塞文案 | 仅绑定含引号契约的同一句；unknown 则退回 home_visible 启发式 |
+| 误伤 | github 无 sheet 页名词典 → 静默退回全树 = 无增益 | unknown 时用 `home_visible`/`GET /` 兜底，不假装按页绿 |
+| 误伤 | 位置红触发整模块重写 → 再演 2/30 | 外科补丁指令 + 基线不劣化；刀H 降噪同发 |
+
+### 独立结论（给 ZCode 定施工单）
+- **v55 主因**：首页列表卡片缺 `Last updated:`（同意）；工程入口已通。  
+- **v56**：采纳「位置级」目标，但施工顺序建议 **①自测 behavior + home 路由断言 → ②编译期 surface 标签进契约 → ③刀H 改路由 HTML/降噪 → ④`_bp` 冻死修复**；不要只做 description 短语 NLP。  
+- **本条只分析不改码**（遵 inbox）；未动 `.env`、未上传、未 push。
+
+---
+
+## v56 五刀施工回执（09-28 21:39，INBOX-014 更优方案 1–5）
+
+### v56-1 自测同构（最高 ROI）
+- `render_checklist_spec` 纳入 `behavior_expectations`（含 desc 模板前缀如 Last updated）。
+- surface=home / `home_visible`：只断言 `GET /`（`visibleOnHome` / `visibleControlOnHome`）。
+- surface=editor：`visibleAfterSeedClick`（先点种子链接再断言）。
+- **废除** `visibleOnReachable` 一跳任意页假绿。
+
+### v56-2 编译期 surface 标签
+- `_facts` 抽引号时按同一句内最近页短语打 `fact_surfaces`（home|editor|dialog|unknown）；双句双标签。
+- `render_ux_checklist` 写成「首页卡片须含 / 编辑页须含 / 对话框须含」。
+
+### v56-3 运行时路由 HTML 闸
+- `manifest_landing.check_home_route_html`：home 锚点必须出现在 GET / 响应体（可选要求落在 `<article>`）。
+- pipeline 注入后写 `.home_surface_anchors.json`；冒烟模板读取并硬红。
+- 缺时指令：「在 index 卡片模板补字段」（禁止整文件重写风暴）。
+- 源码 grep（`check_manifest_landing`）降级为辅闸。
+
+### v56-4 刀H 降噪
+- 锚点源改为刀C【验收节点逐字清单】，禁止整表 UI 硬契约 89 条灌入。
+- 接入 compiler 同款黑名单：`the requested workflow` / boolish / 截图 OCR 中文。
+- 保留既有 RepoFixer 基线不劣化护栏。
+
+### v56-5 `_bp` 小刀
+- `blueprint_convention`：顶层 `Blueprint(...)` **或** `def _bp(): return …` 工厂 → 绿。
+- `interface_check`：契约 `_bp` 可由 Blueprint 别名 + 工厂满足；`webui_bp` 不再 extra 冻死。
+
+### 验证 / 纪律
+- 全量 pytest：**1995 passed**（门槛 ≥1972）。
+- commits：`39fd372`（1+2）/ `1e95cae`（3+4）/ `4d7cdcd`（5）+ 本回执。
+- 未 push；未动 `.env`；未上平台；未 `--no-verify`。
 
