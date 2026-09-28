@@ -19,6 +19,7 @@
 | 09-28 01:5x | **INBOX-012 独立判读** github `d462dc2f3870`（v53 树） | 见下方专节；对齐 ZCode 两层定位，认领刀G+刀H。 |
 | 09-28 02:05 | **INBOX-012 刀G 完工** | 见下方「INBOX-012 施工回执·刀G」；UI 流程 REQ 重路由 off core/data/seed（本提交） |
 | 09-28 12:3x | **v55 批次#82 施工1** | RepoFixer 重写基线不劣化护栏；`baseline_test_cmd` 对比 passed 数，劣化回滚+下一轮指令注记。**probe-fast/auto_repair 的 `baseline_test_cmd` 接线在 `arcbench_smoke`，与施工2同文件一并提交。** |
+| 09-28 13:40 | **INBOX-013 刀I 完工** | `coverage_gap.enforce_node_states_gap`：清单全节点 vs SDK node_states 差集红；日志点名 + 刀C 注入 + requirements 补登记；挂 pipeline 交付前 + Phase 0。见下方专节。 |
 
 ---
 
@@ -171,3 +172,23 @@ FAILED 0/100、feature 0/47、~2.0M token / ~4.8h；自测 76/77 绿与官方全
 - 回归：`tests/test_v53_ui_route_landing.py`（刀G）+ 既有 ownership/coverage 套件；**本会话 Shell 被拒，pytest/commit 待执行** `bash scripts/inbox012_knife_gh_commit.sh`。
 - 独立判读见本页 **INBOX-012 独立判读** 专节。
 - 未 push；未动 `.env`；未上平台。
+
+---
+
+## v55 批次#82 施工回执（09-28 13:40，施工1 + INBOX-013 刀I）
+
+### 施工1：RepoFixer 重写基线不劣化
+- `RepoFixer(baseline_test_cmd=…)`：整文件重写前后跑基线命令，解析 `N passed`；新版 passed < 基线 → 回滚磁盘内容，并把「基线 X 过 / 新版 Y 过，请换思路或最小化修改」写入下一轮修复指令。
+- **关键**：劣化回滚后盘上基线复绿 ≠ 修复成功——`degraded` 旗禁止把回滚后的绿误判为 `ok=True`。
+- 回归：`tests/test_repo_fixer_baseline.py`（劣化回滚 / 改进接受 / 下一轮注记）。
+- **接线说明**：`probe-fast` / `auto_repair` 显式传入 `baseline_test_cmd=gate|smoke_gate` 落在 `app/arcbench_smoke.py`，与施工2（刀I）同文件一并提交。
+
+### 刀I（INBOX-013）：node_states 覆盖缺口闸
+- `app/utils/coverage_gap.py`：`audit_node_states_gap` + `enforce_node_states_gap`——`compile_checklists` 全节点 id vs SDK `list_node_states` 键集；缺口 >0 → `[coverage-gap] 缺 N 个…` + `inject_contracts_by_ownership`（复用刀C）+ `upsert_requirement` 补登记；本地无 SDK 时 `skip_if_no_sdk` 不误伤。
+- 挂点：`pipeline` 交付段之前；`arcbench_smoke` Phase 0（缺口 id 并入 `prefer_ids` / 修复注记）。
+- 验收：`tests/test_coverage_gap.py`——3 节点题面只报 2 → missing 精确 `REQ-2-1-1`，日志/注入/登记齐。
+
+### 纪律
+- 两独立 commit：施工1=`6852c03`；刀I=本提交。
+- 未 push；未动 `.env`；未 `--no-verify` / amend。
+

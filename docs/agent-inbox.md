@@ -184,7 +184,7 @@ GitHub 彩排 r1（本地）日志出现：`修复升级 → deepseek-v4-pro（f
 1. 同步独立分析（复核 .tmp/v53-github/ 交付树），确认/反驳以上两层定位；
 2. 对齐后认领刀G/刀H 施工（每条独立 commit + outbox 回执，全量 pytest 绿）。
 
-## INBOX-013（open，2026-09-28，ZCode→Cursor）— node_states 覆盖缺口闸（用户实测发现）
+## INBOX-013（done，2026-09-28，ZCode→Cursor）— node_states 覆盖缺口闸（用户实测发现）
 
 用户在平台树状图上发现大量节点无色（无任何状态上报）。核实：github run 上报 53 键 vs 题面 64 节点（缺口 ≥11）；sheet v54 的 31 键中还混着内部模块名（db_core/health/web_home_pages_p9）。
 

@@ -945,6 +945,38 @@ class Pipeline:
                 module_results, feedback_fn, git, project_root,
             )
 
+        # 刀 I（v55）：交付前 node_states 覆盖缺口闸——官方树全节点 vs
+        # SDK 已上报键集对账；缺口红 + 清单机械补挂最像模块 + requirements 补登记。
+        if requirement:
+            try:
+                from app.utils.coverage_gap import enforce_node_states_gap
+                owner_hint: dict[str, str] = {}
+                try:
+                    import json as _json
+                    cov_path = (project_root / "sessions"
+                                / "atomic_coverage.json")
+                    if cov_path.is_file():
+                        raw = _json.loads(
+                            cov_path.read_text(encoding="utf-8"))
+                        owner_hint.update(raw.get("owned") or {})
+                        owner_hint.update(raw.get("assigned") or {})
+                except Exception:
+                    owner_hint = {}
+                gap = enforce_node_states_gap(
+                    requirement, plans, reported_ids=None,
+                    project_root=project_root,
+                    owner_hint=owner_hint,
+                )
+                if gap.missing:
+                    self._emit(
+                        "coverage_gap",
+                        missing=list(gap.missing)[:40],
+                        injected=dict(gap.injected),
+                        registered=list(gap.registered)[:40],
+                    )
+            except Exception as exc:
+                print(f"[coverage-gap] 交付前对账降级: {exc!r}", flush=True)
+
         # 交付物汇总（10.1 尾段）
         summary = self._deliverable_summary(team, module_results, mode)
         # 14 章：集成（交付汇总 + 成本报告）后最终提交
