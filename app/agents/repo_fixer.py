@@ -34,6 +34,8 @@ _MAX_FILE_CHARS = 60_000
 # 模型输出被截断（阈值取得宽，正常修复不至于腰斩；小文件不套用）。
 _SHRINK_RATIO = 0.5
 _SHRINK_MIN_CHARS = 1200
+# pytest -q 摘要「N passed」；无摘要时整闸绿/红退化为 1/0。
+_PASSED_RE = re.compile(r"(\d+) passed")
 
 # 语法拒收止损（run 088dd22be41b 实证：整跑的修复日志里「拒收语法非法的修复
 # 内容」出现 4 次，每次背后都是一整轮 LLM 调用，最后修环被预算掐死；本地 keep
@@ -86,15 +88,22 @@ class RepoFixer:
         max_rounds: int = 3,
         test_timeout: int = 300,
         stop_check: Callable[[], bool] | None = None,
+        baseline_test_cmd: list[str] | None = None,
     ):
         self.llm = llm
         self.repo = Path(repo_path).resolve()
         self.test_cmd = list(test_cmd or DEFAULT_TEST_CMD)
+        # v55 不劣化保护：整文件重写前后对比用的基线命令；缺省=test_cmd。
+        self.baseline_test_cmd = list(
+            baseline_test_cmd if baseline_test_cmd is not None
+            else self.test_cmd)
         self.max_rounds = max_rounds
         self.test_timeout = test_timeout
         # v54 P1-5：probe-fast join 超时置旗后，修复轮/写文件前检查即停，
         # 避免与终局导出竞态撕裂写入。
         self.stop_check = stop_check
+        # 上一轮因劣化回滚时追加进下一轮修复指令（基线 X 过 / 新版 Y 过）。
+        self._degrade_note: str = ""
 
     def _should_stop(self) -> bool:
         if self.stop_check is None:
@@ -157,6 +166,12 @@ class RepoFixer:
                 result.diff = self._diff()
                 return result
             result.rounds = attempt
+            # v55 不劣化：整文件重写前对当前盘上版本跑基线，记下通过数。
+            snapshots = {
+                rel: _read_text(self.repo / rel) for rel in changed
+            }
+            baseline_n = self._count_passes(
+                self.baseline_test_cmd, test_files)
             rejected = self._apply(changed)
             # 被拒文件的草稿退回磁盘现行版：下一轮从**真实内容**出发重出，
             # 而不是把这份非法草稿当"当前内容"继续放大。
@@ -165,6 +180,25 @@ class RepoFixer:
                 changed[rel] = (
                     fp.read_text(encoding="utf-8", errors="replace")
                     [:_MAX_FILE_CHARS] if fp.exists() else "")
+            # 语法拒收之外：凡成功落盘的整文件重写，必须 ≥ 基线通过数。
+            applied = [rel for rel in changed
+                       if not any(rel == r for r, _ in rejected)]
+            degraded = False
+            if applied:
+                new_n = self._count_passes(
+                    self.baseline_test_cmd, test_files)
+                if new_n < baseline_n:
+                    why = (f"上次重写劣化（基线{baseline_n}过/新版{new_n}过），"
+                           "请换思路或最小化修改")
+                    print(f"[repo_fix] 拒收劣化重写: {why}", flush=True)
+                    for rel in applied:
+                        (self.repo / rel).write_text(
+                            snapshots.get(rel, ""), encoding="utf-8")
+                        changed[rel] = (
+                            snapshots.get(rel, "")[:_MAX_FILE_CHARS])
+                        rejected.append((rel, why))
+                    self._degrade_note = why
+                    degraded = True
             if (rejected and len(rejected) == len(changed)
                     and all(f"{self.repo}::{rel}" in _FROZEN
                             for rel, _ in rejected)):
@@ -180,9 +214,11 @@ class RepoFixer:
                 return result
             passed, output = self._verify(self.test_cmd, test_files)
             result.test_output = output[:4000]
-            if passed:
+            # 劣化回滚后盘上又是基线绿——那是「本轮重写被拒」，不是修复成功。
+            if passed and not degraded:
                 result.ok = True
                 result.diff = self._diff()
+                self._degrade_note = ""
                 return result
             detail = output[-2500:]
             # 无进展止损（2026-09-20 平台双跑取证：修复轮烧满 max_rounds
@@ -199,9 +235,14 @@ class RepoFixer:
             # 告知模型——不说的话模型只知道"测试还红着"，会照着同一份非法
             # 输出再撞一次（keep 彩排实证同一文件连拒 4 轮）。
             failure = detail
-            if rejected:
+            if self._degrade_note:
                 failure = (
                     detail
+                    + f"\n\n## 不劣化护栏\n{self._degrade_note}\n")
+                self._degrade_note = ""
+            if rejected:
+                failure = (
+                    failure
                     + "\n\n## 系统拒收清单（上一版已被拒，未写入磁盘）\n"
                     + "\n".join(f"- {rel}: {msg}" for rel, msg in rejected)
                     + "\n上述文件磁盘上仍是修改前的旧版，必须整文件重发，"
@@ -372,6 +413,21 @@ class RepoFixer:
             print(f"[repo_fix] 本轮拒收 {len(rejected)} 个文件: "
                   f"{[r for r, _ in rejected]}", flush=True)
         return rejected
+
+    def _count_passes(
+        self, verify_cmd: list[str],
+        test_files: list[str] | None,
+    ) -> int:
+        """跑基线/对照命令，解析通过数（pytest「N passed」；否则绿=1/红=0）。
+
+        基线命令基础设施失败（超时/起不来）时 fail-open 返回 0——不因
+        护栏自身故障挡住本可落盘的修复。
+        """
+        _ok, output = self._verify(verify_cmd, test_files)
+        m = _PASSED_RE.search(output or "")
+        if m:
+            return int(m.group(1))
+        return 1 if _ok else 0
 
     def _verify(self, verify_cmd: list[str],
                 test_files: list[str] | None) -> tuple[bool, str]:

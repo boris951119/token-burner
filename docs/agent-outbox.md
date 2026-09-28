@@ -18,6 +18,7 @@
 | 09-28 00:12 | v54 修4·P2-8 | 组合兜底全收顶层 Blueprint；双蓝图两套路由进应用；相关+全量绿（本提交） |
 | 09-28 01:5x | **INBOX-012 独立判读** github `d462dc2f3870`（v53 树） | 见下方专节；对齐 ZCode 两层定位，认领刀G+刀H。 |
 | 09-28 02:05 | **INBOX-012 刀G 完工** | 见下方「INBOX-012 施工回执·刀G」；UI 流程 REQ 重路由 off core/data/seed（本提交） |
+| 09-28 12:3x | **v55 批次#82 施工1** | RepoFixer 重写基线不劣化护栏；`baseline_test_cmd` 对比 passed 数，劣化回滚+下一轮指令注记。**probe-fast/auto_repair 的 `baseline_test_cmd` 接线在 `arcbench_smoke`，与施工2同文件一并提交。** |
 
 ---
 
