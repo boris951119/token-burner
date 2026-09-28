@@ -194,3 +194,36 @@ class TestMapConsistency:
         issue = check_map(interfaces)[0]
         assert isinstance(issue, InterfaceIssue)
         assert issue.module == "auth"
+
+
+class TestV56BpFactory:
+    """v56-5：契约 `_bp` ↔ webui_bp + def _bp() 工厂同构。"""
+
+    def test_bp_factory_alias_no_missing_no_extra(self):
+        code = (
+            "from flask import Blueprint\n"
+            "webui_bp = Blueprint('webui', __name__)\n"
+            "@webui_bp.route('/')\n"
+            "def index():\n"
+            "    return 'ok'\n"
+            "def _bp():\n"
+            "    return webui_bp\n"
+        )
+        contract = {
+            "exports": ["_bp"],
+            "public_api": ["_bp"],
+            "imports": [],
+            "dependencies": [],
+        }
+        issues = check_implementation("webui", code, contract)
+        assert not any(i.kind == "missing" for i in issues), issues
+        assert not any(
+            i.kind == "extra" and "webui_bp" in i.detail for i in issues
+        ), issues
+
+    def test_extract_includes_bp_underscore(self):
+        code = "_bp = Blueprint('x', __name__)\n"
+        # Blueprint 未导入时仍是 Call 名 Blueprint——extract 只看赋值名
+        code = "from flask import Blueprint\n_bp = Blueprint('x', __name__)\n"
+        defs = extract_public_defs(code)
+        assert "_bp" in defs

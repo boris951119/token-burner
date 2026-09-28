@@ -37,10 +37,76 @@ class InterfaceIssue:
 _API_SIG = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*(?:\(([^)]*)\))?")
 
 
+def _is_blueprint_call(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    fn = getattr(node.func, "id", "") or getattr(node.func, "attr", "")
+    return fn == "Blueprint"
+
+
+def _bp_export_satisfied(code: str) -> bool:
+    """v56-5：契约声明 `_bp` 时，认顶层 Blueprint 名或 `_bp` 可调用工厂。
+
+    病灶（v55-sheet webui）：`webui_bp = Blueprint(...)` +
+    `def _bp(): return webui_bp`——旧门禁按公开符号跳过 `_` 前缀 →
+    missing `_bp` + extra `webui_bp` → 冻死真 UI 工厂。
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return False
+    bp_names: set[str] = set()
+    has_bp_factory = False
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            if _is_blueprint_call(node.value):
+                for t in node.targets:
+                    if isinstance(t, ast.Name):
+                        bp_names.add(t.id)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            if node.value is not None and _is_blueprint_call(node.value):
+                bp_names.add(node.target.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name != "_bp":
+                continue
+            for sub in ast.walk(node):
+                if not isinstance(sub, ast.Return) or sub.value is None:
+                    continue
+                if _is_blueprint_call(sub.value):
+                    has_bp_factory = True
+                elif isinstance(sub.value, ast.Name):
+                    has_bp_factory = True
+            if bp_names:
+                has_bp_factory = True
+    return bool(bp_names) or has_bp_factory
+
+
+def _blueprint_var_names(code: str) -> set[str]:
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return set()
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and _is_blueprint_call(node.value):
+            for t in node.targets:
+                if isinstance(t, ast.Name):
+                    names.add(t.id)
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.value is not None
+            and _is_blueprint_call(node.value)
+        ):
+            names.add(node.target.id)
+    return names
+
+
 def extract_public_defs(code: str) -> dict[str, tuple[str, ...]]:
     """AST 抽取顶层公开定义：函数 / 类 / 变量（_private 排除）。
 
     Returns: 名称 → 参数元组（变量为空元组）。
+    v56-5：特例收录 `_bp`（变量或可调用工厂）——装配约定公开面。
     """
     try:
         tree = ast.parse(code)
@@ -50,7 +116,7 @@ def extract_public_defs(code: str) -> dict[str, tuple[str, ...]]:
     defs: dict[str, tuple[str, ...]] = {}
     for node in tree.body:  # 仅顶层（公开面）
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            if not node.name.startswith("_"):
+            if node.name == "_bp" or not node.name.startswith("_"):
                 defs[node.name] = tuple(
                     a.arg for a in node.args.args
                 )
@@ -68,10 +134,11 @@ def extract_public_defs(code: str) -> dict[str, tuple[str, ...]]:
                 defs[node.name] = params
         elif isinstance(node, ast.Assign):
             for target in node.targets:
-                if isinstance(target, ast.Name) and not target.id.startswith("_"):
+                if isinstance(target, ast.Name) and (
+                        target.id == "_bp" or not target.id.startswith("_")):
                     defs[target.id] = ()
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            if not node.target.id.startswith("_"):
+            if node.target.id == "_bp" or not node.target.id.startswith("_"):
                 defs[node.target.id] = ()
     return defs
 
@@ -123,7 +190,13 @@ def check_implementation(
             continue
         declared[parsed[0]] = parsed[1]
 
+    bp_ok = "_bp" in declared and _bp_export_satisfied(code)
+    bp_aliases = _blueprint_var_names(code) if bp_ok else set()
+
     for name, declared_params in declared.items():
+        # v56-5：`_bp` 契约可由顶层 Blueprint 名或 _bp 工厂满足
+        if name == "_bp" and bp_ok:
+            continue
         if name not in defs:
             # M15-2：missing 附签名模板（优先 public_api 原文，含返回标注）；
             # M15-3：class 风格指导补类（防「def 类名」误导），auto 中性
@@ -175,6 +248,9 @@ def check_implementation(
 
     for name, params in defs.items():
         if name not in declared:
+            # v56-5：契约要 _bp 且本符号是 Blueprint 别名 → 非 extras
+            if bp_ok and name in bp_aliases:
+                continue
             # M15-2：extra 附处置指引（二选一：补声明或删实现）；
             # factory26 演练取证：修复 LLM 选中 ② 私有化而测试已按原名
             # import → ImportError，与门禁来回震荡（db_layer 连修 2 轮）。

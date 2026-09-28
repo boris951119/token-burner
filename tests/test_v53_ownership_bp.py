@@ -139,6 +139,45 @@ def create_app():
     assert check_blueprint_convention(factory, module="webui_app") == []
 
 
+def test_v56_blueprint_gate_greens_bp_callable_factory():
+    """v56-5：webui 同形——顶层 Blueprint 别名 + def _bp() 工厂 → 绿。"""
+    code = '''
+from flask import Blueprint
+webui_bp = Blueprint("webui", __name__)
+
+@webui_bp.route("/")
+def index():
+    return "<a>Q3 Sales</a>"
+
+def _bp():
+    return webui_bp
+'''
+    assert check_blueprint_convention(code, module="webui") == []
+
+
+def test_v56_interface_accepts_bp_factory_alias():
+    """v56-5：契约 exports=_bp，实现 webui_bp+def _bp → 无 missing/extra。"""
+    from app.utils.interface_check import check_implementation
+    code = '''
+from flask import Blueprint
+webui_bp = Blueprint("webui", __name__)
+
+@webui_bp.route("/")
+def index():
+    return "ok"
+
+def _bp():
+    return webui_bp
+'''
+    contract = {"exports": ["_bp"], "public_api": ["_bp"], "imports": [],
+                "dependencies": []}
+    issues = check_implementation("webui", code, contract)
+    kinds = {i.kind: i.detail for i in issues}
+    assert "missing" not in kinds, kinds
+    assert not any(i.kind == "extra" and "webui_bp" in i.detail
+                   for i in issues), issues
+
+
 def test_assemble_logs_bp_coverage(tmp_path, capsys):
     from app.utils.mechanical_assembly import assemble
 
