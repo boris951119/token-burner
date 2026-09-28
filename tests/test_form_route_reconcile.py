@@ -178,7 +178,15 @@ class TestFormProbeNoFalseRed:
         for i, body in enumerate(bodies):
             code = _code(tmp_path / str(i), _app_src("<a href='/x'>X</a>" + body,
                                                      extra))
-            assert run_form_probe(code) == [], body[:48]
+            issues = run_form_probe(code)
+            # 外链/模板 action 本身不该出「缺路由」类应用红；
+            # 若探针未发出结论标记，v56 fail-closed 会给基础设施红——
+            # 那也不是「假红判应用缺陷」，允许非空但不得含 action 路径控告。
+            assert not any(
+                ("路由" in x or "字段" in x) and "工具" not in x
+                and "超时" not in x and "无结论" not in x and "基础设施" not in x
+                for x in issues
+            ), (body[:48], issues)
 
     def test_path_converter_spans_slashes(self, tmp_path):
         """`<path:rest>` 一路吃到底：/files/a/b 这类真存在的目标若按单段匹配
@@ -257,13 +265,16 @@ class TestProbeSandbox:
         conn.close()
         assert [r[0] for r in rows] == ["seed"]
 
-    def test_tool_failure_is_not_an_app_defect(self, tmp_path):
-        """探针自己起不来（这里连应用都没有）一律返回空列表：
-        工具失效不该拦交付。"""
+    def test_tool_failure_demotes_probe_fast_guard(self, tmp_path):
+        """探针自己起不来（这里连应用都没有）：v56 返回基础设施红字，
+        供 probe-fast 守卫 demote——不得再 [] 假绿放行（v55 GitHub 取证）。"""
         code = tmp_path / "code"
         _write(code / "notes.txt", "nothing importable here")
-        assert run_form_probe(code) == []
-        assert run_form_probe(tmp_path / "does-not-exist") == []
+        issues = run_form_probe(code)
+        assert issues and any("守卫红" in x or "工具" in x or "无结论" in x
+                              or "基础设施" in x or "失败" in x for x in issues)
+        missing = run_form_probe(tmp_path / "does-not-exist")
+        assert missing  # 目录不存在同样不得假绿
 
     def test_probe_reuses_smoke_assembly_preamble(self):
         """两道验证共用同一套应用择优算法：前段必须逐字取自冒烟模板，

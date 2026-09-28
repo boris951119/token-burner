@@ -514,7 +514,8 @@ class TestNonFatalFailuresStayNonFatal:
         assert rc == 0
         printed = capsys.readouterr().out
         assert "验收器内部故障" in printed
-        assert "PASS" in printed                       # 不判失败
+        # v56：摘要标 FAIL 防监控假绿，但 exit 0 仍交卷（平台 exit1=不评分）
+        assert "照常交付" in printed
         assert "completed" in _events_text(out)         # 终态仍是已交付
 
 
