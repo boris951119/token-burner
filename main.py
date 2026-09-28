@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import signal
 import sys
+import tempfile
 import threading
 from pathlib import Path
 
@@ -728,15 +730,29 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         # 交付两段式验收（r2/r4 演练取证：逐模块门禁覆盖不了组装级缺陷；
         # 基础冒烟覆盖不了旅程级缺陷——评测方是 Playwright 走用户旅程）
+        early: dict | None = None
+        used_probe_fast = False
         if result.project_dir is not None:
-            # 探针已绿：入口修补有 8 分钟墙钟，到点仍终局导出 + run_completed。
+            from app.arcbench_smoke import (
+                probe_fast_guard_issues,
+                verify_delivery,
+            )
+
+            # 探针已绿：入口修补有 8 分钟墙钟——但仅当工厂/表单/语言守卫
+            # 也绿。v55 双题：语言红只在 verify 内 demote，外层仍 8 分钟
+            # 强制交 → 0/100。
             early = _export_official_layout(workdir, result.project_dir,
                                            note="抢先交付（验收前）",
                                            requirement=requirement)
+            guards: list[str] = []
             if _probe_green(early):
+                guards = probe_fast_guard_issues(
+                    Path(result.project_dir) / "code", requirement or "")
+            if _probe_green(early) and not guards:
+                used_probe_fast = True
                 # ed77881：整段跳过验收能交卷，但首页不是真入口时官方 0/100。
-                # 只留一轮入口修补，墙钟 8 分钟，到点无论如何 run_completed。
-                print("[probe-fast] 探针已绿 → 入口修补上限 8 分钟，"
+                # 守卫已绿才留一轮入口修补；墙钟 8 分钟到点强制交。
+                print("[probe-fast] 探针已绿且守卫通过 → 入口修补上限 8 分钟，"
                       "到点强制交 Stage3", flush=True)
                 # 顶层已 import threading；此处再 import 会让整函数把
                 # threading 当局部名 → 前面看门狗 Thread(...) UnboundLocalError
@@ -745,7 +761,6 @@ def main(argv: list[str] | None = None) -> int:
 
                 def _bounded():
                     try:
-                        from app.arcbench_smoke import verify_delivery
                         box["r"] = verify_delivery(
                             result.project_dir, requirement, settings,
                             requirements_dir=_ring_requirements_dir(req_dir),
@@ -763,18 +778,24 @@ def main(argv: list[str] | None = None) -> int:
                     report = "入口修补超时"
                     ok = False
                 elif box.get("e"):
-                    ok = True
+                    # v56：异常不得当成功——仍交卷（平台 exit1=不评分），
+                    # 但摘要标明验收异常，避免监控把摔教练当绿。
+                    ok = False
                     report = f"入口修补异常（照常交付）: {box['e']!r}"
                 else:
-                    ok, report = box.get("r") or (True, "")
+                    ok, report = box.get("r") or (False, "verify 无返回")
                 result.deliverable_summary = (
                     (result.deliverable_summary or "交付完成")
                     + "（probe-fast：探针已绿，入口修补后交 Stage3）"
                     + ("" if ok else " " + str(report)[-160:])
                 )
             else:
-                from app.arcbench_smoke import verify_delivery
-
+                if guards:
+                    print(
+                        "[probe-fast] 守卫红 → 退出快车道走完整验收: "
+                        + "; ".join(guards[:3]),
+                        flush=True,
+                    )
                 try:
                     ok, report = verify_delivery(
                         result.project_dir, requirement, settings,
@@ -787,8 +808,8 @@ def main(argv: list[str] | None = None) -> int:
                     import traceback
 
                     traceback.print_exc()
-                    ok = True
-                    report = f"验收器内部故障（不判失败，照常交付）: {exc!r}\n" \
+                    ok = False
+                    report = f"验收器内部故障（照常交付）: {exc!r}\n" \
                         + traceback.format_exc()[-300:]
                 print(f"[verify] {'PASS' if ok else 'FAIL'}", flush=True)
                 print(f"[verify] {report[-600:]}", flush=True)
@@ -800,37 +821,68 @@ def main(argv: list[str] | None = None) -> int:
                         "交付完成（内部验收未通过，已尽力修复——详情见 verify "
                         "报告尾部）: " + report[-200:]
                     )
-        # v53.1（批次#78 评审 #3）：probe-fast 路径下，入口修补可能把 boot
-        # 弄坏——终局导出前对当前项目树重探针一次；boot 已坏则**跳过终局
-        # 导出**，保住抢先交付那份探针全绿的版本（早期导出已在 workdir）。
-        _skip_final_export = False
-        if _probe_green(early) and result.project_dir is not None:
+        # v53.1 / v56：入口修补可能把 boot 弄坏。终局先导出到 workdir/backend
+        # （runner main.py 只在这里），再对该树重探针；失败则回滚抢先交付。
+        # v55 尸检：探 project/code → 结构性 no-main → 永远跳过终局导出，
+        # 修过的 code/ 进不了评分包。
+        _early_backup: Path | None = None
+        _backend = Path(workdir) / "backend"
+        if (used_probe_fast and result.project_dir is not None
+                and _backend.is_dir() and (_backend / "main.py").is_file()):
             try:
-                from app.platform_export import probe_exported_backend
-                _re = probe_exported_backend(
-                    Path(result.project_dir) / "code", window_s=45.0)
-                if not _re.get("ok"):
-                    _skip_final_export = True
-                    print(
-                        "[probe-fast] 终局重探针未过，跳过终局导出——"
-                        "保留抢先交付的绿灯版本"
-                        f"（detail={_re.get('detail')}）", flush=True)
-                    result.deliverable_summary = (
-                        (result.deliverable_summary or "交付完成")
-                        + "（probe-fast：终局重探针未过，保留抢先交付版本）")
-                else:
-                    print("[probe-fast] 终局重探针 PASS（修补后仍可起服）",
-                          flush=True)
-            except Exception as _rexc:
-                print(f"[probe-fast] 终局重探针异常（照常终局导出）: "
-                      f"{_rexc!r}"[:160], flush=True)
+                _early_backup = Path(tempfile.mkdtemp(
+                    prefix="arcbench-early-backend-"))
+                shutil.copytree(_backend, _early_backup / "backend")
+            except Exception as _bexc:
+                _early_backup = None
+                print(f"[probe-fast] 抢先交付备份失败（终局仍导出）: "
+                      f"{_bexc!r}"[:160], flush=True)
         # 官方 runner 布局适配（6 平台提交取证：布局违约是主死因——
         # 内部 verify PASS 也因缺 frontend//backend/ 被判模板不完整）。
         # 次序（9/23 交付路径审计取证）：先换入最终态、后报 run_completed
         # ——平台若在完成事件处取件，先报事件交出去的就是验收前的旧代码。
-        if not _skip_final_export:
+        if result.project_dir is not None:
             _export_official_layout(workdir, result.project_dir,
                                     requirement=requirement)
+        if used_probe_fast and result.project_dir is not None:
+            try:
+                from app.platform_export import probe_exported_backend
+                _re = probe_exported_backend(_backend, window_s=45.0)
+                if not _re.get("ok"):
+                    print(
+                        "[probe-fast] 终局重探针未过——"
+                        f"detail={_re.get('detail')}", flush=True)
+                    if (_early_backup is not None
+                            and (_early_backup / "backend" / "main.py"
+                                 ).is_file()):
+                        try:
+                            if _backend.is_dir():
+                                shutil.rmtree(_backend)
+                            shutil.copytree(
+                                _early_backup / "backend", _backend)
+                            print(
+                                "[probe-fast] 已回滚到抢先交付的绿灯版本",
+                                flush=True)
+                            result.deliverable_summary = (
+                                (result.deliverable_summary or "交付完成")
+                                + "（probe-fast：终局重探针未过，已回滚抢先交付）")
+                        except Exception as _rexc:
+                            print(
+                                "[probe-fast] 回滚失败，保留终局导出: "
+                                f"{_rexc!r}"[:160], flush=True)
+                    else:
+                        print(
+                            "[probe-fast] 无可用抢先备份，保留终局导出",
+                            flush=True)
+                else:
+                    print("[probe-fast] 终局重探针 PASS（修补后仍可起服）",
+                          flush=True)
+            except Exception as _rexc:
+                print(f"[probe-fast] 终局重探针异常（保留终局导出）: "
+                      f"{_rexc!r}"[:160], flush=True)
+            finally:
+                if _early_backup is not None:
+                    shutil.rmtree(_early_backup, ignore_errors=True)
         if (result.project_dir is not None
                 and not (Path(workdir) / "backend" / "main.py").is_file()):
             # 只留痕不改判：exit 1 = 不评分，与「有产物但判它失败」等价，

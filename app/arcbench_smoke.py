@@ -1656,13 +1656,15 @@ def run_form_probe(code_dir: Path, python: str | None = None,
 
     副本是硬要求：对账要真提交，真提交会写库——探针不能把测试数据烙进
     交付自带的 sqlite（评测看见多出来的行同样是保真缺陷）。
-    探针自己炸了（超时/装不起应用/脚本没跑起来）一律返回空列表：
-    这是工具失效，不是应用缺陷，不该拦交付。
+
+    v56：超时 / 无结论标记 / 启动失败 → 返回基础设施红字（不再 [] 假绿）。
+    v55 GitHub：248 文件表单探针超时 → [] → 守卫放行 → POST /login 缺失
+    直通 Stage3。工具失效在快车道上必须 demote，不能当「表单没问题」。
     """
     code_dir = Path(code_dir).resolve()
     script = _form_script()
     if not script:
-        return []
+        return ["表单对账探针脚本缺失（工具失效）"]
     work = Path(tempfile.mkdtemp(prefix="arcbench-formprobe-"))
     try:
         dst = work / "code"
@@ -1670,17 +1672,31 @@ def run_form_probe(code_dir: Path, python: str | None = None,
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         path = work / FORMS_SCRIPT_NAME
         path.write_text(script, encoding="utf-8")
-        proc = subprocess.run(
-            [python or sys.executable, str(path), str(dst)],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            env=dict(os.environ, PYTHONIOENCODING="utf-8"),
-            timeout=timeout, cwd=str(dst),
-        )
-    except Exception:
-        return []
+        try:
+            proc = subprocess.run(
+                [python or sys.executable, str(path), str(dst)],
+                capture_output=True, text=True, encoding="utf-8",
+                errors="replace",
+                env=dict(os.environ, PYTHONIOENCODING="utf-8"),
+                timeout=timeout, cwd=str(dst),
+            )
+        except subprocess.TimeoutExpired:
+            return [
+                f"表单对账探针超时（{timeout}s）——"
+                "视为守卫红（无法证明表单×路由对齐）"
+            ]
+        except OSError as exc:
+            return [f"表单对账探针启动失败: {exc!r}"[:200]]
+    except Exception as exc:
+        return [f"表单对账探针基础设施失败: {exc!r}"[:200]]
     finally:
         shutil.rmtree(work, ignore_errors=True)
     out = (proc.stdout or "") + (proc.stderr or "")
+    if "@@FORMS@@" not in out:
+        return [
+            "表单对账探针无结论标记（工具失效/应用未起）——"
+            "视为守卫红"
+        ]
     return [ln[len("@@FORM-ISSUE@@ "):].strip()
             for ln in out.splitlines() if ln.startswith("@@FORM-ISSUE@@")]
 
@@ -2268,7 +2284,14 @@ def probe_fast_guard_issues(
         language_issues = audit_ui_language(code_dir, requirement or "")
     except Exception as exc:
         language_issues = [f"语言审计探针基础设施失败: {exc!r}"[:200]]
-    return list(factory_issues) + list(form_issues) + list(language_issues)
+    auth_issues: list[str] = []
+    try:
+        from app.utils.auth_form_routes import check_auth_form_routes
+        auth_issues = check_auth_form_routes(code_dir)
+    except Exception as exc:
+        auth_issues = [f"入门表单×路由闸基础设施失败: {exc!r}"[:200]]
+    return (list(factory_issues) + list(form_issues)
+            + list(language_issues) + list(auth_issues))
 
 
 def verify_delivery(
@@ -2310,12 +2333,16 @@ def verify_delivery(
             # 归类打印（与历史日志口径兼容）
             factory_issues = [x for x in guard_issues if "create_app" in x
                               or "工厂" in x]
-            form_issues = [x for x in guard_issues if "表单" in x]
+            form_issues = [x for x in guard_issues
+                           if "表单" in x and "入门表单" not in x]
             language_issues = [x for x in guard_issues if "语言" in x
                                or "中文" in x or "CJK" in x
                                or "界面文案" in x]
+            auth_issues = [x for x in guard_issues if "入门表单" in x
+                           or "POST" in x and "登录" in x]
             other = [x for x in guard_issues
-                     if x not in factory_issues + form_issues + language_issues]
+                     if x not in (factory_issues + form_issues
+                                  + language_issues + auth_issues)]
             why = []
             if factory_issues:
                 why.append(f"作者create_app失败{len(factory_issues)}处")
@@ -2331,12 +2358,24 @@ def verify_delivery(
                     "退出快车道走完整验收",
                     flush=True,
                 )
-            if language_issues or other:
-                lang = language_issues or other
-                why.append(f"UI语言不一致{len(lang)}处")
+            if language_issues:
+                why.append(f"UI语言不一致{len(language_issues)}处")
                 print(
                     "[probe-fast] UI 语言审计红: "
-                    + "; ".join(lang[:2]),
+                    + "; ".join(language_issues[:2]),
+                    flush=True,
+                )
+            if auth_issues:
+                why.append(f"入门身份表单缺POST{len(auth_issues)}处")
+                print(
+                    "[probe-fast] 入门表单×路由红: "
+                    + "; ".join(auth_issues[:2]),
+                    flush=True,
+                )
+            if other:
+                why.append(f"其他守卫红{len(other)}处")
+                print(
+                    "[probe-fast] 守卫红: " + "; ".join(other[:2]),
                     flush=True,
                 )
             notes.append(
