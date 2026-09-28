@@ -89,6 +89,20 @@ _CREDENTIAL_HINT = re.compile(r"@|password|passwd|token|secret", re.I)
 _ENTRY_HINT = re.compile(
     r"entry\s*url|open\s+the\s+(application|app)|打开(应用|网站)", re.I)
 
+# v56 / 刀J'：宿主页短语 → surface 标签（同一句内最近页短语；叙事句未知则 unknown）
+_SURFACE_HOME = re.compile(
+    r"workbook\s+home\s+page|home\s*page|homepage|列表页|首页", re.I)
+_SURFACE_LOGIN = re.compile(
+    r"sign[\s-]*in\s+page|login\s+page|sign[\s-]*in\s+screen|"
+    r"\blog\s*in\s+page\b|登录页|登陆页|登录界面",
+    re.I,
+)
+_SURFACE_EDITOR = re.compile(
+    r"\beditors?\b|编辑页|编辑器", re.I)
+_SURFACE_DIALOG = re.compile(
+    r"\bdialogs?\b|\bmodals?\b|对话框|弹窗", re.I)
+_SENT_BOUND = re.compile(r"[.!?。！？；;\n]+")
+
 # ---- 官方题面的种子方言：存在句（9/23 官方 6 套 webapp 题面实测）-------------
 # 上面 `Seed data:` 标记是我们【自己生成题面】的写法。官方不这么写：6/6 套题面
 # 的 seed 事实实测为 0，它把"系统里已经有一条 X"写进各节点 description 的存在句
@@ -144,8 +158,8 @@ class NodeChecklist:
     home_visible: bool                 # 事实是否可在入口页静态断言
     seed_entities: list[str] = field(default_factory=list)
     control_labels: list[str] = field(default_factory=list)
-    # 动作后期望文案（WHEN 操作产生的 snackbar/跳转等），静态判分不覆盖，
-    # 供修复环做定向指令：
+    # 动作后期望文案（WHEN 操作产生的 snackbar/跳转等）；v56 起亦进
+    # render_checklist_spec 静态断言（按 fact_surfaces 路由宿主页）。
     behavior_expectations: list[str] = field(default_factory=list)
     # control_labels 里由「点击/按下/选择」类动词引出的子集：这类文案必须
     # 落在可点控件里（<button>/<a>/role=menuitem…），只做成正文文字在评测
@@ -154,9 +168,21 @@ class NodeChecklist:
     # 无引号 THEN/GIVEN 行为约束原文（截断）：不进静态扫页，只进 UX/修环。
     behavior_constraints: list[str] = field(default_factory=list)
     scenarios: list[dict] = field(default_factory=list)   # 原 GWT steps
+    # v56 / 刀J'：引号事实 → 宿主页标签列表（home|login|editor|dialog|unknown）；
+    # 双句双标签（同一串可同时挂 home+editor）。
+    fact_surfaces: dict[str, list[str]] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+    def surfaces_of(self, fact: str) -> list[str]:
+        """事实的宿主页标签；无标注时按 home_visible 启发式回落。"""
+        tagged = self.fact_surfaces.get(fact) or []
+        if tagged:
+            return list(tagged)
+        if self.home_visible:
+            return ["home"]
+        return ["unknown"]
 
 
 def _constraint_text(content: str) -> str | None:
@@ -164,6 +190,93 @@ def _constraint_text(content: str) -> str | None:
     if len(s) < 8:
         return None
     return s[:240]
+
+
+def _tag_surface(bucket: dict[str, list[str]], fact: str, surface: str) -> None:
+    """保序去重地给事实追加 surface 标签。"""
+    if not fact:
+        return
+    surf = surface or "unknown"
+    lst = bucket.setdefault(fact, [])
+    if surf not in lst:
+        lst.append(surf)
+
+
+def _sentence_containing(text: str, pos: int) -> tuple[str, int]:
+    """返回含 pos 的句子及其在整段中的起点。"""
+    if not text or pos < 0:
+        return text or "", 0
+    starts = [0]
+    for m in _SENT_BOUND.finditer(text):
+        starts.append(m.end())
+    starts.append(len(text) + 1)
+    for i in range(len(starts) - 1):
+        a, b = starts[i], starts[i + 1]
+        if a <= pos < b:
+            return text[a:b], a
+    return text, 0
+
+
+def _surface_in_sentence(sentence: str, local_pos: int) -> str:
+    """同一句内最近页短语 → home|login|editor|dialog|unknown。
+
+    优先取引号**左侧**最近短语（宿主声明在契约前）；左侧无则取右侧最近。
+    login 优先于笼统 home（「从登录页回首页」叙事里 sign-in page 更近契约）。
+    """
+    hits: list[tuple[int, str]] = []
+    for pat, label in (
+        (_SURFACE_LOGIN, "login"),
+        (_SURFACE_HOME, "home"),
+        (_SURFACE_EDITOR, "editor"),
+        (_SURFACE_DIALOG, "dialog"),
+    ):
+        for m in pat.finditer(sentence or ""):
+            hits.append((m.start(), label))
+    if not hits:
+        return "unknown"
+    left = [(p, lab) for p, lab in hits if p <= local_pos]
+    if left:
+        return max(left, key=lambda t: t[0])[1]
+    return min(hits, key=lambda t: abs(t[0] - local_pos))[1]
+
+
+def _surface_at(text: str, abs_pos: int) -> str:
+    sent, sent_start = _sentence_containing(text or "", abs_pos)
+    return _surface_in_sentence(sent, abs_pos - sent_start)
+
+
+def _quotes_with_surface(text: str, *, for_control: bool = False
+                         ) -> list[tuple[str, str]]:
+    """抽引号文案并按同一句最近页短语打 surface 标签。"""
+    if not text:
+        return []
+    body = _MD_FENCE.sub(" ", _MD_IMG.sub("", text))
+    out: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for pat, bt in ((_QUOTED_D, False), (_QUOTED_CJK, False), (_QUOTED_BT, True)):
+        for m in pat.finditer(body):
+            q = _clean_quote(m.group(1))
+            if not q or (bt and not _ui_like(q)):
+                continue
+            if for_control and _CJK_MSG.search(q):
+                continue
+            surf = _surface_at(body, m.start())
+            key = (q, surf)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append((q, surf))
+    for m in _QUOTED_S.finditer(body):
+        q = _clean_quote(m.group(1))
+        if not q or (for_control and _CJK_MSG.search(q)):
+            continue
+        surf = _surface_at(body, m.start())
+        key = (q, surf)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((q, surf))
+    return out
 
 
 def _clean_quote(s: str) -> str | None:
@@ -424,6 +537,7 @@ def _facts(req_id: str, name: str, desc: str, scenarios: list[dict],
     constraints: list[str] = []
     controls: list[str] = []
     clicks: list[str] = []
+    fact_surfaces: dict[str, list[str]] = {}
 
     def _push_constraint(content: str) -> None:
         c = _constraint_text(content)
@@ -444,19 +558,21 @@ def _facts(req_id: str, name: str, desc: str, scenarios: list[dict],
                         _push_constraint(content)
                 if kw == "WHEN":
                     typed = _typed_quotes_in(content)
-                    for q in _quotes_in(content, for_control=True):
+                    for q, surf in _quotes_with_surface(content, for_control=True):
                         if q in typed:
                             continue   # 输入值由评测自己敲，不承诺界面预先显示
                         if q not in controls:
                             controls.append(q)
+                        _tag_surface(fact_surfaces, q, surf)
                     for q in _click_quotes_in(content):
                         if q not in clicks:
                             clicks.append(q)
             elif kw == "THEN":
-                qs = _quotes_in(content)
-                for q in qs:
+                for q, surf in _quotes_with_surface(content):
                     if q not in behavior:
                         behavior.append(q)
+                    _tag_surface(fact_surfaces, q, surf)
+                qs = [q for q, _ in _quotes_with_surface(content)]
                 # 无引号整句，或带引号但仍含持久化/排序等约束词
                 if not qs or _CONSTRAINT_HINT.search(content):
                     _push_constraint(content)
@@ -465,20 +581,38 @@ def _facts(req_id: str, name: str, desc: str, scenarios: list[dict],
              # 同一节点里既是种子名又是控件名的串只挂一条（官方题面实测 4/47）：
              # 两处各判一次会凭空多一条红，还会把修复环 20 条指令的额度占掉。
              and s not in controls]
+    for s in seeds:
+        _tag_surface(fact_surfaces, s, "home" if home_visible else "unknown")
+    # desc 句内对种子的 surface 覆盖/追加（双宿主）
+    for q, surf in _quotes_with_surface(desc):
+        if q in seeds and surf != "unknown":
+            _tag_surface(fact_surfaces, q, surf)
     # THEN 里复述的种子名不算行为断言（它们由 seed 通道静态覆盖）
     behavior = [b for b in behavior if b not in seeds and b not in controls]
     # description 逐字契约通道（批次#71 判决：sheet 题面 ~110 条双引号 UI 事实
     # 全在 desc——"Last updated: <last updated value>" 等，官方隐藏测试按这些
     # 断言；场景步被占位符污染后 desc 是唯一可靠来源）。模板字面量的 <...> 是
     # 变量位，判分锚取 '<' 前固定前缀，否则按字面判红永远修不好。
-    for q in _quotes_in(desc):
+    for q, surf in _quotes_with_surface(desc):
         if _BOOLISH.match(q):
             continue
         stem = q.split("<", 1)[0].strip().rstrip(":：,，;；")
         fact = stem if len(stem) >= 4 else q
-        if fact in behavior or fact in seeds or fact in controls:
+        if fact in seeds:
             continue
-        behavior.append(fact)
+        if fact in controls:
+            # 控件已由 WHEN 句打标（无页短语句 → unknown）；desc 句内
+            # 更强的页短语定位（sign-in page → login）仍须叠加，否则
+            # 「desc 说在登录页、WHEN 只说点击」的串永远落 unknown。
+            if surf != "unknown":
+                _tag_surface(fact_surfaces, fact, surf)
+            continue
+        if fact not in behavior:
+            behavior.append(fact)
+        # unknown 且节点 home_visible → 回落 home（与自测同构启发式一致）
+        use = surf if surf != "unknown" else (
+            "home" if home_visible else "unknown")
+        _tag_surface(fact_surfaces, fact, use)
     # 可点击子集必须是控件全集的子集：控件通道另有剔除口径（整句中文提示、
     # 路由串等），此处独走一套正则会判红一条主通道已经放弃的事实。
     clicks = [c for c in clicks if c in controls]
@@ -495,6 +629,7 @@ def _facts(req_id: str, name: str, desc: str, scenarios: list[dict],
         click_controls=clicks,
         behavior_constraints=constraints,
         scenarios=[dict(s) for s in scenarios],
+        fact_surfaces=fact_surfaces,
     )
 
 
@@ -571,71 +706,187 @@ _SPEC_HELPERS = """\
 import { test, expect } from '@playwright/test';
 
 // token-burner 编译期验收清单（acceptance_compile 生成，零 LLM）。
-// CHK-SEED：需求逐字种子实体须在入口一跳可达页面出现；
-// CHK-CTRL：WHEN 引用的控件文案须在入口一跳可达页面出现。
+// v56：按宿主页断言——home 只查 GET /；editor 先点种子链接再查；
+// 废除「一跳任意页命中即绿」的 visibleOnReachable 假绿口径。
+// CHK-SEED / CHK-CTRL / CHK-BEH：种子 / 控件 / behavior_expectations。
 
-type LocatorFactory = (p: import('@playwright/test').Page) => any;
-
-async function visibleOnReachable(page: import('@playwright/test').Page,
-                                  make: LocatorFactory): Promise<boolean> {
+async function visibleOnHome(page: import('@playwright/test').Page,
+                             text: string): Promise<boolean> {
   try { await page.goto('/', { timeout: 8000 }); } catch { return false; }
-  if (await make(page).first().isVisible().catch(() => false)) return true;
-  let hrefs: string[] = [];
-  try {
-    hrefs = await page.evaluate(() => Array.from(
-      document.querySelectorAll('a[href]')).map(a => a.getAttribute('href') || ''));
-  } catch { return false; }
-  const tried = new Set<string>();
-  for (const raw of hrefs) {
-    if (!raw || raw.startsWith('http') || raw.startsWith('//') ||
-        raw.startsWith('mailto') ||
-        raw.startsWith('#') || raw.startsWith('javascript')) continue;
-    const path = (raw.startsWith('/') ? raw : '/' + raw)
-      .split('?')[0].split('#')[0];
-    if (path === '/' || tried.has(path)) continue;
-    tried.add(path);
-    if (tried.size > 16) break;
-    try { await page.goto(path, { timeout: 5000 }); } catch { continue; }
-    if (await make(page).first().isVisible().catch(() => false)) return true;
+  return await page.getByText(text).first().isVisible().catch(() => false);
+}
+
+async function visibleControlOnHome(page: import('@playwright/test').Page,
+                                    lab: string): Promise<boolean> {
+  try { await page.goto('/', { timeout: 8000 }); } catch { return false; }
+  const loc = page.getByText(lab)
+    .or(page.getByPlaceholder(lab))
+    .or(page.getByLabel(lab))
+    .or(page.getByRole('button', { name: lab }));
+  return await loc.first().isVisible().catch(() => false);
+}
+
+async function visibleAfterSeedClick(
+    page: import('@playwright/test').Page,
+    text: string,
+    seedName: string): Promise<boolean> {
+  try { await page.goto('/', { timeout: 8000 }); } catch { return false; }
+  if (seedName) {
+    const link = page.getByRole('link', { name: seedName }).first();
+    const ok = await link.isVisible().catch(() => false);
+    if (ok) {
+      try { await link.click({ timeout: 5000 }); } catch { /* stay */ }
+    }
   }
-  return false;
+  return await page.getByText(text).first().isVisible().catch(() => false);
 }
 """
 
 
-def render_checklist_spec(checklists: list[NodeChecklist]) -> str:
-    """home_visible 节点 → 自包含 Playwright 静态断言 spec（无 helpers 依赖）。
+def _seed_for_editor(ck: NodeChecklist) -> str:
+    """编辑页断言前要点的种子链接名（取首个种子实体）。"""
+    return (ck.seed_entities[0] if ck.seed_entities else "")
 
-    每个断言独立成 test（标题带 REQ id），逐条红绿可直接喂节点级修复。
-    判定范围：入口页 + 从入口页 <a href> 一跳可达的同站页面（上限 16），
-    命中任意一页即通过——种子/控件常挂在列表页或表单页而非首页。
+
+def _should_emit_spec(ck: NodeChecklist) -> bool:
+    """home_visible 节点，或带 home/editor/dialog 宿主事实的节点进自测。"""
+    if ck.home_visible:
+        return True
+    for fact, surfs in (ck.fact_surfaces or {}).items():
+        if any(s in ("home", "editor", "dialog") for s in surfs):
+            if (fact in ck.seed_entities or fact in ck.control_labels
+                    or fact in ck.behavior_expectations):
+                return True
+    return False
+
+
+def render_checklist_spec(checklists: list[NodeChecklist]) -> str:
+    """节点事实 → 自包含 Playwright 静态断言 spec（无 helpers 依赖）。
+
+    v56-1 自测同构：
+    - behavior_expectations（含 desc 模板前缀如 Last updated）纳入断言；
+    - surface=home / home_visible：只在 GET / 断言，废除 visibleOnReachable；
+    - surface=editor：先点种子链接再断言。
     """
     blocks: list[str] = []
     for ck in checklists:
-        if not ck.home_visible:
+        if not _should_emit_spec(ck):
             continue
+        seed_name = _seed_for_editor(ck)
+
+        def _emit_text(kind: str, fact: str, surfaces: list[str]) -> None:
+            surfs = surfaces or (["home"] if ck.home_visible else ["unknown"])
+            # unknown + home_visible → 按 home；纯 unknown 且非 home_visible 跳过
+            effective: list[str] = []
+            for s in surfs:
+                if s == "unknown":
+                    if ck.home_visible:
+                        effective.append("home")
+                else:
+                    effective.append(s)
+            # 去重保序
+            seen: set[str] = set()
+            ordered = []
+            for s in effective:
+                if s not in seen:
+                    seen.add(s)
+                    ordered.append(s)
+            if not ordered and ck.home_visible:
+                ordered = ["home"]
+            for surf in ordered:
+                if surf == "home":
+                    blocks.append(
+                        f"  test('{ck.req_id} {kind}@home: {_ts_str(fact)}', "
+                        "async ({ page }) => {\n"
+                        f"    const found = await visibleOnHome(page, "
+                        f"{_ts_str(fact)});\n"
+                        f"    expect(found, {_ts_str('首页未见: ' + fact)}"
+                        ").toBe(true);\n"
+                        "  });")
+                elif surf == "login":
+                    blocks.append(
+                        f"  test('{ck.req_id} {kind}@login: {_ts_str(fact)}', "
+                        "async ({ page }) => {\n"
+                        "    await page.goto('/login').catch(async () => "
+                        "page.goto('/signin'));\n"
+                        f"    const found = await page.getByText("
+                        f"{_ts_str(fact)}, {{ exact: false }})"
+                        ".first().isVisible().catch(() => false);\n"
+                        f"    expect(found, {_ts_str('登录页未见: ' + fact)}"
+                        ").toBe(true);\n"
+                        "  });")
+                elif surf == "editor":
+                    blocks.append(
+                        f"  test('{ck.req_id} {kind}@editor: {_ts_str(fact)}', "
+                        "async ({ page }) => {\n"
+                        f"    const found = await visibleAfterSeedClick(page, "
+                        f"{_ts_str(fact)}, {_ts_str(seed_name)});\n"
+                        f"    expect(found, "
+                        f"{_ts_str('编辑页未见: ' + fact)}"
+                        ").toBe(true);\n"
+                        "  });")
+                elif surf == "dialog":
+                    # 对话框：先到首页再断言（无独立路由时退化为首页可见）
+                    blocks.append(
+                        f"  test('{ck.req_id} {kind}@dialog: {_ts_str(fact)}', "
+                        "async ({ page }) => {\n"
+                        f"    const found = await visibleOnHome(page, "
+                        f"{_ts_str(fact)});\n"
+                        f"    expect(found, {_ts_str('对话框文案未见: ' + fact)}"
+                        ").toBe(true);\n"
+                        "  });")
+
         for ent in ck.seed_entities:
-            blocks.append(
-                f"  test('{ck.req_id} CHK-SEED: {_ts_str(ent)}', async "
-                "({ page }) => {\n"
-                f"    const found = await visibleOnReachable(page, "
-                f"p => p.getByText({_ts_str(ent)}));\n"
-                f"    expect(found, {_ts_str('入口一跳内未见: ' + ent)}"
-                ").toBe(true);\n"
-                "  });")
+            _emit_text("CHK-SEED", ent, ck.surfaces_of(ent))
         for lab in ck.control_labels:
-            blocks.append(
-                f"  test('{ck.req_id} CHK-CTRL: {_ts_str(lab)}', async "
-                "({ page }) => {\n"
-                "    const found = await visibleOnReachable(page, p =>\n"
-                "      p.getByText(" + _ts_str(lab) + ")\n"
-                "        .or(p.getByPlaceholder(" + _ts_str(lab) + "))\n"
-                "        .or(p.getByLabel(" + _ts_str(lab) + "))\n"
-                "        .or(p.getByRole('button', { name: " + _ts_str(lab)
-                + " })));\n"
-                f"    expect(found, {_ts_str('入口一跳内未见控件: ' + lab)}"
-                ").toBe(true);\n"
-                "  });")
+            surfs = ck.surfaces_of(lab)
+            # 控件在 home 用专用 locator（含 placeholder/label/button）
+            eff = []
+            for s in (surfs or ["home"]):
+                if s == "unknown" and ck.home_visible:
+                    eff.append("home")
+                elif s != "unknown":
+                    eff.append(s)
+            if not eff and ck.home_visible:
+                eff = ["home"]
+            seen_s: set[str] = set()
+            for surf in eff:
+                if surf in seen_s:
+                    continue
+                seen_s.add(surf)
+                if surf == "home":
+                    blocks.append(
+                        f"  test('{ck.req_id} CHK-CTRL@home: {_ts_str(lab)}', "
+                        "async ({ page }) => {\n"
+                        "    const found = await visibleControlOnHome(page, "
+                        + _ts_str(lab) + ");\n"
+                        f"    expect(found, {_ts_str('首页未见控件: ' + lab)}"
+                        ").toBe(true);\n"
+                        "  });")
+                elif surf == "login":
+                    blocks.append(
+                        f"  test('{ck.req_id} CHK-CTRL@login: {_ts_str(lab)}', "
+                        "async ({ page }) => {\n"
+                        "    await page.goto('/login').catch(async () => "
+                        "page.goto('/signin'));\n"
+                        f"    const found = await page.getByText("
+                        f"{_ts_str(lab)}, {{ exact: false }})"
+                        ".first().isVisible().catch(() => false);\n"
+                        f"    expect(found, {_ts_str('登录页未见控件: ' + lab)}"
+                        ").toBe(true);\n"
+                        "  });")
+                elif surf == "editor":
+                    blocks.append(
+                        f"  test('{ck.req_id} CHK-CTRL@editor: {_ts_str(lab)}', "
+                        "async ({ page }) => {\n"
+                        f"    const found = await visibleAfterSeedClick(page, "
+                        f"{_ts_str(lab)}, {_ts_str(seed_name)});\n"
+                        f"    expect(found, {_ts_str('编辑页未见控件: ' + lab)}"
+                        ").toBe(true);\n"
+                        "  });")
+        for beh in ck.behavior_expectations:
+            _emit_text("CHK-BEH", beh, ck.surfaces_of(beh))
+
     body = "\n".join(blocks)
     return (
         _SPEC_HELPERS
@@ -652,7 +903,10 @@ def render_ux_checklist(checklists: list[NodeChecklist],
     keep#2 取证死因：锚点清单是摊平的文案集合，模型分不清「哪个词是
     按钮、哪个词是动作后提示、哪个词是种子」——逐节点行保留 GWT 通道
     归属，写码首轮即可按语义对准控件。空事实节点仍出 REQ 行（无引号
-    行为约束时代不能再静默丢节点）。截断按未命中/盲区轮换，非文档序前 N。"""
+    行为约束时代不能再静默丢节点）。截断按未命中/盲区轮换，非文档序前 N。
+
+    v56-2：按 fact_surfaces 写成『首页卡片须含』/『编辑页须含』等位置指令。
+    """
     try:
         from app.utils.coverage_rotation import prioritize
         ordered = prioritize(checklists, prefer_ids=prefer_ids,
@@ -660,19 +914,84 @@ def render_ux_checklist(checklists: list[NodeChecklist],
     except Exception:
         ordered = list(checklists)[:max_nodes]
     lines: list[str] = []
+
+    def _bucket_by_surface(facts: list[str], ck: NodeChecklist
+                           ) -> dict[str, list[str]]:
+        buckets: dict[str, list[str]] = {}
+        for f in facts:
+            for surf in ck.surfaces_of(f):
+                s = surf if surf != "unknown" else (
+                    "home" if ck.home_visible else "unknown")
+                buckets.setdefault(s, []).append(f)
+        # 去重保序
+        for s, lst in list(buckets.items()):
+            seen: set[str] = set()
+            out: list[str] = []
+            for x in lst:
+                if x not in seen:
+                    seen.add(x)
+                    out.append(x)
+            buckets[s] = out
+        return buckets
+
+    _SURF_LABEL = {
+        "home": "首页卡片须含",
+        "login": "登录页须含",
+        "editor": "编辑页须含",
+        "dialog": "对话框须含",
+    }
+
     for ck in ordered:
         parts: list[str] = []
         if ck.control_labels:
-            parts.append("控件须可见: " + "、".join(
-                f'"{c}"' for c in ck.control_labels[:8]))
+            # 刀J'：login 宿主控件进『登录页须含』；其余仍『控件须可见』
+            login_ctrls: list[str] = []
+            other_ctrls: list[str] = []
+            for lab in ck.control_labels[:8]:
+                if "login" in (ck.surfaces_of(lab) or []):
+                    login_ctrls.append(lab)
+                else:
+                    other_ctrls.append(lab)
+            if other_ctrls:
+                parts.append("控件须可见: " + "、".join(
+                    f'"{c}"' for c in other_ctrls))
+            if login_ctrls:
+                parts.append(
+                    "登录页须含: " + "、".join(
+                        f'"{c}"' for c in login_ctrls[:6]))
         if ck.click_controls:
             parts.append("其中需求要求点击（必须是 <button>/<a href>/勾选框，"
                          "且点下去真有反应——在 <form> 内提交或由页内 JS 监听"
                          "并改变可见状态；正文文字与无行为的占位按钮都不算控件）: "
                          + "、".join(f'"{c}"' for c in ck.click_controls[:6]))
+        # v56-2 / 刀J'：behavior 按 surface 分桶写位置指令
         if ck.behavior_expectations:
-            parts.append("动作后须出现: " + "、".join(
-                f'"{b}"' for b in ck.behavior_expectations[:6]))
+            by_s = _bucket_by_surface(ck.behavior_expectations[:8], ck)
+            positioned = False
+            for surf in ("home", "login", "editor", "dialog"):
+                items = by_s.get(surf) or []
+                if not items:
+                    continue
+                positioned = True
+                already: set[str] = set()
+                for p in parts:
+                    if p.startswith(_SURF_LABEL.get(surf, "\0")):
+                        for m in re.finditer(r'"([^"]+)"', p):
+                            already.add(m.group(1))
+                items = [x for x in items if x not in already]
+                if not items:
+                    continue
+                parts.append(
+                    f"{_SURF_LABEL[surf]}: " + "、".join(
+                        f'"{b}"' for b in items[:6]))
+            # unknown 桶保留旧口径「动作后须出现」
+            unk = by_s.get("unknown") or []
+            if unk and not positioned:
+                parts.append("动作后须出现: " + "、".join(
+                    f'"{b}"' for b in unk[:6]))
+            elif unk:
+                parts.append("动作后须出现: " + "、".join(
+                    f'"{b}"' for b in unk[:4]))
         if ck.behavior_constraints:
             parts.append("行为约束(无引号须实现): " + "；".join(
                 ck.behavior_constraints[:4]))
@@ -695,6 +1014,8 @@ def render_ux_checklist(checklists: list[NodeChecklist],
         "<button> 摆在入口页充数，同样一分不得：评测点下去断言的是变化，"
         "点了不会动的按钮与正文文字等价（验收按「缺接线证据」逐条判红）。\n"
         "「控件须可见」只要求**控件本身**在入口可达页出现；"
+        "「首页卡片须含 / 编辑页须含」必须落在对应宿主页（首页列表卡片 /"
+        "编辑页），禁止只在错误页面出现一次冒充落地；"
         "「动作后须出现」必须由点击/提交真的触发后才渲染——"
         "把动作后的提示、编辑框、确认项静态铺在页面上凑数，等于交互链"
         "没实现"

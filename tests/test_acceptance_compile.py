@@ -135,8 +135,14 @@ def test_render_spec_escapes_cjk_and_quotes():
                        seed_entities=['他说"引号"与中文'], control_labels=[])
     spec = render_checklist_spec([ck])
     assert "他说" in spec                               # ensure_ascii=False 原样
-    token = spec.split("getByText(", 1)[1].split("))", 1)[0]
-    assert json.loads(token) == '他说"引号"与中文'   # 转义后可被 JSON 原样还原
+    # v56 spec 形态：test 标题里已是合法 JS 字符串字面量（双引号转义）
+    import json as _json
+    m = [l for l in spec.splitlines() if "CHK-SEED" in l and "他说" in l]
+    assert m, "seed 行存在"
+    # 从 test('...') 标题里抽出第一个字符串并确保转义可还原
+    title = m[0]
+    tok = title.split("test('", 1)[1].split("'", 1)[0].split(": ", 1)[1].strip()
+    assert _json.loads(tok) == '他说"引号"与中文'   # 转义后可被 JSON 原样还原
 
 
 def test_render_spec_matches_official_text_leniency():
@@ -149,11 +155,56 @@ def test_render_spec_matches_official_text_leniency():
                        seed_entities=["Widget One"], control_labels=["Save"])
     spec = render_checklist_spec([ck])
     assert "exact: true" not in spec
-    # 仍然只走可访问性/文本通道，且每条都带 .first() 兜严格模式
+    # v56：home 控件走 visibleControlOnHome（含 getByText/Placeholder/Label/Role）
     for ch in ("getByText", "getByPlaceholder", "getByLabel",
                "getByRole('button'"):
         assert ch in spec, ch
-    assert ".or(" in spec and "visibleOnReachable" in spec
+    assert "visibleOnHome" in spec or "visibleControlOnHome" in spec
+    assert "await visibleOnReachable(" not in spec  # v56 废除任意页假绿
+
+
+def test_v56_spec_includes_behavior_on_home_only(tmp_path):
+    """v56-1：behavior（Last updated）进自测；home 宿主只断言 GET /。"""
+    cls = compile_checklists(_write(tmp_path, DESC_YAML))
+    spec = render_checklist_spec(cls)
+    assert "CHK-BEH" in spec
+    assert "Last updated" in spec
+    assert "visibleOnHome" in spec
+    assert "await visibleOnReachable(" not in spec
+    # 首页断言，不是一跳任意页
+    assert "首页未见" in spec or "@home" in spec
+
+
+def test_v56_surface_tags_home_from_desc(tmp_path):
+    """v56-2：desc 同句/节点 home 短语 → Last updated 打 surface=home。"""
+    cls = {c.req_id: c for c in compile_checklists(_write(tmp_path, DESC_YAML))}
+    ck = cls["REQ-1-1-1"]
+    assert "Last updated" in ck.behavior_expectations
+    surfs = ck.surfaces_of("Last updated")
+    assert "home" in surfs, surfs
+
+
+def test_v56_ux_checklist_position_labels(tmp_path):
+    """v56-2：render_ux_checklist 写成『首页卡片须含』而非笼统动作后。"""
+    from app.acceptance_compile import render_ux_checklist
+    s = render_ux_checklist(compile_checklists(_write(tmp_path, DESC_YAML)))
+    assert "首页卡片须含" in s
+    assert "Last updated" in s
+
+
+def test_v56_editor_surface_clicks_seed_first():
+    """v56-1：editor 宿主事实先点种子链接再断言。"""
+    ck = NodeChecklist(
+        req_id="REQ-9", req_name="ed", module_id="M",
+        language="en", home_visible=False,
+        seed_entities=["Q3 Sales"],
+        behavior_expectations=["Last updated"],
+        fact_surfaces={"Last updated": ["editor"], "Q3 Sales": ["home"]},
+    )
+    spec = render_checklist_spec([ck])
+    assert "CHK-BEH@editor" in spec
+    assert "visibleAfterSeedClick" in spec
+    assert "Q3 Sales" in spec
 
 
 def test_to_json_roundtrip(tmp_path):
@@ -197,7 +248,8 @@ def test_render_ux_checklist_channel_attribution(tmp_path):
     line = next(ln for ln in s.splitlines() if "REQ-1.1" in ln)
     assert '"New note"' in line and "控件须可见" in line
     assert '"Alpha one"' in line and "种子可见" in line
-    assert '"Title"' in line and "动作后须出现" in line
+    assert '"Title"' in line and (
+        "动作后须出现" in line or "对话框须含" in line or "首页卡片须含" in line)
     # 无事实节点不出行，控制 token
     assert "REQ-9.1" in s  # 登录节点有控件与可见种子
 
