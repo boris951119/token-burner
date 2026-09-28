@@ -1906,3 +1906,14 @@ build → 闸 A+B+C → 上传 → sheet+github 双发（用户全权授权）�
 - v55 = v54 全部 + 七刀：A 签名门禁 / B 工厂池试装+机械壳标记 / C 契约跟随所有权 / D 蓝图惯例 / E shim修复 / F app_context规则 / G 所有权UI路由 / H 文案落地门禁 / I node_states覆盖缺口闸 / J 快车道language闸 / 不劣化基线护栏（Cursor） / coverage_gap 同口径修正（ZCode复审）——共 12 项，全部有真题树尸检背书 + 全量 1972 绿 0 失败（历史首次全绿后保持）。
 - 插曲：第一次 C 段挂死为本机残留进程干扰（12h 老实验进程占端口）+ C 段子进程未死透继续写事件流——净环境复跑 PASS。已清理残留进程。
 - 预算：余额 ~¥300 减双 run 消耗。
+
+## 批次#84：INBOX-014 双边对齐 + v56 施工启动（09-28 晚）
+
+- Cursor 独立分析完成（outbox 有完整专节）：**与 ZCode 死因定性对齐**（首页缺 Last updated 字段=首断言灭），并指出 ZCode 原方案的 NLP 薄弱点（叙事提及≠断言宿主、页名词典跨任务不泛化），给出更优五刀：
+  1. 自测同构（最高 ROI）：behavior 契约纳入自测断言 + home 事实只在 GET / 断言 + 废除任意页绿；
+  2. 编译期 surface 标签（home/editor/dialog/unknown，同句短语绑定）；
+  3. 运行时路由 HTML 闸（surface=home 锚点 GET / 必含，可要求 <article> 作用域）；
+  4. 刀H 降噪（锚点源改刀C 逐 REQ 清单 + 占位符黑名单接通 + 外科指令）；
+  5. _bp 门禁兼容 Blueprint 工厂。
+- ZCode 采纳全部五刀（含对我原"位置级断言"NLP 方案的否决——Cursor 的批评成立），已派工 v56 施工（五刀，每刀独立 commit + outbox 回执）。
+- 风险表（假绿/误伤）由 Cursor 给出并附缓解，施工时逐条落实。
