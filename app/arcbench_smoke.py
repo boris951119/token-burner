@@ -2054,8 +2054,11 @@ def verify_delivery(
         # v53 刀B：create_app 池试装；v52：表单×路由对账。任一红 → 退快车道。
         # v53.1（批次#78 评审 #1）：守卫**失败关闭**——基础设施异常视为红，
         # 不得静默 [] 放行（异常=不知道，不知道=不能放）。
+        # v54 尸检（批次#80）：中文 UI 复发——快车道此前跳过 language 审计，
+        # 英文题面的中文界面直通 Stage3。language 闸（零 LLM 秒级）补进守卫组。
         form_issues: list[str] = []
         factory_issues: list[str] = []
+        language_issues: list[str] = []
         try:
             from app.utils.factory_pool import probe_author_factories_safe
             factory_issues, _infra = probe_author_factories_safe(code_dir)
@@ -2065,7 +2068,12 @@ def verify_delivery(
             form_issues = run_form_probe(code_dir)
         except Exception as exc:
             form_issues = [f"表单对账探针基础设施失败: {exc!r}"[:200]]
-        if factory_issues or form_issues:
+        try:
+            from app.utils.ui_language import audit_ui_language
+            language_issues = audit_ui_language(code_dir, requirement or "")
+        except Exception as exc:
+            language_issues = [f"语言审计探针基础设施失败: {exc!r}"[:200]]
+        if factory_issues or form_issues or language_issues:
             why = []
             if factory_issues:
                 why.append(f"作者create_app失败{len(factory_issues)}处")
@@ -2081,9 +2089,18 @@ def verify_delivery(
                     "退出快车道走完整验收",
                     flush=True,
                 )
+            if language_issues:
+                why.append(f"UI语言不一致{len(language_issues)}处")
+                print(
+                    "[probe-fast] UI 语言审计红: "
+                    + "; ".join(language_issues[:2]),
+                    flush=True,
+                )
             notes.append(
                 "[probe-fast→full] " + "; ".join(why) + ": "
-                + "; ".join((factory_issues + form_issues)[:5])
+                + "; ".join(
+                    (language_issues[:2] + factory_issues[:2] + form_issues[:2])
+                )
             )
             probe_green = False
         else:
@@ -2110,8 +2127,17 @@ def verify_delivery(
                         checklist_priority_note,
                     )
                     note = checklist_priority_note(requirement, max_nodes=4)
+                    # v55：probe-fast 入口修补以冒烟闸为复测与重写基线
+                    # （同命令 → 通过数可比；防入口修环把已绿断言打红）。
+                    gate = [
+                        sys.executable,
+                        str(write_gate_scripts()),
+                        str(Path(project_dir) / "code"),
+                    ]
                     auto_repair(
                         project_dir, settings, max_rounds=1,
+                        test_cmd=gate,
+                        baseline_test_cmd=gate,
                         requirement=requirement,
                         priority_note=(
                             "【入口优先】官方评测从首页进。先让首页出现需求里的"
@@ -2156,6 +2182,38 @@ def verify_delivery(
     # 不额外开一次 LLM 调用。
     pre_txt = ""
     prefer_ids: list[str] = []
+    # 刀 I（v55）：Phase 0 同步跑 node_states 覆盖缺口闸（零 LLM）
+    if requirement:
+        try:
+            from app.utils.coverage_gap import enforce_node_states_gap
+            owner_hint: dict[str, str] = {}
+            try:
+                import json as _json
+                cov_path = (Path(project_dir) / "sessions"
+                            / "atomic_coverage.json")
+                if cov_path.is_file():
+                    raw = _json.loads(
+                        cov_path.read_text(encoding="utf-8"))
+                    owner_hint.update(raw.get("owned") or {})
+                    owner_hint.update(raw.get("assigned") or {})
+            except Exception:
+                owner_hint = {}
+            gap_rep = enforce_node_states_gap(
+                requirement, plans=None, reported_ids=None,
+                project_root=project_dir, owner_hint=owner_hint,
+            )
+            if gap_rep.missing:
+                prefer_ids.extend(gap_rep.missing)
+                notes.append(
+                    f"[coverage-gap] 缺 {len(gap_rep.missing)} 个节点上报")
+                pre_txt += (
+                    "\n【node_states 覆盖缺口（平台树无色节点）】\n"
+                    + "\n".join(f"- {r}" for r in gap_rep.missing[:20])
+                    + "\n"
+                )
+        except Exception as exc:
+            notes.append(
+                f"[coverage-gap] Phase0 降级: {exc!r}"[:160])
     if requirements_dir:
         _beat(project_dir, "验收-前置体检")
         try:
@@ -2273,8 +2331,16 @@ def verify_delivery(
                             ))
                     except Exception:
                         cov_note = ""
+                    # v55：冒烟复测命令同时作重写基线（缺省同值，显式传入防漂移）
+                    smoke_gate = [
+                        sys.executable,
+                        str(write_gate_scripts()),
+                        str(code_dir),
+                    ]
                     ok, report = auto_repair(
                         project_dir, settings, max_rounds=max_app_rounds,
+                        test_cmd=smoke_gate,
+                        baseline_test_cmd=smoke_gate,
                         requirement=requirement,
                         priority_note=_home_route_priority_note(report)
                         + cov_note
@@ -2573,6 +2639,7 @@ def auto_repair(
     requirement: str = "",
     priority_note: str = "",
     stop_check=None,
+    baseline_test_cmd: list[str] | None = None,
 ) -> tuple[bool, str]:
     """冒烟失败后的定向自动修复（RepoFixer 通道）。
 
@@ -2580,6 +2647,7 @@ def auto_repair(
     extra_issue 非空时为锚点修复等非冒烟场景服务——冒烟通过也不早退，
     以 extra_issue 为主体构造修复指令。
     stop_check：callable → bool；True 时 RepoFixer 停止写文件（v54 P1-5）。
+    baseline_test_cmd：整文件重写不劣化护栏的基线命令；缺省与 test_cmd 同。
     """
     from app.agents.repo_fixer import RepoFixer
     from app.utils.budget import BudgetExceededError, TaskCancelledError
@@ -2662,9 +2730,13 @@ def auto_repair(
         # 复测与判定同闸：基线冒烟 × 表单对账。判词里带着 [form] 红字而复测
         # 只看基线，循环就会朝「让基线绿」收敛（锚点闸同形取证：三轮分文未收敛）。
         test_cmd = [sys.executable, str(write_gate_scripts()), str(code_dir)]
+    # v55 不劣化：基线命令缺省=复测命令；probe-fast 入口修补显式传入同闸。
+    if baseline_test_cmd is None:
+        baseline_test_cmd = list(test_cmd)
     fixer = RepoFixer(
         llm, project_dir,
         test_cmd=test_cmd,
+        baseline_test_cmd=baseline_test_cmd,
         max_rounds=max_rounds,
         stop_check=stop_check,
         **({"test_timeout": verify_timeout} if verify_timeout else {}),
