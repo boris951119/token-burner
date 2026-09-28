@@ -162,7 +162,7 @@ class TestAutoRepairLlmCallable:
 
         class _FakeRepoFixer:
             def __init__(self, llm, project_dir, test_cmd=None, stop_check=None,
-                         max_rounds=3):
+                         max_rounds=3, baseline_test_cmd=None):
                 captured["llm"] = llm
 
             def fix(self, issue):
