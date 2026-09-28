@@ -225,6 +225,143 @@ if home.status_code == 200:
                         "——占位壳页，首页必须渲染真实导航（评测全部用例"
                         "从首页出发）")
         ok = False
+    else:
+        # 刀J'：sidecar 列出的 home/login 锚点必须出现在对应路由可见 HTML
+        import json as _json
+        from html.parser import HTMLParser as _VisHP
+
+        class _VisHTML(_VisHP):
+            _SKIP = frozenset({"script", "style", "template", "noscript"})
+
+            def __init__(self):
+                _VisHP.__init__(self, convert_charrefs=True)
+                self.parts = []
+                self._skip = 0
+                self._stack = []
+
+            def _hidden(self, tag, attrs):
+                if tag.lower() in self._SKIP:
+                    return True
+                a = {str(k).lower(): ("" if v is None else str(v))
+                     for k, v in attrs}
+                if "hidden" in a:
+                    return True
+                if a.get("aria-hidden", "").strip().lower() in ("true", "1"):
+                    return True
+                st = a.get("style", "").lower().replace(" ", "")
+                return ("display:none" in st or "visibility:hidden" in st)
+
+            def handle_starttag(self, tag, attrs):
+                hide = self._hidden(tag, attrs)
+                self._stack.append(hide)
+                if hide or self._skip:
+                    self._skip += 1
+                    return
+                bits = ["<" + tag]
+                for k, v in attrs:
+                    bits.append((" " + k) if v is None else f' {k}="{v}"')
+                bits.append(">")
+                self.parts.append("".join(bits))
+
+            def handle_startendtag(self, tag, attrs):
+                if self._skip or self._hidden(tag, attrs):
+                    return
+                bits = ["<" + tag]
+                for k, v in attrs:
+                    bits.append((" " + k) if v is None else f' {k}="{v}"')
+                bits.append(" />")
+                self.parts.append("".join(bits))
+
+            def handle_endtag(self, tag):
+                if self._stack:
+                    was = self._stack.pop()
+                    if was or self._skip:
+                        self._skip = max(0, self._skip - 1)
+                        return
+                if not self._skip:
+                    self.parts.append("</" + tag + ">")
+
+            def handle_data(self, data):
+                if not self._skip and data:
+                    self.parts.append(data)
+
+        def _visible(_html):
+            p = _VisHTML()
+            try:
+                p.feed(_html or "")
+                p.close()
+            except Exception:
+                return _html or ""
+            return "".join(p.parts)
+
+        _surf = {}
+        _multi = code / ".surface_route_anchors.json"
+        _legacy = code / ".home_surface_anchors.json"
+        if _multi.is_file():
+            try:
+                _raw = _json.loads(_multi.read_text(encoding="utf-8"))
+            except Exception:
+                _raw = {}
+            if isinstance(_raw, dict):
+                _surf = {str(k): [a for a in v if isinstance(a, str) and a]
+                         for k, v in _raw.items() if isinstance(v, list)}
+        elif _legacy.is_file():
+            try:
+                _anchors = _json.loads(_legacy.read_text(encoding="utf-8"))
+            except Exception:
+                _anchors = []
+            if isinstance(_anchors, list) and _anchors:
+                _surf = {"home": [a for a in _anchors
+                                  if isinstance(a, str) and a]}
+
+        _ROUTE_CANDS = {
+            "home": ("/",),
+            "login": ("/login", "/signin", "/sign-in", "/sign_in",
+                      "/auth/login", "/session/new"),
+        }
+        _FIX = {
+            "home": "请在 index 卡片模板补字段（外科补丁，禁止整文件重写）",
+            "login": "请在登录页模板渲染该链接/控件（接到路由，禁止只写入死常量字典）",
+        }
+        for _surface, _anchors in _surf.items():
+            if _surface not in _ROUTE_CANDS or not _anchors:
+                continue
+            _html = ""
+            _hit = ""
+            if _surface == "home":
+                _html = _body
+                _hit = "/"
+            else:
+                for _cand in _ROUTE_CANDS[_surface]:
+                    try:
+                        _rr = client.get(_cand)
+                    except Exception:
+                        continue
+                    if getattr(_rr, "status_code", 500) >= 400:
+                        continue
+                    _html = (_rr.get_data(as_text=True)
+                             if hasattr(_rr, "get_data")
+                             else getattr(_rr, "text", "")) or ""
+                    _hit = _cand
+                    break
+            if not _hit:
+                _fields = "、".join(f"「{m}」" for m in _anchors[:6])
+                failures.append(
+                    f"路由 HTML 闸（surface={_surface}）：无可用路由 "
+                    + "/".join(_ROUTE_CANDS[_surface][:3])
+                    + f"——契约锚点 {_fields} 无法验证；"
+                    + _FIX.get(_surface, "请注册对应路由并渲染锚点"))
+                ok = False
+                continue
+            _vis = _visible(_html)
+            _miss = [a for a in _anchors if a not in _vis]
+            if _miss:
+                _fields = "、".join(f"「{m}」" for m in _miss[:8])
+                failures.append(
+                    f"路由 HTML 闸（surface={_surface}）：GET {_hit} "
+                    f"可见 HTML 缺 {_fields}——"
+                    + _FIX.get(_surface, "请在对应路由模板补字段"))
+                ok = False
 if hasattr(app, "wsgi_app") and getattr(app, "secret_key", None) is None:
     _has_login = any(
         "login" in str(getattr(_r, "rule", ""))
@@ -362,6 +499,88 @@ if _orphan:
     print("@@ARIA@@" + ",".join(_orphan[:8]))
     print("\\n".join(failures))
     raise SystemExit(1)
+
+# 刀K：装饰性实现——契约字面量在源码 AST 出现但不在任何可见渲染响应
+_surf_k = {}
+_multi_k = code / ".surface_route_anchors.json"
+_legacy_k = code / ".home_surface_anchors.json"
+try:
+    import json as _json_k
+    if _multi_k.is_file():
+        _raw_k = _json_k.loads(_multi_k.read_text(encoding="utf-8"))
+        if isinstance(_raw_k, dict):
+            for _sk, _sv in _raw_k.items():
+                if _sk in ("home", "login") and isinstance(_sv, list):
+                    _surf_k.setdefault("all", [])
+                    _surf_k["all"].extend(
+                        a for a in _sv if isinstance(a, str) and len(a) >= 4)
+    elif _legacy_k.is_file():
+        _raw_k = _json_k.loads(_legacy_k.read_text(encoding="utf-8"))
+        if isinstance(_raw_k, list):
+            _surf_k["all"] = [
+                a for a in _raw_k if isinstance(a, str) and len(a) >= 4]
+except Exception:
+    _surf_k = {}
+_k_anchors = list(dict.fromkeys(_surf_k.get("all") or []))
+if _k_anchors:
+    import ast as _ast_k
+
+    def _lits_k(_src):
+        _o = set()
+        try:
+            _t = _ast_k.parse(_src)
+        except SyntaxError:
+            return _o
+        for _n in _ast_k.walk(_t):
+            if isinstance(_n, _ast_k.Constant) and isinstance(_n.value, str):
+                _s = _n.value.strip()
+                if len(_s) >= 4:
+                    _o.add(_s)
+            elif isinstance(_n, _ast_k.JoinedStr):
+                for _v in _n.values:
+                    if (isinstance(_v, _ast_k.Constant)
+                            and isinstance(_v.value, str)):
+                        _s = _v.value.strip()
+                        if len(_s) >= 4:
+                            _o.add(_s)
+        return _o
+
+    def _strip_hidden_k(_html):
+        # 与下方锚点语料剥离同口径（script/style/hidden/textarea）
+        txt = _re.sub(r"(?is)<script\\b.*?</script>", " ", _html or "")
+        txt = _re.sub(r"(?is)<style\\b.*?</style>", " ", txt)
+        txt = _re.sub(r"(?is)<textarea\\b[^>]*>.*?</textarea>", " ", txt)
+        txt = _re.sub(
+            r"(?is)<(\\w+)[^>]*(?:hidden|visibility\\s*:\\s*hidden|"
+            r"display\\s*:\\s*none)[^>]*>.*?</\\1\\s*>", " ", txt)
+        txt = _re.sub(r"(?is)<template\\b[^>]*>.*?</template>", " ", txt)
+        return txt
+
+    _src_lits = set()
+    for _py in code.rglob("*.py"):
+        if "__pycache__" in _py.parts:
+            continue
+        try:
+            _src_lits |= _lits_k(
+                _py.read_text(encoding="utf-8", errors="replace"))
+        except Exception:
+            continue
+
+    _corpus = "\\n".join(_strip_hidden_k(_b) for _b in _bodies)
+    _dead = []
+    for _a in _k_anchors:
+        _in_src = _a in _src_lits or any(
+            _a in _lit for _lit in _src_lits if len(_lit) <= 200)
+        if _in_src and _a not in _corpus:
+            _dead.append(_a)
+    if _dead:
+        _fields = "、".join(f"「{m}」" for m in _dead[:8])
+        failures.append(
+            f"装饰性实现门禁：契约字面量在源码出现但未进入任何路由可见 HTML："
+            f"{_fields}——疑似死常量/未接线字典（如 _GLOBAL_UI_COPY）；"
+            "请接到对应路由模板并删除无引用抄写")
+        print("\\n".join(failures))
+        raise SystemExit(1)
 
 _declared = set()
 for _py in code.rglob("*.py"):
@@ -2022,6 +2241,36 @@ def _beat(project_dir: Path, stage: str, detail: str = "") -> None:
         pass
 
 
+def probe_fast_guard_issues(
+    code_dir: Path, requirement: str = "",
+) -> list[str]:
+    """快车道守卫：工厂 / 表单×路由 / UI 语言。非空 = 不得走 8 分钟强制交。
+
+    v55 双题尸检：语言红只在 verify_delivery 内把 probe_green 翻 False，
+    main 外层仍按 early export-probe 绿开 8 分钟 join → 强制 Stage3。
+    守卫必须可被 main 在选路前单独调用（与 verify 内复用同一实现）。
+    """
+    code_dir = Path(code_dir)
+    form_issues: list[str] = []
+    factory_issues: list[str] = []
+    language_issues: list[str] = []
+    try:
+        from app.utils.factory_pool import probe_author_factories_safe
+        factory_issues, _infra = probe_author_factories_safe(code_dir)
+    except Exception as exc:
+        factory_issues = [f"工厂池探针基础设施失败: {exc!r}"[:200]]
+    try:
+        form_issues = run_form_probe(code_dir)
+    except Exception as exc:
+        form_issues = [f"表单对账探针基础设施失败: {exc!r}"[:200]]
+    try:
+        from app.utils.ui_language import audit_ui_language
+        language_issues = audit_ui_language(code_dir, requirement or "")
+    except Exception as exc:
+        language_issues = [f"语言审计探针基础设施失败: {exc!r}"[:200]]
+    return list(factory_issues) + list(form_issues) + list(language_issues)
+
+
 def verify_delivery(
     project_dir: Path,
     requirement: str,
@@ -2056,24 +2305,17 @@ def verify_delivery(
         # 不得静默 [] 放行（异常=不知道，不知道=不能放）。
         # v54 尸检（批次#80）：中文 UI 复发——快车道此前跳过 language 审计，
         # 英文题面的中文界面直通 Stage3。language 闸（零 LLM 秒级）补进守卫组。
-        form_issues: list[str] = []
-        factory_issues: list[str] = []
-        language_issues: list[str] = []
-        try:
-            from app.utils.factory_pool import probe_author_factories_safe
-            factory_issues, _infra = probe_author_factories_safe(code_dir)
-        except Exception as exc:
-            factory_issues = [f"工厂池探针基础设施失败: {exc!r}"[:200]]
-        try:
-            form_issues = run_form_probe(code_dir)
-        except Exception as exc:
-            form_issues = [f"表单对账探针基础设施失败: {exc!r}"[:200]]
-        try:
-            from app.utils.ui_language import audit_ui_language
-            language_issues = audit_ui_language(code_dir, requirement or "")
-        except Exception as exc:
-            language_issues = [f"语言审计探针基础设施失败: {exc!r}"[:200]]
-        if factory_issues or form_issues or language_issues:
+        guard_issues = probe_fast_guard_issues(code_dir, requirement or "")
+        if guard_issues:
+            # 归类打印（与历史日志口径兼容）
+            factory_issues = [x for x in guard_issues if "create_app" in x
+                              or "工厂" in x]
+            form_issues = [x for x in guard_issues if "表单" in x]
+            language_issues = [x for x in guard_issues if "语言" in x
+                               or "中文" in x or "CJK" in x
+                               or "界面文案" in x]
+            other = [x for x in guard_issues
+                     if x not in factory_issues + form_issues + language_issues]
             why = []
             if factory_issues:
                 why.append(f"作者create_app失败{len(factory_issues)}处")
@@ -2089,18 +2331,17 @@ def verify_delivery(
                     "退出快车道走完整验收",
                     flush=True,
                 )
-            if language_issues:
-                why.append(f"UI语言不一致{len(language_issues)}处")
+            if language_issues or other:
+                lang = language_issues or other
+                why.append(f"UI语言不一致{len(lang)}处")
                 print(
                     "[probe-fast] UI 语言审计红: "
-                    + "; ".join(language_issues[:2]),
+                    + "; ".join(lang[:2]),
                     flush=True,
                 )
             notes.append(
                 "[probe-fast→full] " + "; ".join(why) + ": "
-                + "; ".join(
-                    (language_issues[:2] + factory_issues[:2] + form_issues[:2])
-                )
+                + "; ".join(guard_issues[:6])
             )
             probe_green = False
         else:

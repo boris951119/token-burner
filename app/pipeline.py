@@ -635,6 +635,34 @@ class Pipeline:
                                 list(injected.items())[:12]),
                             flush=True,
                         )
+                    # 刀J'：home/login 锚点 sidecar → 冒烟起服后 GET 对应路由
+                    # v56：冒烟读 project/code/.surface_route_anchors.json；
+                    # 旧写 backend/ 或项目根 → 闸永不触发（v55 双题尸检）。
+                    try:
+                        from app.utils.manifest_landing import (
+                            write_surface_anchors_sidecar,
+                        )
+                        handle = self.file_manager.get_project(
+                            team.project_id)
+                        if handle is not None:
+                            texts = [
+                                getattr(p, "responsibility", "") or ""
+                                for p in plans
+                            ]
+                            code_dest = handle.root / "code"
+                            code_dest.mkdir(parents=True, exist_ok=True)
+                            by_s = write_surface_anchors_sidecar(
+                                code_dest, texts)
+                            n = sum(len(v) for v in by_s.values())
+                            keys = ",".join(by_s.keys()) or "-"
+                            print(
+                                f"[coverage] surface 锚点 sidecar "
+                                f"{n} 条[{keys}] → code/",
+                                flush=True,
+                            )
+                    except Exception as exc:
+                        print(f"[coverage] surface sidecar 降级: {exc!r}",
+                              flush=True)
                 except Exception as exc:
                     print(f"[coverage] 契约所有权注入降级: {exc!r}",
                           flush=True)

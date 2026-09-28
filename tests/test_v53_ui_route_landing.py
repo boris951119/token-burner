@@ -95,8 +95,13 @@ def test_knife_g_enforce_also_reroutes():
 _MANIFEST = """
 托管 GET /，提供首页
 
+【验收节点逐字清单（机械抽取自需求 GWT 结构，逐条满足）】
+- REQ-1-1-1 Register｜控件须可见: "Sign in"、"Create an account"、"Username"、"Email"、"Password"、"Confirm password"、"Agree to the terms"、"Create account"｜首页卡片须含: "Create an account"
+"""
+
+_HARD_DUMP = """
 【UI 页面与文案清单（硬契约，逐字实现）】
-- 模块： Identity and Access: Sign in、Create an account、Username、Email、Password、Confirm password、Agree to the terms、Create account
+- 模块： Identity: Sign in、Create an account、Username、Email、Password、Confirm password、Agree to the terms、Create account、the requested workflow、false、Worksheet grid、工作簿1
 """
 
 
@@ -105,6 +110,23 @@ def test_knife_h_extracts_manifest_anchors():
     assert "Create an account" in anchors
     assert "Username" in anchors
     assert len(anchors) >= 4
+
+
+def test_v56_knife_h_ignores_hard_manifest_dump():
+    """v56-4：整表硬契约 89 条不得灌入锚点（含 placeholder/boolish/中文 OCR）。"""
+    anchors = extract_manifest_anchors(_HARD_DUMP)
+    assert "the requested workflow" not in anchors
+    assert "false" not in anchors
+    assert "工作簿1" not in anchors
+    # 无刀C 清单时硬契约整表跳过 → 锚点应极少/为空
+    assert len(anchors) < 4
+
+
+def test_v56_knife_h_blacklists_placeholder_in_checklist():
+    dirty = _MANIFEST + '\n- REQ-x｜动作后须出现: "the requested workflow"、"true"\n'
+    anchors = extract_manifest_anchors(dirty)
+    assert not any("requested workflow" in a.lower() for a in anchors)
+    assert "true" not in anchors
 
 
 def test_knife_h_reds_when_landing_below_half():
@@ -120,8 +142,7 @@ def index():
         bad_code, responsibility=_MANIFEST, module="ui_home")
     assert issues, "应门禁红"
     assert "文案落地" in issues[0]
-    assert "Create an account" in issues[0]
-    assert "Username" in issues[0]
+    assert "Create an account" in issues[0] or "Username" in issues[0]
 
 
 def test_knife_h_greens_when_majority_present():
@@ -150,3 +171,135 @@ def test_knife_h_skips_when_fewer_than_four_anchors():
     code = "def helper():\n    return 1\n"
     assert check_manifest_landing(
         code, responsibility=thin, module="helper") == []
+
+
+def test_v56_home_route_html_gate_reds_missing_card_field():
+    from app.utils.manifest_landing import check_home_route_html
+    html = "<html><body><a>Q3 Sales</a><p>Region East</p></body></html>"
+    issues = check_home_route_html(
+        html, responsibility=_MANIFEST, module="webui")
+    # _MANIFEST 首页卡片须含 Create an account
+    assert issues and "卡片模板补字段" in issues[0]
+    assert "Create an account" in issues[0]
+
+
+def test_v56_home_route_html_gate_greens_when_present():
+    from app.utils.manifest_landing import check_home_route_html
+    html = '<html><body><article><a>Create an account</a></article></body></html>'
+    assert check_home_route_html(
+        html, responsibility=_MANIFEST, require_article=True,
+        module="webui") == []
+
+
+def test_v56_home_route_html_require_article_scope():
+    from app.utils.manifest_landing import check_home_route_html
+    # 串在 footer 不在 article → 红
+    html = ('<html><body><article><a>Q3 Sales</a></article>'
+            '<footer>Create an account</footer></body></html>')
+    issues = check_home_route_html(
+        html, responsibility=_MANIFEST, require_article=True,
+        module="webui")
+    assert issues
+    assert ("article" in issues[0].lower() or "卡片" in issues[0])
+
+
+# ---- 刀J'：login surface + 隐藏元素 ----
+
+_LOGIN_MANIFEST = """
+托管 /login 登录页
+
+【验收节点逐字清单（机械抽取自需求 GWT 结构，逐条满足）】
+- REQ-1-1-1 Register｜控件须可见: "Username"、"Password"｜登录页须含: "Create an account"、"Sign in to GitHub"
+"""
+
+
+def test_knife_j_login_route_html_reds_when_missing():
+    """#85 同形：/login 渲染体无 Create an account → 红。"""
+    from app.utils.manifest_landing import check_login_route_html
+    html = "<html><body><h1>Login</h1><label>Username</label>" \
+           "<label>Password</label><button>Sign In</button></body></html>"
+    issues = check_login_route_html(
+        html, responsibility=_LOGIN_MANIFEST, module="web_core",
+        route="/login")
+    assert issues
+    assert "Create an account" in issues[0]
+    assert "login" in issues[0].lower() or "登录" in issues[0]
+
+
+def test_knife_j_login_route_html_greens_when_visible():
+    from app.utils.manifest_landing import check_login_route_html
+    html = (
+        '<html><body><a href="/signup">Create an account</a>'
+        "<h1>Sign in to GitHub</h1></body></html>"
+    )
+    assert check_login_route_html(
+        html, responsibility=_LOGIN_MANIFEST, module="web_core") == []
+
+
+def test_knife_j_hidden_element_does_not_count():
+    """隐藏元素里的串不算落地（display:none / hidden / aria-hidden）。"""
+    from app.utils.manifest_landing import check_login_route_html
+    html = (
+        '<html><body><div hidden>Create an account</div>'
+        '<span style="display:none">Sign in to GitHub</span>'
+        "<p>Login</p></body></html>"
+    )
+    issues = check_login_route_html(
+        html, responsibility=_LOGIN_MANIFEST, module="web_core")
+    assert issues
+    assert "Create an account" in issues[0]
+
+
+def test_knife_j_surface_sidecar_writes_home_and_login(tmp_path):
+    from app.utils.manifest_landing import (
+        write_surface_anchors_sidecar,
+        load_surface_anchors_sidecar,
+        SURFACE_ANCHORS_SIDECAR,
+        HOME_ANCHORS_SIDECAR,
+    )
+    text = _MANIFEST + "\n" + _LOGIN_MANIFEST
+    by_s = write_surface_anchors_sidecar(tmp_path, [text])
+    assert "Create an account" in (by_s.get("login") or by_s.get("home") or [])
+    assert (tmp_path / SURFACE_ANCHORS_SIDECAR).is_file()
+    assert (tmp_path / HOME_ANCHORS_SIDECAR).is_file()
+    loaded = load_surface_anchors_sidecar(tmp_path)
+    assert "login" in loaded or "home" in loaded
+
+
+def test_acceptance_login_surface_from_sign_in_page(tmp_path):
+    """编译器：sign-in page 同句引号 → surface=login → 登录页须含。"""
+    from app.acceptance_compile import (
+        compile_checklists,
+        render_ux_checklist,
+    )
+    yaml_text = '''
+id: ROOT
+type: FOLDER
+children:
+  - id: REQ-1-1-1
+    name: Register
+    type: ATOMIC
+    description: >
+      The registration page is opened by the unique link named
+      "Create an account" from the sign-in page.
+    scenarios:
+      - name: register
+        steps:
+          - keyword: GIVEN
+            content: The visitor starts at the application home page.
+          - keyword: WHEN
+            content: >
+              The visitor clicks "Sign in", then clicks
+              "Create an account".
+          - keyword: THEN
+            content: The form shows "Username".
+'''
+    p = tmp_path / "requirements.yaml"
+    p.write_text(yaml_text, encoding="utf-8")
+    cls = compile_checklists(p)
+    ck = next(c for c in cls if c.req_id == "REQ-1-1-1")
+    surfs = ck.surfaces_of("Create an account")
+    assert "login" in surfs, surfs
+    ux = render_ux_checklist(cls)
+    assert "登录页须含" in ux
+    assert "Create an account" in ux
