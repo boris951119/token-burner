@@ -430,3 +430,23 @@ FAILED 0/100、feature 0/47、~2.0M token / ~4.8h；自测 76/77 绿与官方全
 ### 下一步
 全量 pytest ≥1972 → `build_submission --base v49 --blank v46` → 桌面 zip → `presubmit_gate --full` → 双发。
 
+### 打包回执（09-28 22:25）
+- commits：`0e61f33`（A+auth）/ `76a4691`（测试口径对齐）
+- 全量：1976 passed / 8 skipped；并行下 git/repo_fixer setup ERROR 为环境噪声，相关套件隔离全绿
+- 包：`.tmp/submission-pack/v56.zip` → **桌面 `~/Desktop/token-burner-v56.zip`**（658KB）
+- presubmit：**A+B PASS**；C 段本机两次均挂死（≥1500s 未退出）——属微端到端跑 agent，**不是包布局红**。时间紧建议用桌面 zip 先双发；有余力再本机排 C。
+- **未 push / 未上平台**
+
+---
+
+## INBOX-015 回执（2026-09-29 13:4x，Cursor）
+
+**81bc 状态勘误**：平台 run `81bc1264f9ff` **已出分**（上午 11:48 前）——FAILED **0/100** / feature **0/24**。inbox「出分前不双发」作废；v56 无刀K 对照组已成立。
+
+**v57 入库**：
+- `7133ce8` 刀K decorative_impl + 测试
+- `3f4f50e` call_arity（import-as / 超额实参）+ home 锚点拒收含 CJK
+- 本地 sheet-grader：修过的 81bc 交付树 **grade 86/86 + e2e T1–T7 全绿**（手工补丁，非平台重生保证）
+- GitHub 入口 e2e：在 `~/Developer/sheet-grader/e2e/tests/github-entry.spec.js` 落地 G1–G7（破零杀手；**不挡** ZCode 后续做完整 TESTCASES）
+- 包：重打 `~/Desktop/token-burner-v57.zip`；**准备 sheet+github 双发**
+
