@@ -807,6 +807,13 @@ class Pipeline:
                     )
             except Exception:
                 pass
+            # 刀M：生成规范 skill 摘要（HOW；题面关键词路由，空=零变化）
+            try:
+                from app.skills_gen import detect_skills, render_skills_summary
+                self._skills_summary = render_skills_summary(
+                    detect_skills(requirement))
+            except Exception:
+                self._skills_summary = ""
 
             # 中断恢复（产品审计问题 4）：进入模块开发前落盘恢复快照——
             # 恢复所需的最小充分状态（order / plans / interfaces / 模式 / 模型）
@@ -913,6 +920,8 @@ class Pipeline:
         if peer:
             dev_loop.peer_exports_summary = peer
             self._peer_exports_summary = ""
+        # 刀M：skill 摘要挂槽（默认空串=零行为变化）
+        dev_loop.skills_summary = getattr(self, "_skills_summary", "") or ""
         # v52：schema 权威摘要进写码提示（盘上已有 CREATE TABLE）
         try:
             from app.utils.schema_audit import format_schema_authority

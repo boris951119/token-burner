@@ -3006,6 +3006,16 @@ def auto_repair(
             "而不是删减组装逻辑；修残应用的验收会被下游旅程门禁拒绝。"
             "禁止修改 tests/ 目录；禁止重构无关代码。"
         )
+    # 刀M：修复定向注入——skill 规范+位置句随红字下药（81bc 十一次
+    # "卡片补字段"误诊的解药；无 REQ 命中/无题面时零行为变化）
+    try:
+        from app.skills_gen import repair_directive
+
+        _skill_sec = repair_directive(issue, requirement)
+        if _skill_sec:
+            issue = issue + "\n\n" + _skill_sec
+    except Exception:
+        pass  # 下药是增强，不阻塞修复主流程
     if test_cmd is None:
         # 复测与判定同闸：基线冒烟 × 表单对账。判词里带着 [form] 红字而复测
         # 只看基线，循环就会朝「让基线绿」收敛（锚点闸同形取证：三轮分文未收敛）。

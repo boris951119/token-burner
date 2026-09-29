@@ -188,6 +188,9 @@ class DevLoopEngine:
         # v52 通气：pipeline 注入的跨模块图纸（写码提示用；默认空）
         self.peer_exports_summary: str = ""
         self.schema_authority_summary: str = ""
+        # 刀M：生成规范 skill（HOW——呈现/装配规范；WHAT 逐字事实走
+        # 所有权 checklist 注入，两通道不可互代。默认空=零行为变化）
+        self.skills_summary: str = ""
 
     # ------------------------------------------------------------------
 
@@ -231,6 +234,11 @@ class DevLoopEngine:
                 "SELECT/INSERT 列名必须与此一致，禁止另起同义列）\n"
                 + schema
             )
+        # 刀M：生成规范 skill（呈现/装配 HOW 规范；逐字事实由契约清单
+        # 各自携带，不在此槽——两通道分离是 INBOX-016 定稿口径）
+        skills = getattr(self, "skills_summary", "") or ""
+        if skills:
+            base = base + "\n\n" + skills
         # M10-3：Researcher 研究参考段（内容已含数据边界标记与超长截断，
         # 此处仅拼接；空上下文零改动——researcher_enabled 关闭时行为不变）
         if self.research_context:
