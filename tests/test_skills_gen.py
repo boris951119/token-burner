@@ -34,10 +34,18 @@ _NON_UI_REQ = """Write a python function that sorts a list of numbers.
 No UI, no web server, pure algorithm."""
 
 
-def test_s3_detected_for_ui_requirements():
+def test_s3_detected_but_disabled_per_protocol():
+    """预注册裁决（09-29 夹具 A/B 无红绿差）：S3 下架留档，闸保留。
+
+    detect_skills 只返回 enabled skill；注册表里 S3 在册但不下发。
+    """
     for text in (_REQ_TEXT, _GITHUB_REQ):
-        skills = detect_skills(text)
-        assert [s.sid for s in skills] == ["S3-contract-presentation"]
+        assert detect_skills(text) == []          # 不下发 → 零行为变化
+    from app.skills_gen import GenSkill
+    import app.skills_gen.library as lib
+    s3 = [s for s in lib._REGISTRY if s.sid == "S3-contract-presentation"][0]
+    assert s3.enabled is False and s3.disabled_reason
+    assert render_skills_summary(detect_skills(_REQ_TEXT)) == ""
 
 
 def test_no_skill_for_non_ui_requirement():
@@ -45,7 +53,10 @@ def test_no_skill_for_non_ui_requirement():
 
 
 def test_render_summary_contains_rules_and_gate():
-    out = " ".join(render_skills_summary(detect_skills(_REQ_TEXT)).split())
+    """规则内容语义（对注册表内 skill 实体直接验证，不依赖启用态）。"""
+    import app.skills_gen.library as lib
+    s3 = [s for s in lib._REGISTRY if s.sid == "S3-contract-presentation"][0]
+    out = " ".join(render_skills_summary([s3]).split())
     assert "S3" in out and "契约呈现" in out
     assert "服务端渲染" in out          # 核心硬规则在场
     assert "JS 常量" in out             # 81bc 死因点名（空白归一后匹配）
@@ -53,10 +64,14 @@ def test_render_summary_contains_rules_and_gate():
 
 
 def test_render_filters_by_surface():
-    skills = detect_skills(_REQ_TEXT)
-    assert render_skills_summary(skills, surface="ui") != ""
-    assert render_skills_summary(skills, surface="data") == ""   # S3=ui 不灌数据面
-    assert render_skills_summary(skills, surface=None) != ""     # 不过滤=全量
+    """过滤语义用启用态假想 skill 验证（注册表现空转，语义留档待复启用）。"""
+    from app.skills_gen import GenSkill
+    demo = GenSkill(sid="X", title="t", triggers=("x",), surface="ui",
+                    prompt="rule", gate="g")
+    assert render_skills_summary([demo], surface="ui") != ""
+    assert render_skills_summary([demo], surface="data") == ""
+    assert render_skills_summary([demo], surface=None) != ""
+    assert render_skills_summary([], surface=None) == ""
 
 
 def test_repair_directive_binds_positions_not_prose():
@@ -64,10 +79,14 @@ def test_repair_directive_binds_positions_not_prose():
     failure = ('REQ-1-1-1 编译清单[种子文案] "Last updated" 未出现在'
                '入口可达页面')
     d = repair_directive(failure, _REQ_TEXT)
-    assert "契约呈现" in d                      # skill 全文随药
+    # 位置句机制独立于 skill 启用态（注册表下架后依然下药）：
     assert "REQ-1-1-1" in d                     # 定位到红字需求
     assert "home" in d.lower()                  # 位置句落到宿主页
     assert "操作后" in d or "触发" in d          # 触发式文案的呈现指令（反 81bc）
+    # S3 下架期间无 skill 全文段；复启用后应随药出现
+    assert ("契约呈现" in d) == any(
+        s.sid == "S3-contract-presentation"
+        for s in detect_skills(_REQ_TEXT))
 
 
 def test_repair_directive_empty_when_no_req_match():

@@ -229,6 +229,12 @@ GitHub 彩排 r1（本地）日志出现：`修复升级 → deepseek-v4-pro（f
 
 ## INBOX-016（**评估已收+设计定稿** 09-29 22:0x，Cursor 回执=86c2496；产品轨道不派竞赛施工单）— 刀M skill 库设计：注入点/对象/闸配对
 
+**实验裁决（09-29 晚，ZCode 按预注册协议执行；夹具与数据 /tmp/skill_ab/）**：
+- **B-easy**（单页双文案，5+5）：对照 5/5 vs 处理 5/5——夹具无 headroom，死亡条件未复现，零结果。
+- **B-hard**（三页八文案多文件协议，5+5）：对照 0/5 vs 处理 2/5——失败类被混淆（失败样本 /repos 整页 500：路由无登录守卫/崩溃，与 S3 靶心的文案渲染方式不同类），p≈0.44 不显著，**inconclusive**。
+- **A 修复定向**（v55-sheet 死因夹具，RepoFixer 真修 3+3）：对照 3/3 全收敛平均 1.0 轮 vs 处理 3/3 平均 2.0 轮——无收益证据（夹具太小，单红字修复裸跑即 1 轮收敛）。
+- **裁决（预注册条款）**：S3 **下架留档**（enabled=False + disabled_reason），写码槽与修复定向**机制保留**（位置句机制独立于 skill 启用态），**闸全保留**；复启用条件=能复现死亡条件的判别力夹具（候选：真实 81bc 树制造回归态 × 真实判分红字 × RepoFixer 对照）。commit 76453c2+后续。
+
 **ZCode 规整结论（双边对齐完成，产品期 skill 库的最终形态，以本条为准）**：
 1. **WHAT/HOW 分离**：逐字事实（WHAT）继续走所有权 checklist 注入，另配金丝雀 ≤3 条硬补 sidecar（sheet=`Last updated`；github=`Create an account`/`Sign in`）；呈现规范（HOW）走 `skills_summary` 槽（S3/S4 短规则）。**skill 永不替代 checklist，checklist 不进 skill 槽**。
 2. **S3 闸分两档**：A 档=home/login 金丝雀 + 刀K（已有）；B 档（后置）=对 behavior_expectations 做"非死字典"检查（AST 引用可达 / 带串模板分支可达）。**反模式清单：禁止把触发式文案升格为 home surface 必见——那是 81bc 假修环的结构因**（ZCode 原设计此处被 Cursor 否决，否决成立）。

@@ -29,6 +29,8 @@ class GenSkill:
     surface: str                # "all" | "ui" | "data" | "assembly"
     prompt: str                 # 硬规则文本（≤15 行；后排饥饿教训）
     gate: str                   # 配对闸 id（可追溯、可执行）
+    enabled: bool = True        # 预注册纪律：无夹具红绿差不下发（下架留档）
+    disabled_reason: str = ""
 
 
 _S3_PROMPT = """\
@@ -52,6 +54,14 @@ _REGISTRY: tuple[GenSkill, ...] = (
         surface="ui",
         prompt=_S3_PROMPT,
         gate="J'-runtime-html + K-decorative + 金丝雀sidecar",
+        # 预注册裁决（09-29 夹具 A/B）：B-easy 5/5 vs 5/5（无 headroom）、
+        # B-hard 0/5 vs 2/5（失效类被路由鲁棒性混淆，p≈0.44 不显著）、
+        # A 修复 3/3@1.0轮 vs 3/3@2.0轮（无收益证据）→ 按"两跑无显著差
+        # 则删 skill 留闸"下架；闸与机制保留，待真实 81bc 树判别实验。
+        enabled=False,
+        disabled_reason="无夹具红绿差支持（实验A/B 09-29，/tmp/skill_ab "
+                        "协议与数据见 INBOX-016）；闸保留，skill 待判别力"
+                        "夹具复测后再启用",
     ),
 )
 
@@ -62,7 +72,7 @@ def detect_skills(requirement: str) -> list[GenSkill]:
     if not text:
         return []
     return [s for s in _REGISTRY
-            if any(t in text for t in s.triggers)]
+            if s.enabled and any(t in text for t in s.triggers)]
 
 
 def render_skills_summary(skills: list[GenSkill],
@@ -122,6 +132,7 @@ def repair_directive(issue_text: str, requirement: str,
     head = "## 本轮修复的呈现规范与位置指令（对红字需求强制）"
     tail = ("通用约束：修复只针对红字需求，禁止为让文案可见而堆砌装饰页"
             "或修改 tests/。")
-    return "\n".join([head, body, *blocks, tail]).replace(
+    parts = [head] + ([body] if body else []) + blocks + [tail]
+    return "\n".join(parts).replace(
         "## 生成规范（skill，硬约束；配对闸见各条标注）",
         "").strip()
