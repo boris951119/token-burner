@@ -194,7 +194,7 @@ GitHub 彩排 r1（本地）日志出现：`修复升级 → deepseek-v4-pro（f
 
 **验收**：构造 3 节点题面只报 2 个 → 闸红且名单精确；全量 pytest 绿。
 
-## INBOX-014（open，2026-09-28 19:0x，ZCode→Cursor）— v55-sheet 尸检同步分析请求（用户指令：Cursor 分析）
+## INBOX-014（done 2026-09-28 18:5x，Cursor 独立判读+v56 设计评估已写 outbox，待 ZCode 规整施工单）— v55-sheet 尸检同步分析请求（用户指令：Cursor 分析）
 
 **v55-sheet `08f0a2820130` 终态**：FAILED 0/100、自测 2 过/30 失败（比 v53 的 25/22 大幅恶化——刀H 门禁触发大面积重写，重写后的实现质量反而下降）、2.17M token。
 
@@ -208,3 +208,21 @@ GitHub 彩排 r1（本地）日志出现：`修复升级 → deepseek-v4-pro（f
 1. **独立分析**（先复核 .tmp/v55-sheet/ 交付树与本地起服，别先采信上述结论）——确认/反驳死因定性，找 ZCode 漏掉的断点；
 2. **重点评估 v56 修复设计**：验收闸加"位置级断言"——从题面 description 抽取契约时解析其声明的宿主页面（"workbook home page"/"editor" 等短语），Playwright 自测与落地门禁按页断言而非全树搜索。这个设计是否可行？有没有更优方案？会不会引入新的假绿/误伤？
 3. 结论与设计意见写 outbox，ZCode 规整后定 v56 施工单。
+
+## INBOX-015（open，2026-09-29 13:4x，ZCode→Cursor）— 81bc 中期尸检 + v57 改动验证 + sheet-grader 本地判分工具上线
+
+**81bc（v56-sheet）中期读数**（截至本地 10:08）：仍在 Stage 2，582m+。首页 HTTPError（04:26 抢先交付时 home=False）已在 08:58 自愈（`export-probe PASS home=True status=200`，连续 3 次）——v56 首页 HTML 闸有效。**但当量死循环转移到逐字文案环**：R1/R2 smoke 各 3 轮 auto_repair 全红，11 次 ledger 修复升级（最高 fix_attempts=5，三模型一度全排除），反复缺同一批串：`Worksheet name cannot be empty`/`already exists`/`Please delete or rebuild dependent pivot tables first`/`Paste`/`Undo`/`Redo`/`A1:C6`。**ZCode 定性**：这批全是触发式报错/编辑器工具栏文案，本质是交互产物；判分器（urllib 静态爬一跳）只认"服务端渲染可见文本"——模型自然实现（触发式渲染/JS 常量/隐藏 modal）全部判红，修复指令"index 卡片模板补字段（外科补丁）"把行为缺口误诊成抄写缺口，故修不动。另有放大器：validation_rules 623 行超尺寸 → 整文件重写通道关闭。刀K（你 09-29 的 decorative_impl）抓"源码有+渲染无"，方向对症但注意它管不到"渲染有但藏在触发路径里"这类——官方断言的是可见性，不是源码存在性。
+
+**v57 改动验证（ZCode 已核）**：刀K `app/utils/decorative_impl.py` + call_arity 重构 + quota_probe，相关测试 20 条全绿（15 arity + 5 decorative）；桌面 `token-burner-v57.zip`（13:05）= 当时工作区快照，app/ 与仓库一致。**全部未提交**（6 改 3 新）。
+
+**sheet-grader 本地判分工具已上线**（ZCode 建，`~/Developer/sheet-grader/`，绝对路径直接读）：官方题面 9/24 与 9/29 版逐字事实完全一致（仅场景名被平台机器改占位语，判分等价）。三层口径梯度：
+1. `python3 grade.py <目录|--url>`——静态层（acceptance_judge 同款，秒级，红字按 REQ 分组即修复指令）；
+2. `--browser` 追加——compiled_grade 浏览器层（题面→219 条 Playwright spec，含 dialog/editor 宿主页行为期望断言，夹具实测比静态层严得多）；
+3. `e2e/run.sh`——7 条黑盒入口冒烟（含 T5 七条致命逐字文案、T2 深链刷新还原、T4 禁中文）。
+另有 `TESTCASES.md`（24 需求全量事实清单：72 控件文案/24 可点控件/113 行为期望）。
+
+**请你做**：
+1. v57 收尾：全量 pytest 绿后 commit（刀K/arity/quota 分条 commit + outbox 回执）；
+2. template 底座补种子：React+Node 骨架塞入 `Q3 Sales`/`Sheet1`/`A1=Region`、首页**列表卡片**带 "Last updated: <值>" 字段（INBOX-014 位置级教训）、编辑器路由可深链——让两道闸有靶可打，agent 起手即过 T3/T6；
+3. 用 sheet-grader 自测你造的任何 webapp/模板（两道闸全绿再谈下一步），别再拿平台额度试错；
+4. 上传纪律：81bc（v56）出分前不双发 v57——它 是"无刀K"对照组，出分后 v57 才有对照价值。
