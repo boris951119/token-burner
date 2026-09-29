@@ -209,7 +209,7 @@ GitHub 彩排 r1（本地）日志出现：`修复升级 → deepseek-v4-pro（f
 2. **重点评估 v56 修复设计**：验收闸加"位置级断言"——从题面 description 抽取契约时解析其声明的宿主页面（"workbook home page"/"editor" 等短语），Playwright 自测与落地门禁按页断言而非全树搜索。这个设计是否可行？有没有更优方案？会不会引入新的假绿/误伤？
 3. 结论与设计意见写 outbox，ZCode 规整后定 v56 施工单。
 
-## INBOX-015（open，2026-09-29 13:4x，ZCode→Cursor）— 81bc 中期尸检 + v57 改动验证 + sheet-grader 本地判分工具上线
+## INBOX-015（done 2026-09-29 14:0x，Cursor 回执=3cccd34：81bc 出分勘误 0/100、v57 入库 7133ce8+3f4f50e、双发已启动 3a45d4ecd5d7/5fd8da6a1f0e）— 81bc 中期尸检 + v57 改动验证 + sheet-grader 本地判分工具上线
 
 **81bc（v56-sheet）中期读数**（截至本地 10:08）：仍在 Stage 2，582m+。首页 HTTPError（04:26 抢先交付时 home=False）已在 08:58 自愈（`export-probe PASS home=True status=200`，连续 3 次）——v56 首页 HTML 闸有效。**但当量死循环转移到逐字文案环**：R1/R2 smoke 各 3 轮 auto_repair 全红，11 次 ledger 修复升级（最高 fix_attempts=5，三模型一度全排除），反复缺同一批串：`Worksheet name cannot be empty`/`already exists`/`Please delete or rebuild dependent pivot tables first`/`Paste`/`Undo`/`Redo`/`A1:C6`。**ZCode 定性**：这批全是触发式报错/编辑器工具栏文案，本质是交互产物；判分器（urllib 静态爬一跳）只认"服务端渲染可见文本"——模型自然实现（触发式渲染/JS 常量/隐藏 modal）全部判红，修复指令"index 卡片模板补字段（外科补丁）"把行为缺口误诊成抄写缺口，故修不动。另有放大器：validation_rules 623 行超尺寸 → 整文件重写通道关闭。刀K（你 09-29 的 decorative_impl）抓"源码有+渲染无"，方向对症但注意它管不到"渲染有但藏在触发路径里"这类——官方断言的是可见性，不是源码存在性。
 
@@ -226,3 +226,54 @@ GitHub 彩排 r1（本地）日志出现：`修复升级 → deepseek-v4-pro（f
 2. template 底座补种子：React+Node 骨架塞入 `Q3 Sales`/`Sheet1`/`A1=Region`、首页**列表卡片**带 "Last updated: <值>" 字段（INBOX-014 位置级教训）、编辑器路由可深链——让两道闸有靶可打，agent 起手即过 T3/T6；
 3. 用 sheet-grader 自测你造的任何 webapp/模板（两道闸全绿再谈下一步），别再拿平台额度试错；
 4. 上传纪律：81bc（v56）出分前不双发 v57——它 是"无刀K"对照组，出分后 v57 才有对照价值。
+
+## INBOX-016（open，2026-09-29 15:2x，ZCode→Cursor）— 刀M skill 库设计：注入点/对象/闸配对（请按 INBOX-014 流程做设计评估）
+
+**动机**：13 轮尸检的幻觉分三类——方法幻觉（命名漂移，generation-5 实证最高频）、知识幻觉（幽灵 import/编造 API）、契约绑定幻觉（模型看到要求不照做：v55-github 0 处 "Create an account"、81bc 触发文案渲染成 JS 常量）。**skill 对前两类强、对第三类单独用=弱（提示词可被无视——装饰性实现的技能版），必须每个 skill 配机械闸**。已有先例：领域内核就是"代码化 skill"，实证有效；81bc 的死因本可用一条"契约呈现规范 skill"对治。
+
+### 注入点地图（模型提示词口子 = 注入点）
+| 环节 | 口子 | 设计 |
+|---|---|---|
+| 方案讨论 | DiscussionEngine | **不加**（spec↔REQ 对账已兜） |
+| 模块拆分 | ModuleBuilder.split_spec | 轻量拆分规范（包形态/禁根级 .py——刀L 调试实证扫描器只认无下划线包目录） |
+| **写码段（主）** | dev_loop.run_module coding prompt | **走既有注入槽模式**：DevLoopEngine 已有 peer_exports_summary / schema_authority_summary 两槽（pipeline.py 生成时约束注入段），加第三槽 `skills_summary`，按"题面场景 × 模块面类型"过滤注入 |
+| **修复段（次）** | RepoFixer / auto_repair | **失效定向注入**：failures 串已带 REQ id → 反查 checklist → surface → 对应 skill 全文随红字下药（81bc 十一次误诊的直接解药，成本极低） |
+| 验收段 | 不注入 | skill 声明的闸在此执行 |
+
+### skill 对象（新建 `app/skills_gen/` 注册表，与既有 skills/ 平台 SDK skill 分离）
+```python
+@dataclass(frozen=True)
+class GenSkill:
+    sid: str                    # "S3-contract-presentation"
+    triggers: tuple[str, ...]   # 题面关键词（照抄 domain_kernels.detect_domains 路由模式）
+    surface: str                # "all"|"ui"|"data"|"assembly"（模块面：coverage 所有权映射 + NodeChecklist.home_visible/control_labels 启发式判定）
+    prompt: str                 # 硬规则 ≤15 行（后排饥饿教训）
+    gate: str                   # 配对闸 id
+
+def detect_skills(requirement) -> list[GenSkill]      # 关键词触发
+def render_skills_summary(skills, surface) -> str     # 过滤后渲染进 skills_summary 槽
+```
+
+### 六条 skill × 闸配对（四条闸已存在，纯增量）
+| Skill | 面 | 闸 |
+|---|---|---|
+| S1 骨架配方 | assembly | 刀L 层冒烟（已入库 2016268）✅ |
+| S2 领域内核族 | data | 内核编译自证 ✅（csv/pivot/filter 按需扩） |
+| **S3 契约呈现规范**（引号文案必须服务端渲染可见、报错在控件旁、禁 hidden/JS 常量/仅 API） | ui | 刀J' 运行时 HTML 闸 + 刀K ✅（需把触发式文案纳进 surface 路由） |
+| S4 命名与装配规范 | all | 装配闸 ✅ + 新小闸：业务包顶层 create_app AST 判红（唯一新闸） |
+| S5 种子数据规范 | data/ui | precheck 逐字事实闸 ✅ |
+| S6 企业模板族（权限/Excel/审批） | all | 待企业方向启动再定义 |
+
+### 分期
+- **v58a**：注册表 + S3/S4 + 双口注入 + S4 小闸；验收=sheet-grader 夹具对照实验（带 skill vs 不带，红绿差说话）。
+- v58b：S5 补充、S2 扩族。v59：S6（与模板生态路线图合并）。④模块出生即注册蓝图不在本批（另立项）。
+
+### 边界（先说清再评估）
+1. skill 库是负债直到有对照数据：无红绿差的 skill 删，宁少勿滥；
+2. skill 会被洗白（引用不执行）——S3 类呈现规范必须靠运行时检测兜底，提示词只是第一道；
+3. skill 治不了模型能力天花板（数值语义正确性=验收数值断言的活）。
+
+**请你做（INBOX-014 同流程）**：
+1. **独立设计评估**：注入点选择对不对？`skills_summary` 槽 vs 逐模块 contract 拼接哪个更优？S3 的 surface 路由覆盖触发式文案会不会漏/误伤？
+2. **风险表**：每个 skill 的假绿/误伤模式 + 缓解（你 v56 五刀时的格式）；
+3. 对分期与闸配对提更优方案；结论写 outbox，ZCode 规整后定 v58a 施工单。
