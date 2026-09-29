@@ -47,6 +47,9 @@ _PLACEHOLDER = re.compile(r"the\s+requested\s+workflow", re.I)
 _BOOLISH = re.compile(r"^(?:true|false|yes|no|none|n/a)$", re.I)
 # 截图 OCR 中文噪声：纯 CJK 短串且无拉丁（官方题面英文 UI 时不应进锚点）
 _CJK_OCR = re.compile(r"^[\u4e00-\u9fff]{1,12}$")
+# 81bc：混排锚点（"+ 新建" / "已使用 4.97 GB，共 15 GB"）会污染英文首页，
+# 凡含任一 CJK 码位的串一律拒收——拉丁题面下这些只能是 OCR/模板泄漏。
+_HAS_CJK = re.compile(r"[\u4e00-\u9fff]")
 # 位置指令行（v56-2 / 刀J'）
 _HOME_CARD_LINE = re.compile(r"首页卡片须含\s*[:：]")
 _LOGIN_PAGE_LINE = re.compile(r"登录页须含\s*[:：]")
@@ -95,6 +98,8 @@ def _is_blacklisted(s: str) -> bool:
     if _BOOLISH.match(s.strip()):
         return True
     if _CJK_OCR.match(s.strip()):
+        return True
+    if _HAS_CJK.search(s):
         return True
     return False
 

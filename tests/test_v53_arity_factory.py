@@ -46,6 +46,45 @@ def test_call_arity_ok_when_arg_passed(tmp_path):
         caller, code_root=code, module="webui_app") == []
 
 
+def test_call_arity_catches_excess_via_import_as(tmp_path):
+    """81bc：import peer as alias + alias.fn(4 args) vs def fn(a, b)。"""
+    code = tmp_path / "code"
+    code.mkdir()
+    _pkg(
+        code,
+        "worksheet_list_create_switch",
+        "def create_worksheet_record(workbook_id, name):\n"
+        "    return {'id': 1}\n",
+    )
+    caller = (
+        "import worksheet_list_create_switch as _ws_sheets\n"
+        "def create_workbook(db, name):\n"
+        "    _ws_sheets.create_worksheet_record(db, 1, 'Sheet1', 0)\n"
+    )
+    issues = check_imported_call_arity(
+        caller, code_root=code, module="workbook_list_create_open")
+    assert issues, "超额实参应硬红"
+    assert issues[0].given == 4 and issues[0].maximum == 2
+
+
+def test_call_arity_ok_import_as_matching(tmp_path):
+    code = tmp_path / "code"
+    code.mkdir()
+    _pkg(
+        code,
+        "worksheet_list_create_switch",
+        "def create_worksheet_record(workbook_id, name):\n"
+        "    return {'id': 1}\n",
+    )
+    caller = (
+        "import worksheet_list_create_switch as _ws_sheets\n"
+        "def create_workbook(wb_id):\n"
+        "    _ws_sheets.create_worksheet_record(wb_id, 'Sheet1')\n"
+    )
+    assert check_imported_call_arity(
+        caller, code_root=code, module="workbook_list_create_open") == []
+
+
 def test_probe_author_factory_reports_typeerror(tmp_path):
     code = tmp_path / "code"
     code.mkdir()
