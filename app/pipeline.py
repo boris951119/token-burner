@@ -702,6 +702,46 @@ class Pipeline:
                               flush=True)
             except Exception as exc:
                 print(f"[domain-kernel] 降级: {exc!r}", flush=True)
+            # 刀L（行走骨架）：契约冻结后、业务模块开发前，机械装配一个
+            # 活着的应用骨架并起服冒烟——链路连通从交付段祈祷变成开发段
+            # 不变量。骨架带 __arcbench_assembled__ 标记，交付段作者入口
+            # 在场时自动让位（mechanical_assembly 既定口径），这里零择优
+            # 改动。失败不阻塞主流程：降级回旧路径，交付段冒烟兜底。
+            try:
+                from app.utils.walking_skeleton import (
+                    build_skeleton, should_build_skeleton, smoke_skeleton,
+                )
+                if should_build_skeleton(plans):
+                    _skel_code = (self.file_manager.get_project(
+                        team.project_id).root / "code")
+                    _skel = build_skeleton(_skel_code, plans)
+                    _rep = smoke_skeleton(_skel_code)
+                    if not _rep.get("ok"):
+                        _rep = smoke_skeleton(
+                            _skel_code)  # 起服抖动重试一次
+                    self._emit(
+                        "skeleton_ready", ok=bool(_rep.get("ok")),
+                        health=_rep.get("health"), home=_rep.get("home"),
+                        routes=_rep.get("routes"),
+                        framework=_skel.get("framework"),
+                        blueprints=_skel.get("blueprints"),
+                    )
+                    print(
+                        f"[skeleton] 行走骨架就绪: ok={_rep.get('ok')} "
+                        f"framework={_skel.get('framework')} "
+                        f"blueprints={_skel.get('blueprints')} "
+                        f"routes={_rep.get('routes')}",
+                        flush=True,
+                    )
+                    if not _rep.get("ok"):
+                        print(
+                            "[skeleton] 冒烟未过（重试后仍失败）——降级继续开发"
+                            f"，排障线索: {(_rep.get('error') or '')[:140]}",
+                            flush=True,
+                        )
+            except Exception as exc:
+                print(f"[skeleton] 降级（不影响主流程）: {exc!r}",
+                      flush=True)
             if interfaces:
                 # factory26：契约快照事件（平台桥接层登记 traceability，
                 # 工作台无消费者时零成本）
@@ -940,7 +980,8 @@ class Pipeline:
         # 事件/提交/_shared 回归(收尾段串行化,语义与串行等价)。
         layers = self._dependency_layers(order, interfaces)
         workers = max(1, int(self.settings.module_parallelism))
-        for layer in layers:
+        _skel_routes: int | None = None  # 刀L：上一层层冒烟的路由数（趋势读数）
+        for _layer_no, layer in enumerate(layers, 1):
             todo = [n for n in layer if n not in module_results]
             if not todo:
                 continue  # resume:该层全部已完成/已冻结
@@ -961,6 +1002,38 @@ class Pipeline:
                 team, dev_loop, interfaces, order, module_results,
                 shared_baseline, git, project_root,
             )
+            # 刀L：层冒烟——骨架重新装配（吃进本层新完成模块）+ 起服探活。
+            # 路由数较上层回退 = 新层破坏了既有挂载，当场显形（留痕
+            # sessions/skeleton_smoke.md 供交付段修复环定向）；
+            # 冒烟失败不阻塞开发（该层的模块自检/修复已各自负责），只报红。
+            try:
+                from app.utils.walking_skeleton import (
+                    layer_smoke, should_build_skeleton,
+                )
+                if should_build_skeleton(plans):
+                    _lrep = layer_smoke(
+                        project_root / "code", plans, _layer_no,
+                        sessions_dir=project_root / "sessions",
+                        last_routes=_skel_routes,
+                    )
+                    _skel_routes = _lrep.get("routes") or _skel_routes
+                    self._emit(
+                        "layer_smoke", layer=_layer_no, ok=bool(_lrep.get("ok")),
+                        health=_lrep.get("health"), home=_lrep.get("home"),
+                        routes=_lrep.get("routes"),
+                        routes_delta=_lrep.get("routes_delta"),
+                        bp_coverage=_lrep.get("bp_coverage"),
+                    )
+                    print(
+                        f"[skeleton] 层{_layer_no}冒烟: ok={_lrep.get('ok')} "
+                        f"health={_lrep.get('health')} home={_lrep.get('home')} "
+                        f"routes={_lrep.get('routes')}"
+                        f"（Δ{_lrep.get('routes_delta')}） "
+                        f"bp_coverage={_lrep.get('bp_coverage')}",
+                        flush=True,
+                    )
+            except Exception as exc:
+                print(f"[skeleton] 层冒烟降级: {exc!r}", flush=True)
 
         # 3.8 反馈交互闭环（安全模式）：循环直至用户确认成功 /
         # 达修复上限（冻结） / 手动停止（exit）
