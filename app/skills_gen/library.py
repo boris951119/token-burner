@@ -91,8 +91,8 @@ def render_skills_summary(skills: list[GenSkill],
 _REQ_RE = re.compile(r"REQ-[\w.-]+")
 
 
-def repair_directive(issue_text: str, requirement: str,
-                     max_reqs: int = 5) -> str:
+def repair_directive(issue_text: str, requirement: str = "",
+                     max_reqs: int = 5, checklists=None) -> str:
     """修复定向注入：红字 REQ 反查验收清单 → skill 全文 + 位置句下药。
 
     位置句来自 fact_surfaces（编译期宿主页标签），**不是**裸原则——
@@ -106,9 +106,11 @@ def repair_directive(issue_text: str, requirement: str,
     req_ids = list(dict.fromkeys(_REQ_RE.findall(issue_text)))[:max_reqs]
     if not req_ids:
         return ""
-    from app.acceptance_compile import compile_checklists_from_text
+    if checklists is None:
+        from app.acceptance_compile import compile_checklists_from_text
 
-    by_id = {c.req_id: c for c in compile_checklists_from_text(requirement)}
+        checklists = compile_checklists_from_text(requirement)
+    by_id = {c.req_id: c for c in checklists}
     blocks: list[str] = []
     for rid in req_ids:
         ck = by_id.get(rid)
