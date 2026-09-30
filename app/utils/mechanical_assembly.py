@@ -141,7 +141,7 @@ def _guarded(imp: str, alias: str) -> str:
         f"    {imp}\n"
         f"except Exception as _e:\n"
         f"    {alias} = None\n"
-        f"    print(f'[assemble] 跳过 {imp}: {{_e!r}}')"
+        f"    print(f'[assemble] skip import {imp}: {{_e!r}}')"
     )
 
 
@@ -174,7 +174,7 @@ def generate_app_main(surfaces: list[ModuleSurface]) -> str:
                 f"            if _made is not None:\n"
                 f"                app.register_blueprint(_made)\n"
                 f"        except Exception as _e:\n"
-                f"            print(f'[assemble] {alias}() 失败: {{_e!r}}')")
+                f"            print(f'[assemble] {alias}() failed: {{_e!r}}')")
         for stem, fn, takes_app in s.inits:
             imp = _sub_import(s, stem)
             alias = f"_init_{_alias_part(s)}_{stem}_{fn}"
@@ -185,7 +185,7 @@ def generate_app_main(surfaces: list[ModuleSurface]) -> str:
                 f"            try:\n"
                 f"                {alias}({'app' if takes_app else ''})\n"
                 f"            except Exception as _e:\n"
-                f"                print(f'[assemble] init {fn} 失败: {{_e!r}}')")
+                f"                print(f'[assemble] init {fn} failed: {{_e!r}}')")
         if not s.blueprints and not s.inits:
             imports.append(f"try:\n    import {s.name}\n"
                            f"except Exception:\n    pass  # 保底导入：坏包不连坐")
@@ -264,7 +264,7 @@ def generate_app_main_fastapi(surfaces: list[ModuleSurface]) -> str:
                 f"        try:\n"
                 f"            {alias}({'app' if takes_app else ''})\n"
                 f"        except Exception as _e:\n"
-                f"            print(f'[assemble] init {fn} 失败: {{_e!r}}')")
+                f"            print(f'[assemble] init {fn} failed: {{_e!r}}')")
         if not s.routers and not s.inits:
             imports.append(f"try:\n    import {s.name}\n"
                            f"except Exception:\n    pass  # 保底导入：坏包不连坐")

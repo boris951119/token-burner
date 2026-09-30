@@ -425,13 +425,91 @@ def _batch_nodes(nodes: list[tuple[str, str]]) -> list[list[tuple[str, str]]]:
     return batches
 
 
+def _single_to_double_quotes(text: str) -> str:
+    """结构位单引号→双引号（逐字符状态机）。
+
+    字符串内部（含转义）原样保留——盲目 replace 会破坏 code 字段里的
+    合法单引号（'@playwright/test'），那正是 09-30 实测的主死因。
+    """
+    out: list[str] = []
+    in_str = False      # 当前是否在字符串内
+    sq_str = False      # 当前字符串是否由单引号开启
+    i, n = 0, len(text)
+    while i < n:
+        ch = text[i]
+        if not in_str:
+            if ch == "'":
+                in_str, sq_str = True, True
+                out.append('"')
+            elif ch == '"':
+                in_str, sq_str = True, False
+                out.append('"')
+            else:
+                out.append(ch)
+            i += 1
+            continue
+        # 字符串内
+        if ch == "\\" and i + 1 < n:
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if (sq_str and ch == "'") or (not sq_str and ch == '"'):
+            in_str = False
+            out.append('"')
+            i += 1
+            continue
+        if sq_str and ch == '"':
+            out.append('\\"')  # 字符串内的双引号转义
+            i += 1
+            continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def _extract_json_object(raw: str) -> dict:
+    """杂讯容忍的 JSON 提取（09-30 flash-0731 8 连败尸检）。
+
+    降级链：裸解析 → 剥围栏/散文后找最大平衡花括号块 → 修尾逗号 →
+    单引号键值纠正。全失败才抛（调用方按批作废）。
+    """
+    body = (raw or "").strip()
+    candidates = [body]
+    # 围栏剥离（```json ... ``` / ``` ... ```）
+    fenced = re.findall(r"```(?:json)?\s*\n(.*?)\n\s*```", body, re.S)
+    candidates.extend(f.strip() for f in fenced)
+    # 散文包裹：第一个 { 到最后一个 } 的最大平衡块
+    starts = [i for i, ch in enumerate(body) if ch == "{"]
+    ends = [i for i, ch in enumerate(body) if ch == "}"]
+    if starts and ends and ends[-1] > starts[0]:
+        candidates.append(body[starts[0]:ends[-1] + 1])
+
+    def _loads_with_repairs(text: str):
+        attempts = [text]
+        attempts.append(re.sub(r",\s*([\]}])", r"\1", text))  # 尾逗号
+        sq = _single_to_double_quotes(text)  # 结构位单引号→双引号（状态机）
+        if sq != text:
+            attempts.append(sq)
+            attempts.append(re.sub(r",\s*([\]}])", r"\1", sq))
+        for t in attempts:
+            try:
+                obj = json.loads(t)
+                if isinstance(obj, dict):
+                    return obj
+            except Exception:
+                continue
+        return None
+
+    for cand in candidates:
+        obj = _loads_with_repairs(cand)
+        if obj is not None:
+            return obj
+    raise ValueError("无可解析 JSON")
+
+
 def _parse_gen_payload(raw: str) -> list[tuple[str, str, str]]:
     """LLM 响应 → [(req_id, name, code)]（生成内容卫生闸保留原语义）。"""
-    body = raw.strip()
-    if body.startswith("```"):
-        lines = body.splitlines()
-        body = "\n".join(lines[1:-1]) if len(lines) > 2 else body
-    data = json.loads(body)
+    data = _extract_json_object(raw)
     tests = data.get("tests") or []
     specs = [(str(t.get("req_id") or "REQ"),
               str(t.get("name") or "scenario"),
@@ -499,7 +577,9 @@ def ensure_selftests(project_dir: Path, requirement: str,
         pending = [("__all__", requirement[:90000])]
 
     mc = ModelClient(settings)
-    models = tuple(settings.models[:2]) or ("openai/gpt-4o",)
+    # 09-30 尸检：models[:2] 两腿全灭即弃批（flash-0731 8 连败时 pro 在
+    # 座却从未上场）。快腿优先、pro 收尾的接力链覆盖全模型池。
+    models = tuple(settings.models[:3]) or ("openai/gpt-4o",)
 
     def gen_batch(batch_no: int, batch: list[tuple[str, str]]) -> bool:
         if batch[0][0] == "__all__":
