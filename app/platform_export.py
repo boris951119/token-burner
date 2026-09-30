@@ -920,6 +920,14 @@ def export_platform_layout(output_dir: Path, project_dir: Path,
                   flush=True)
     except Exception:
         pass
+    try:
+        from app.utils.ui_components import ensure_ui_components
+        uc = ensure_ui_components(backend)
+        if uc:
+            print(f"[export] ui-components 补落盘: {', '.join(uc)}",
+                  flush=True)
+    except Exception:
+        pass
     req_text = _requirements_for(code_dir)
     if entry_fix:
         import re
