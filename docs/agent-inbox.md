@@ -302,3 +302,17 @@ def render_skills_summary(skills, surface) -> str     # 过滤后渲染进 skill
 1. **独立设计评估**：注入点选择对不对？`skills_summary` 槽 vs 逐模块 contract 拼接哪个更优？S3 的 surface 路由覆盖触发式文案会不会漏/误伤？
 2. **风险表**：每个 skill 的假绿/误伤模式 + 缓解（你 v56 五刀时的格式）；
 3. 对分期与闸配对提更优方案；结论写 outbox，ZCode 规整后定 v58a 施工单。
+
+## INBOX-017（open，2026-10-01，用户授权直接施工，不走双边评审，ZCode 记录）— 刀P 修复环工具带（大脑+工具范式）
+
+**用户判断**：LLM 是大脑，干活需要大量"一事一具、参数≤3"的小工具。**ZCode 审计确认缺陷真实**，病灶=修复环节：RepoFixer 蒙眼开整文件药方（154 轮升级的根因之一），不能读应用/grep/起服/跑判分；对照：自测批 8 连败（巨 JSON 任务形态反工具）、validation_rules 623 行修不动（无外科 edit 工具）、JSON 补丁格式脆弱。
+
+**边界（重要）**：只改修复/调试段；生成段管线确定性（骨架/契约/层冒烟/门禁）是 13 轮尸检资产，**不交给大脑**。
+
+**施工设计**：
+1. `app/utils/agent_tools.py`：五工具 read/grep/edit/check/probe，一事一具、参数≤3、沙箱限根内、edit 外科替换。
+2. ToolRepoFixer：LLM 多轮小步循环（check 看红→grep 找宿主→edit 补→再 check 验证），替代单发整文件 JSON 补丁；轮数预算独立。
+3. auto_repair 加试验开关 `repair_tool_mode`（默认 off=原通道），平台行为零变化。
+4. 预注册对照：判别力夹具（72/86 起点树）上 ToolRepoFixer vs RepoFixer——成功标准=轮数或 token 显著下降且 86/86 达成；无显著差则工具带留档不默认启用（同 S3 纪律）。
+
+进度续记见下方追加行。
