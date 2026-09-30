@@ -705,6 +705,11 @@ class Pipeline:
                     if uc:
                         print(f"[ui-components] 已落盘: {', '.join(uc)}",
                               flush=True)
+                    from app.utils.db_kernel import ensure_db_kernel
+                    dbk = ensure_db_kernel(code_root)
+                    if dbk:
+                        print(f"[db-kernel] 已落盘: {', '.join(dbk)}",
+                              flush=True)
             except Exception as exc:
                 print(f"[domain-kernel] 降级: {exc!r}", flush=True)
             # 刀L（行走骨架）：契约冻结后、业务模块开发前，机械装配一个
@@ -910,6 +915,8 @@ class Pipeline:
                 ensure_domain_kernels(project_root / "code", requirement)
                 from app.utils.ui_components import ensure_ui_components
                 ensure_ui_components(project_root / "code")
+                from app.utils.db_kernel import ensure_db_kernel
+                ensure_db_kernel(project_root / "code")
             except Exception:
                 pass
         dev_loop = DevLoopEngine(

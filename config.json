@@ -1,7 +1,7 @@
 {
   "models": [
     "openai/deepseek-v4-pro",
-    "openai/deepseek-v4-flash-0731",
+    "openai/deepseek-v4-flash",
     "openai/qwen3.7-max"
   ],
   "platform_multi_model": true,

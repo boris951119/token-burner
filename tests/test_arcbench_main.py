@@ -354,10 +354,8 @@ class TestRunnerModelAutocomplete:
         s = self._apply(monkeypatch, "deepseek-v4-pro",
                         "https://api.arc-bench.com/v1",
                         True, raw["models"])
-        # 09-30：token-plan 端点的 flash 模型名为 deepseek-v4-flash-0731
-        #（随包 config 已对齐实际可用端点；档位不变：pro 主力+flash 快腿+qwen 备胎）
         assert set(_model_triplet(s.models)) == {
-            "openai/deepseek-v4-pro", "openai/deepseek-v4-flash-0731",
+            "openai/deepseek-v4-pro", "openai/deepseek-v4-flash",
             "openai/qwen3.7-max"}
         assert s.models[0] == "openai/deepseek-v4-pro"
     def test_official_relay_single_model_autocompletes(self, monkeypatch):

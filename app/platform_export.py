@@ -928,6 +928,14 @@ def export_platform_layout(output_dir: Path, project_dir: Path,
                   flush=True)
     except Exception:
         pass
+    try:
+        from app.utils.db_kernel import ensure_db_kernel
+        dbk = ensure_db_kernel(backend)
+        if dbk:
+            print(f"[export] db-kernel 补落盘: {', '.join(dbk)}",
+                  flush=True)
+    except Exception:
+        pass
     req_text = _requirements_for(code_dir)
     if entry_fix:
         import re
