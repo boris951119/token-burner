@@ -3023,6 +3023,20 @@ def auto_repair(
     # v55 不劣化：基线命令缺省=复测命令；probe-fast 入口修补显式传入同闸。
     if baseline_test_cmd is None:
         baseline_test_cmd = list(test_cmd)
+    # 刀P（INBOX-017）：工具带试验通道——大脑+五工具小步循环替代整文件
+    # 补丁。开关缺省关（平台零变化）；成败判据=循环内 check() 同闸复测。
+    if getattr(settings, "repair_tool_mode", False):
+        from app.utils.agent_tools import tool_repair
+
+        t_result = tool_repair(llm, project_dir, issue,
+                               check_cmd=list(test_cmd))
+        ok, report = run_smoke(code_dir)
+        tail = report[-300:]
+        if t_result["ok"] and ok:
+            n_turns = t_result["turns"]
+            return True, f"工具循环修复成功（{n_turns} 轮）：{tail}"
+        return False, (f"工具循环修复未通过（{t_result['turns']} 轮）"
+                       f"：{tail}")
     fixer = RepoFixer(
         llm, project_dir,
         test_cmd=test_cmd,

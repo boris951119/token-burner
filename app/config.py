@@ -99,6 +99,10 @@ class Settings:
     # 只跑 node-free 判分段（导出官方布局 + 起服 + 编译清单逐字事实），
     # 那一段零 LLM、秒级，且正是本轮唯一没轮到跑的闸。
     selftest_specs_enabled: bool = True
+    # 刀P（INBOX-017）：修复环工具带试验开关——True 时 auto_repair 用
+    # read/grep/edit/check/probe 工具循环替代整文件 JSON 补丁；缺省
+    # False=原 RepoFixer 通道，平台行为零变化。
+    repair_tool_mode: bool = False
     budget_throttle_threshold: float = 0.9     # 11.0：≥90% 进入省 token 模式
     # 11.0 修复保留额：总预算里划给「验收后的 LLM 修复」那一段的比例。省 token
     # 模式据此提前触发（越过 预算-保留额 就地收敛，不再加讨论轮），使总闸之前
