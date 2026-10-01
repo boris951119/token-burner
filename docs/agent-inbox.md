@@ -317,4 +317,5 @@ def render_skills_summary(skills, surface) -> str     # 过滤后渲染进 skill
 
 进度续记见下方追加行。
 **[INBOX-017 进度 1]** 刀P 落地（commit 见 git log）：agent_tools 五工具+循环协议+沙箱全部实现，11 测试绿，auto_repair 开关接入（默认关）。待办=预注册对照实验（工具循环 vs RepoFixer，判别力夹具 72/86 起点），实验后续记结果与裁决。
+**[INBOX-017 进度 2 + 预注册裁决（10-01）]**：对照实验四轮（工具臂 glm-flash→pro→pro v3→pro v4 批量协议）全部 30 轮未收敛、零 edit 落盘——模型在 grep/read 探索打转不动手；同夹具 JSON 整文件+pro = 2 轮收敛 86/86（昨日 expA2 基线）。附带发现：glm-5.3-flash 两通道皆败（工具=格式打转/JSON=改错文件）；deepseek-pro 同会话轮换三种调用形态（行协议/kwargs/原生XML），协议三连修后宽容全收（13 测试）。**裁决：repair_tool_mode 维持 OFF（默认原通道）；工具带+宽容协议作为资产保留**。假设记录：补文案类任务整文件优；工具循环可能在"运行时崩溃单点排障"类任务占优（probe/read 优势场景）——复测条件=该类夹具。
 
