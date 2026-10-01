@@ -316,3 +316,5 @@ def render_skills_summary(skills, surface) -> str     # 过滤后渲染进 skill
 4. 预注册对照：判别力夹具（72/86 起点树）上 ToolRepoFixer vs RepoFixer——成功标准=轮数或 token 显著下降且 86/86 达成；无显著差则工具带留档不默认启用（同 S3 纪律）。
 
 进度续记见下方追加行。
+**[INBOX-017 进度 1]** 刀P 落地（commit 见 git log）：agent_tools 五工具+循环协议+沙箱全部实现，11 测试绿，auto_repair 开关接入（默认关）。待办=预注册对照实验（工具循环 vs RepoFixer，判别力夹具 72/86 起点），实验后续记结果与裁决。
+
