@@ -487,7 +487,7 @@ def main(argv: list[str] | None = None) -> int:
     task_budget = None
     if tree is not None:
         from app.arcbench_ingest import count_requirements
-        from app.utils.budget import task_envelope
+        from app.utils.budget import size_aware_budget, task_envelope
 
         n_atomic = count_requirements(tree)
         # 字数项与条数项并列：正式赛题面「条少字多」（github 每条 3,120 字符，

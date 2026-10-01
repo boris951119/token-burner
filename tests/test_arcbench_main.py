@@ -420,7 +420,7 @@ class TestForcedRouteOnTreeEntry:
         assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 0
         assert captured["run_kwargs"]["budget_override"] == 300_000
         printed = capsys.readouterr().out
-        assert "硬帽 300,000 已砍" in printed, printed[-500:]
+        assert "硬帽=300,000" in printed and "任务信封=300,000 token" in printed, printed[-500:]
 
     def test_tree_entry_gets_size_aware_budget_envelope(
             self, monkeypatch, tmp_path, req_dir):
