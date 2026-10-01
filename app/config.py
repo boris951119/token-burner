@@ -527,8 +527,9 @@ def apply_workflow_mode(settings: "Settings") -> "Settings":
     if mode == "auto":
         return settings
     if mode == "single":
-        m = settings.models[0]
-        settings.models = [m, m, m]
+        # 平台单模型既有形态=[m] 单元素（_validate 拒绝重复项；三角色由
+        # _model_triplet 同模补位）——首跑实测 [m,m,m] 被预检判死。
+        settings.models = [settings.models[0]]
         settings.single_model_mode = True
         return settings
     if mode == "multi":

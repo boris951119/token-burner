@@ -25,15 +25,15 @@ def test_auto_is_zero_change():
 def test_single_collapses_to_first_model():
     s = _settings(["pro", "flash", "qwen"], mode="single")
     out = apply_workflow_mode(s)
-    assert out.models == ["pro", "pro", "pro"]      # 三角色同模
-    assert out.single_model_mode is True
+    assert out.models == ["pro"]                    # 平台单模型形态（单元素）
+    assert out.single_model_mode is True            # 三角色由 _model_triplet 补位
 
 
 def test_single_with_platform_injected_one_model_kept():
     """平台注入 MODEL 后只有 1 模型：single 保形不报错。"""
     s = _settings(["flash"], mode="single")
     out = apply_workflow_mode(s)
-    assert out.models == ["flash", "flash", "flash"]
+    assert out.models == ["flash"]
 
 
 def test_multi_requires_three_distinct():
