@@ -191,6 +191,9 @@ class DevLoopEngine:
         # 刀M：生成规范 skill（HOW——呈现/装配规范；WHAT 逐字事实走
         # 所有权 checklist 注入，两通道不可互代。默认空=零行为变化）
         self.skills_summary: str = ""
+        # 全局意图回流（INBOX-017 讨论定案）：spec 摘要随写码视野常驻，
+        # 第 N 个模块也看得见整体设计。默认空=零行为变化。
+        self.spec_summary: str = ""
 
     # ------------------------------------------------------------------
 
@@ -239,6 +242,11 @@ class DevLoopEngine:
         skills = getattr(self, "skills_summary", "") or ""
         if skills:
             base = base + "\n\n" + skills
+        # 全局意图回流：spec 摘要（确定性别名 digest，非全文——防稀释）
+        spec_sum = getattr(self, "spec_summary", "") or ""
+        if spec_sum:
+            base = (base + "\n\n## 全局设计意图（spec 摘要，保持架构与"
+                    "风格一致）\n" + spec_sum)
         # M10-3：Researcher 研究参考段（内容已含数据边界标记与超长截断，
         # 此处仅拼接；空上下文零改动——researcher_enabled 关闭时行为不变）
         if self.research_context:

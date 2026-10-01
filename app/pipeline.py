@@ -824,6 +824,12 @@ class Pipeline:
                     detect_skills(requirement))
             except Exception:
                 self._skills_summary = ""
+            # 全局意图回流：spec 摘要随写码视野常驻（确定性 digest）
+            try:
+                from app.utils.agent_tools import spec_digest
+                self._spec_digest = spec_digest(final_spec)
+            except Exception:
+                self._spec_digest = ""
 
             # 中断恢复（产品审计问题 4）：进入模块开发前落盘恢复快照——
             # 恢复所需的最小充分状态（order / plans / interfaces / 模式 / 模型）
@@ -936,6 +942,16 @@ class Pipeline:
             self._peer_exports_summary = ""
         # 刀M：skill 摘要挂槽（默认空串=零行为变化）
         dev_loop.skills_summary = getattr(self, "_skills_summary", "") or ""
+        # 全局意图回流：spec 摘要挂槽；resume 时从盘上 spec.md 重读
+        spec_sum = getattr(self, "_spec_digest", "")
+        if not spec_sum:
+            try:
+                from app.utils.agent_tools import spec_digest
+                spec_sum = spec_digest(
+                    (project_root / "spec.md").read_text(encoding="utf-8"))
+            except Exception:
+                spec_sum = ""
+        dev_loop.spec_summary = spec_sum
         # v52：schema 权威摘要进写码提示（盘上已有 CREATE TABLE）
         try:
             from app.utils.schema_audit import format_schema_authority

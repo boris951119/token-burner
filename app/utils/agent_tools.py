@@ -390,3 +390,24 @@ def tool_repair(llm, repo_root: Path, issue: str,
     """
     belt = ToolBelt(root=repo_root, check_cmd=check_cmd)
     return run_tool_loop(llm, belt, issue, max_turns=max_turns)
+
+
+def spec_digest(spec_md: str, head: int = 1800, tail: int = 400) -> str:
+    """全局意图回流：spec.md → 写码提示可承载的摘要。
+
+    结构优先：先取标题行（# / ## / ###）拼骨架，不足 head 再补正文开头；
+    超长时 head+tail 夹逼。目的=让第 N 个模块的写码视野里有全局设计
+    （此前 spec 落盘后不回流，风格/架构一致性靠运气）。
+    """
+    text = (spec_md or "").strip()
+    if not text:
+        return ""
+    if len(text) <= head + tail:
+        return text
+    heads = [ln for ln in text.splitlines() if ln.lstrip().startswith("#")]
+    skeleton = "\n".join(heads[:40])
+    digest = f"{skeleton}\n\n(正文开头)\n{text[:head]}"
+    if len(digest) > head + tail:
+        digest = digest[:head + tail]
+    digest += f"\n\n(正文结尾)\n{text[-tail:]}"
+    return digest
