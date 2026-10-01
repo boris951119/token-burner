@@ -395,6 +395,18 @@ def tool_repair(llm, repo_root: Path, issue: str,
 def spec_digest(spec_md: str, head: int = 1800, tail: int = 400) -> str:
     """全局意图回流：spec.md → 写码提示可承载的摘要。
 
+    失败偏空（Cursor 软建议采纳）：任何内部异常返回 ""——半截摘要
+    污染全部模块写码视野，比没有摘要更糟。
+    """
+    try:
+        return _spec_digest_impl(spec_md, head, tail)
+    except Exception:
+        return ""
+
+
+def _spec_digest_impl(spec_md: str, head: int = 1800, tail: int = 400) -> str:
+    """全局意图回流：spec.md → 写码提示可承载的摘要。
+
     结构优先：先取标题行（# / ## / ###）拼骨架，不足 head 再补正文开头；
     超长时 head+tail 夹逼。目的=让第 N 个模块的写码视野里有全局设计
     （此前 spec 落盘后不回流，风格/架构一致性靠运气）。

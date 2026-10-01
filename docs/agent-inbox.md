@@ -321,3 +321,5 @@ def render_skills_summary(skills, surface) -> str     # 过滤后渲染进 skill
 **[INBOX-017 进度 3 + 全局意图回流（10-01，259f3b8）]**：讨论/拆分段补上最后一块视野缺口——spec_digest 确定性摘要（骨架标题+首尾夹逼）随写码提示常驻（DevLoopEngine.spec_summary 槽），第 N 个模块也看得见全局设计；resume 从盘上 spec.md 重读；空摘要零行为。5 测试含挂槽回归，全量 2054 绿。**下一步待用户定**：验证 run 跑线上（官方 key ¥299.71，api.arc-bench.com/v1，官方模型名）或线下（token-plan 端点）。
 **[INBOX-017 进度 4 + 完整 run 前的 pre-flight（10-01）]**：七项变更叠一次 run（刀L/M/N/O、预算 1.5×、刀P、spec 回流、新编队），归因会糊——按用户批准做窄 pre-flight：①三道判断题请 Cursor 快扫（只提异议，不评审会）：**(a) 信封语义变化**——task_envelope 折算×1.5 后可超过配置托底（"托底=只抬不砍"的老语义被改：小任务 2M→2.16M，需要更多时给更多）；**(b) glm-5.3-flash 写码腿零生产履历**（昨日修复两通道皆败）；**(c) spec_summary 进每次写码提示**（digest 抽取异常=39 模块全污染）。②微型彩排：arc-bench-lite keep 题（32 原子/17.7k 字符，9/23 彩排同源）官方测试端点实跑，目标=引爆机械炸点（部件/DB 内核落盘、spec 摘要进提示、自测 JSON 真实模型解析、导出探针），非打分。
 
+**Cursor 扫描回执（10-01 10:2x，用户转达）**：**(b) 异议成立**——glm-5.3-flash 修复两通道皆败，不宜默认当写码主腿；keep 彩排写码不稳立刻换回 deepseek-v4-flash（决策规则：fix_attempts 高位密集/冻结出现即判不稳）。**(a)(c) 无硬异议，软建议采纳**：(a) 横幅写清信封四段（折算×余量、托底、硬帽、最终值）——本批已改；(c) spec 摘要失败偏空——digest 内部加防御性空回退。
+

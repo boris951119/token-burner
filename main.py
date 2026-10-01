@@ -504,11 +504,12 @@ def main(argv: list[str] | None = None) -> int:
         # 单次成本与墙钟才控得住（￥62.69 / 10 小时 → 目标 ￥10 / 2-3 小时）。
         _cap = getattr(settings, "max_task_tokens_cap", 0) or 0
         task_budget = task_envelope(n_atomic, req_chars, _floor, _cap)
-        print(f"[task] 原子需求={n_atomic} 条 题面={req_chars:,} 字符 → 任务信封"
-              f"={task_budget:,} token（条数/字数两式取大，与配置 {_floor:,} "
-              f"取大＝只抬不砍"
-              f"{'，硬帽 ' + format(int(_cap), ',') + ' 已砍' if int(_cap or 0) > 0 and task_budget == int(_cap) else ''}"
-              f"{'，本次由配置托底' if int(_floor or 0) > 0 and task_budget == int(_floor) else ''}）",
+        print(f"[task] 原子需求={n_atomic} 条 题面={req_chars:,} 字符 → "
+              f"折算={size_aware_budget(n_atomic, req_chars):,}"
+              f"×修复余量1.5={int(size_aware_budget(n_atomic, req_chars) * 1.5):,}"
+              f"，托底={int(_floor or 0):,}"
+              f"，硬帽={int(_cap or 0):,}（0=不砍）"
+              f"→ 任务信封={task_budget:,} token",
               flush=True)
     # 网关长挂防御：单请求实测可挂 25 分钟+（httpx read timeout 是字节
     # 间隙口径，滴字续命永不触发）；墙钟 600s 超时即刻换腿
