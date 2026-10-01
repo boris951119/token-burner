@@ -439,8 +439,8 @@ class TestForcedRouteOnTreeEntry:
             monkeypatch, _team_result(tmp_path / "db"))
         assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 0
         # req_dir 夹具的树里 1 条 ATOMIC
-        # 10-01 余量语义：信封含验收修复段（820k×1.5）
-        assert captured["run_kwargs"]["budget_override"] == int(size_aware_budget(1) * 1.5)
+        # 10-01 余量语义：信封含验收修复段（820k×2.0）
+        assert captured["run_kwargs"]["budget_override"] == int(size_aware_budget(1) * 2.0)
 
     def test_text_entry_leaves_budget_to_config(self, monkeypatch, tmp_path):
         """纯文本需求没有题面可量 → 不折算，仍走配置/代码缺省。"""
@@ -604,7 +604,7 @@ class TestGatewayPreflight:
             lambda settings: (_ for _ in ()).throw(RuntimeError("全灭")))
         assert entry.main([str(req_dir), "-o", str(out), "--mode", "auto"]) == 0
         printed = capsys.readouterr().out
-        assert f"任务信封={int(size_aware_budget(1) * 1.5):,}" in printed, printed[-400:]
+        assert f"任务信封={int(size_aware_budget(1) * 2.0):,}" in printed, printed[-400:]
 
 
 # ---- 预算中止的手半成品：不导出 = 已经写出来的代码换 0 分 ----

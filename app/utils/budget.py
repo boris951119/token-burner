@@ -52,11 +52,12 @@ def get_active_budget_guard() -> "BudgetGuard | None":
     return _active_guard
 
 
-# 修复余量系数（10-01 标定）：完赛队伍实测 6,798,643 token vs 我方 sheet
-# 信封 4,862,430 = 1.40×；且我方三次 run 精确烧满信封死于验收前
-# （088dd22 101.5% / 9ac543c 100.2% / sheet_p0 100.1%）——折算口径只算了
-# 生成段，验收+自测+修复段的钱从来没进公式。取 1.5（1.40 数据 + 边际）。
-REPAIR_HEADROOM = 1.5
+# 修复余量系数（10-01 两轮标定）：完赛队伍实测 6.8M/4.86M=1.40×；
+# 我方四次 run 精确烧满信封死于验收链（088dd22/9ac543c/sheet_p0/keep 彩排
+# 100.4%——keep 实耗 2,168,210/折算 1,440,000=1.51×，死在自测生成中途，
+# 交付树已落盘探针全绿）。折算口径只算生成段，验收+自测+修复段的钱
+# 从未进公式。取 2.0（1.51 实测下界 + 自测未跑完的尾部 + 边际）。
+REPAIR_HEADROOM = 2.0
 
 
 def task_envelope(n_requirements: int, text_chars: int,

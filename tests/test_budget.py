@@ -425,23 +425,23 @@ class TestTaskEnvelopeOnlyRaises:
     def test_small_practice_task_headroom_now_exceeds_old_floor(self):
         from app.utils.budget import task_envelope
 
-        # 10-01 余量语义：折算 1.44M ×1.5 = 2.16M——「真实需要」含验收
+        # 10-01 余量语义：折算 1.44M ×2.0 = 2.16M——「真实需要」含验收
         # 修复段，高于旧托底 2M 时取需要值（旧断言 2M 已死：那是三次
         # 100% 断气死法的公式根源）
-        assert task_envelope(32, 17_797, 2_000_000) == 2_160_000
+        assert task_envelope(32, 17_797, 2_000_000) == 2_880_000
 
     def test_char_term_still_wins_when_it_is_the_larger_number(self):
         from app.utils.budget import size_aware_budget, task_envelope
 
         got = task_envelope(47, 146_637, 2_000_000)
-        expect = int(size_aware_budget(47, 146_637) * 1.5)
+        expect = int(size_aware_budget(47, 146_637) * 2.0)
         assert got == expect > 2_000_000
 
     def test_sheet_task_gets_the_config_floor_it_actively_needed(self):
         """官方那一跑死于 1,645,515 / 1,621,440：配置托底后同样的用量不会断气。"""
         from app.utils.budget import task_envelope
 
-        assert task_envelope(24, 54_048, 2_000_000) == 2_432_160  # 1.62M×1.5
+        assert task_envelope(24, 54_048, 2_000_000) == 3_242_880  # 1.62M×2.0
         assert task_envelope(24, 54_048, 2_000_000) > 1_645_515
 
     @pytest.mark.parametrize("floor", [0, None, -5, "abc"])
@@ -449,7 +449,7 @@ class TestTaskEnvelopeOnlyRaises:
         from app.utils.budget import size_aware_budget, task_envelope
 
         try:
-            expect = int(size_aware_budget(24, 54_048) * 1.5)
+            expect = int(size_aware_budget(24, 54_048) * 2.0)
             assert task_envelope(24, 54_048, floor) == expect
         except (TypeError, ValueError):
             # 脏值只允许被当成「没有托底」，不允许把启动折算换成一次异常
@@ -484,8 +484,8 @@ class TestTaskEnvelopeHardCap:
     def test_cap_above_the_envelope_only_does_not_raise_it(self):
         from app.utils.budget import task_envelope
 
-        # cap 高于信封时不抬升——信封本身已含 1.5× 余量（2.43M）
-        assert task_envelope(24, 54_048, 2_000_000, 5_000_000) == 2_432_160
+        # cap 高于信封时不抬升——信封本身已含 2.0× 余量（3.24M）
+        assert task_envelope(24, 54_048, 2_000_000, 5_000_000) == 3_242_880
 
     @pytest.mark.parametrize("cap", [None, "abc", -1, True, 1.5, 1_500.5])
     def test_dirty_cap_fails_toward_no_cap(self, cap):
