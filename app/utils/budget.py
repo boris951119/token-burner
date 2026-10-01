@@ -52,6 +52,13 @@ def get_active_budget_guard() -> "BudgetGuard | None":
     return _active_guard
 
 
+# 修复余量系数（10-01 标定）：完赛队伍实测 6,798,643 token vs 我方 sheet
+# 信封 4,862,430 = 1.40×；且我方三次 run 精确烧满信封死于验收前
+# （088dd22 101.5% / 9ac543c 100.2% / sheet_p0 100.1%）——折算口径只算了
+# 生成段，验收+自测+修复段的钱从来没进公式。取 1.5（1.40 数据 + 边际）。
+REPAIR_HEADROOM = 1.5
+
+
 def task_envelope(n_requirements: int, text_chars: int,
                   config_floor: int = 0, hard_cap: int = 0) -> int:
     """单任务实际信封：`min( max(题面折算, 配置托底), 硬帽 )`。
@@ -75,7 +82,12 @@ def task_envelope(n_requirements: int, text_chars: int,
     except (TypeError, ValueError):
         # 配置里的脏值只允许被看成「没有托底」——启动折算不能换成一次崩溃
         floor = 0
-    envelope = max(size_aware_budget(n_requirements, text_chars), floor)
+    # 修复余量：×1.5 后再与托底/硬帽结算——「真实需要」含验收修复段，
+    # 托底若低于加余量后的折算，照旧只抬不砍（三次 100% 断气的共同死因
+    # 就是许可恰好卡在生成段成本线上）。
+    envelope = max(
+        int(size_aware_budget(n_requirements, text_chars) * REPAIR_HEADROOM),
+        floor)
     try:
         cap = int(hard_cap)
     except (TypeError, ValueError):
