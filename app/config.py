@@ -103,6 +103,10 @@ class Settings:
     # read/grep/edit/check/probe 工具循环替代整文件 JSON 补丁；缺省
     # False=原 RepoFixer 通道，平台行为零变化。
     repair_tool_mode: bool = False
+    # 工作流模式（10-01 用户功能）：auto=现状（按模型数自动，缺省零变化）；
+    # single=单模型档（全角色同模 + spec 单发 + 修复不跨模型——完赛队伍
+    # 单 flash 99% 的档位，无编排税）；multi=显式三腿编队（不足明报错）。
+    workflow_mode: str = "auto"
     budget_throttle_threshold: float = 0.9     # 11.0：≥90% 进入省 token 模式
     # 11.0 修复保留额：总预算里划给「验收后的 LLM 修复」那一段的比例。省 token
     # 模式据此提前触发（越过 预算-保留额 就地收敛，不再加讨论轮），使总闸之前
@@ -508,6 +512,35 @@ class Settings:
 # get_type_hints 解析字符串注解（因 from __future__ import annotations），
 # 得到字段名 -> 真实类型的映射，供 config.json 类型核验使用
 _SETTINGS_FIELDS: dict[str, Any] = get_type_hints(Settings)
+
+
+def apply_workflow_mode(settings: "Settings") -> "Settings":
+    """按 workflow_mode 归一化 models（就地修改并返回，auto=零变化）。
+
+    - single：三角色全部取 models[0]（同模补位）——修复升级链自然退化为
+      同模重试（无跨模型上下文重发的编排税）；讨论段由 DiscussionEngine
+      按 mode 走单发 spec。
+    - multi：互异模型 <3 个时明确报错（不再默默同模凑数）。
+    - 非法值：启动即报（配置错误不允许静默回落）。
+    """
+    mode = (getattr(settings, "workflow_mode", "auto") or "auto").strip().lower()
+    if mode == "auto":
+        return settings
+    if mode == "single":
+        m = settings.models[0]
+        settings.models = [m, m, m]
+        settings.single_model_mode = True
+        return settings
+    if mode == "multi":
+        distinct = list(dict.fromkeys(settings.models))
+        if len(distinct) < 3:
+            raise ValueError(
+                f"workflow_mode=multi 需要至少 3 个互异模型，当前只有 "
+                f"{len(distinct)} 个: {distinct}")
+        settings.models = distinct[:3]
+        settings.single_model_mode = False
+        return settings
+    raise ValueError(f"workflow_mode 非法: {mode!r}（可选 auto|single|multi）")
 
 
 def load_settings(

@@ -464,6 +464,8 @@ def main(argv: list[str] | None = None) -> int:
               f"{type(exc).__name__}: {exc}", flush=True)
         settings = Settings()
     _apply_runner_model(settings)
+    from app.config import apply_workflow_mode
+    apply_workflow_mode(settings)
     # 诊断实证：配置实况打印进容器 stdout——平台侧故障的第一手证据
     print(f"[config] file={config_file} exists={config_file.is_file()} "
           f"models={list(settings.models)} "

@@ -663,6 +663,30 @@ class DiscussionEngine:
         t0 = self._clock()  # 批次#20 时间闸基准（本阶段起点，非任务起点）
         pid = project_id or self.project_id
         # M7-6：需求文本不可信，进入提示词前包裹数据边界
+        # single 档（10-01 用户功能）：单发 spec——一次出稿，质量由
+        # spec↔REQ 对账 + 原子覆盖闸机械兜底（讨论轮对正确性的贡献已被
+        # 闸覆盖；多模型附和式评审的 token/墙钟全部省下）。
+        if (getattr(self.settings, "workflow_mode", "auto") or "auto") == "single":
+            proposal = self._chat(
+                self.main_model,
+                [
+                    {"role": "system", "content": CONVERGE_SPEC_SYSTEM},
+                    {"role": "user", "content": CONVERGE_SPEC_USER.format(
+                        requirement=sanitize_untrusted(requirement),
+                        history="（单发模式：无前置讨论轮，直接从需求出稿）",
+                    )},
+                ],
+            )
+            self._record_message("pm_converge", self.main_model, 0, proposal)
+            outcome = DiscussionOutcome(
+                spec_md=proposal,
+                rounds_completed=0,
+                converged=True,
+                frozen=False,
+                discussion_summary="[single] 单发 spec（0 讨论轮，机械闸兜底）",
+            )
+            self._persist_discussion(pid, outcome)
+            return outcome
         proposal = self._chat(
             self.main_model,
             [

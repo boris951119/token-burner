@@ -12,5 +12,6 @@
   "max_response_tokens": 12000,
   "max_task_tokens": 2000000,
   "max_task_tokens_cap": 0,
-  "selftest_specs_enabled": true
+  "selftest_specs_enabled": true,
+  "workflow_mode": "single"
 }
