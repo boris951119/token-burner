@@ -182,13 +182,113 @@ class ToolBelt:
 每轮一步；check 绿了就停止并报告。"""
 
 
+def _split_args(inner: str) -> list[str]:
+    """顶层逗号切分（引号内逗号原样）。"""
+    parts, buf, q = [], [], ""
+    for ch in inner:
+        if q:
+            buf.append(ch)
+            if ch == q:
+                q = ""
+            continue
+        if ch in "'\"":
+            q = ch
+            buf.append(ch)
+            continue
+        if ch == ",":
+            parts.append("".join(buf).strip())
+            buf = []
+            continue
+        buf.append(ch)
+    if "".join(buf).strip():
+        parts.append("".join(buf).strip())
+    return parts
+
+
+def _unquote(tok: str) -> str:
+    t = tok.strip()
+    if len(t) >= 2 and t[0] == t[-1] and t[0] in "'\"":
+        return t[1:-1]
+    return t
+
+
+_KWARG_RE = re.compile(r"^\w+\s*=\s*" )
+
+
+def _strip_kwarg(tok: str) -> str:
+    """`path="."` → `"."`（kwargs 前缀剥离；值保留引号由 _unquote 处理）。"""
+    m = _KWARG_RE.match(tok)
+    if m:
+        return tok[m.end():]
+    return tok
+
+
+_XML_CALL_RE = re.compile(
+    r"<(?:invoke|tool_call|function)\b[^>]*\bname=[\"']([\w.]+)[\"']", re.I)
+_XML_PARAM_RE = re.compile(r"<parameter[^>]*>(.*?)</parameter>", re.S | re.I)
+
+
+def _extract_call(raw: str):
+    """三形态统一提取（同一模型会轮换使用，全都要收）：
+    ① 行协议 `grep('p', '.')`（含 kwargs 变体 `grep("p", path=".")`）
+    ② 原生 XML：`<invoke name=..>` / `<tool_call name=..>` + <parameter>
+    ③ 无调用 → None
+    返回 (name, args_list)；args 为字符串列表（未按 arity 校验）。
+    """
+    text = (raw or "").strip()
+    if not text:
+        return None
+    line = text.splitlines()[0].strip()
+    m = re.match(r"(read|grep|edit|check|probe)\((.*)\)\s*$", line)
+    if m:
+        name, inner = m.group(1), m.group(2)
+        if not inner.strip():
+            return name, []
+        args = [_unquote(_strip_kwarg(t)) for t in _split_args(inner)]
+        return name, [a for a in args if a != ""]
+    xm = _XML_CALL_RE.search(text)
+    if xm:
+        name = xm.group(1)
+        params = _XML_PARAM_RE.findall(text)
+        args = []
+        for p in params:
+            p = re.sub(r"<!\[CDATA\[(.*)\]\]>", r"\1", p, flags=re.S)
+            args.append(p.strip())
+        return name, args
+    return None
+
+
+def _extract_calls(raw: str) -> list[tuple[str, list[str]]]:
+    """一轮全部调用（XML 批量形态逐个收；行协议单发）。"""
+    text = (raw or "").strip()
+    single = _extract_call(text)
+    if single is None:
+        return []
+    # XML 批量：逐个 invoke/tool_call 块解析
+    calls: list[tuple[str, list[str]]] = []
+    for block in re.findall(
+            r"<(?:invoke|tool_call|function)\b.*?</(?:invoke|tool_call|function)>",
+            text, re.S | re.I):
+        nm = re.search(r'\bname=["\']([\w.]+)["\']', block)
+        if not nm:
+            continue
+        params = re.findall(r"<parameter[^>]*>(.*?)</parameter>",
+                            block, re.S | re.I)
+        args = [re.sub(r"<!\[CDATA\[(.*)\]\]>", r"\1", p,
+                       flags=re.S).strip() for p in params]
+        calls.append((nm.group(1), args))
+    if calls:
+        return calls
+    return [single]
+
+
 def run_tool_loop(llm, belt: ToolBelt, issue: str,
                   max_turns: int = 24, system: str = "") -> dict:
     """大脑+工具循环：LLM 每轮发一条工具调用，结果回喂，直到达标/预算尽。
 
     llm(system, user) -> str。返回 {ok, turns, trace, last_output}。
-    协议极简（无 function-calling 依赖，任意 chat 模型可用）：
-    模型每轮只输出一行 `工具(参数)` 或 `DONE 原因`。
+    协议宽容（_extract_call）：行协议/kwargs/原生 XML 三形态全收——
+    实测同一模型会在这些形态间轮换，任何单一协议都会空转烧轮。
     """
     sys_prompt = (system or "你是修复工程师，用小步工具修红字。") + "\n\n" + \
         ToolBelt.TOOLS_DOC + f"\n\n问题：\n{issue[:6000]}"
@@ -202,31 +302,42 @@ def run_tool_loop(llm, belt: ToolBelt, issue: str,
             final = belt.check()
             return {"ok": final.ok, "turns": turn,
                     "trace": list(belt.trace), "last_output": final.output}
-        m = re.match(r"(read|grep|edit|check|probe)\((.*)\)\s*$", line)
-        if not m:
-            history.append(f"[系统] 格式错误，只输出一行如 edit('a.py', old, new) "
-                           f"或 DONE 原因。你上一轮输出: {line[:120]}")
+        calls = _extract_calls(raw)
+        if not calls:
+            history.append(
+                f"[系统] 未识别到工具调用，只输出一行如 edit('a.py', "
+                f"'old', 'new') 或 DONE 原因。你上一轮输出: {line[:120]}")
             belt.trace.append(f"[turn{turn}] bad-format")
             continue
-        name, argstr = m.group(1), m.group(2)
-        arity = {"read": 1, "grep": 2, "edit": 3, "check": 0,
-                 "probe": 1}.get(name)
-        try:
-            args = _parse_args(argstr, arity)
-        except ValueError as exc:
-            history.append(f"[系统] 参数解析失败: {exc}")
-            belt.trace.append(f"[turn{turn}] bad-args")
-            continue
-        if name == "grep" and len(args) == 1:
-            args = args + (".",)
-        try:
-            res = getattr(belt, name)(*args)
-        except TypeError as exc:
-            history.append(f"[系统] 参数个数不符: {exc}")
-            belt.trace.append(f"[turn{turn}] bad-arity")
-            continue
-        history.append(f"[{name} 结果] {'ok' if res.ok else 'err'}\n{res.output[:3000]}")
-        if name == "check" and res.ok:
+        turn_green = False
+        for name, arglist in calls:
+            if name not in ("read", "grep", "edit", "check", "probe"):
+                history.append(f"[系统] 未知工具 {name}（跳过）")
+                belt.trace.append(f"[turn{turn}] unknown-tool:{name}")
+                continue
+            arity = {"read": 1, "grep": 2, "edit": 3, "check": 0,
+                     "probe": 1}.get(name)
+            if len(arglist) != arity and not (name == "grep" and
+                                              len(arglist) == arity - 1):
+                history.append(f"[系统] {name} 需要 {arity} 个参数，"
+                               f"收到 {len(arglist)} 个")
+                belt.trace.append(f"[turn{turn}] bad-arity")
+                continue
+            args = tuple(arglist)
+            if name == "grep" and len(args) == 1:
+                args = args + (".",)
+            try:
+                res = getattr(belt, name)(*args)
+            except Exception as exc:  # 工具异常不清零预算
+                history.append(
+                    f"[系统] 工具异常: {type(exc).__name__}: {exc}"[:300])
+                belt.trace.append(f"[turn{turn}] tool-error")
+                continue
+            history.append(f"[{name} 结果] {'ok' if res.ok else 'err'}"
+                           f"\n{res.output[:3000]}")
+            if name == "check" and res.ok:
+                turn_green = True
+        if turn_green:
             belt.trace.append(f"[turn{turn}] check-green 收敛")
             return {"ok": True, "turns": turn, "trace": list(belt.trace),
                     "last_output": res.output}

@@ -120,3 +120,40 @@ def test_tool_loop_bad_format_coached(repo):
     b = belt(repo)
     out = run_tool_loop(llm, b, "x", max_turns=4)
     assert out["turns"] == 2 and "bad-format" in out["trace"][0]
+
+
+def test_three_call_forms_all_accepted(repo):
+    """实测三形态：行协议 / kwargs / XML（<tool_call> 与 <invoke> 都收）。"""
+    from app.utils.agent_tools import _extract_call
+    assert _extract_call("grep('A', '.')") == ("grep", ["A", "."])
+    assert _extract_call('grep("A", path=".")') == ("grep", ["A", "."])
+    xml1 = ('<tool_calls>\n<tool_call name="grep">\n'
+            '<parameter name="pattern" string="true">Create</parameter>\n'
+            '<parameter name="path" string="true">.</parameter>\n'
+            '</tool_call>\n</tool_calls>')
+    assert _extract_call(xml1) == ("grep", ["Create", "."])
+    xml2 = ('<tool_calls>\n<invoke name="edit">\n'
+            '<parameter name="file">a.py</parameter>\n'
+            '<parameter name="old">x=1</parameter>\n'
+            '<parameter name="new">x=2</parameter>\n'
+            '</invoke>\n</tool_calls>')
+    assert _extract_call(xml2) == ("edit", ["a.py", "x=1", "x=2"])
+    assert _extract_call("just prose") is None
+
+
+def test_native_xml_tool_call_accepted(repo):
+    """deepseek/glm 网关原生 XML 工具调用形态（pro 30 轮全灭的根因回归）。"""
+    seq = [
+        '<tool_calls>\n<invoke name="grep">\n'
+        '<parameter name="pattern">Workbook</parameter>\n'
+        '<parameter name="path">.</parameter>\n</invoke>\n</tool_calls>',
+        "DONE seen it",
+    ]
+
+    def llm(system: str, user: str) -> str:
+        return seq.pop(0)
+
+    b = belt(repo)
+    out = run_tool_loop(llm, b, "找 Workbook", max_turns=4)
+    assert out["turns"] == 2
+    assert "grep(" in out["trace"][0] and "bad-format" not in out["trace"][0]
