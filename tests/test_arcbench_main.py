@@ -354,10 +354,11 @@ class TestRunnerModelAutocomplete:
         s = self._apply(monkeypatch, "deepseek-v4-pro",
                         "https://api.arc-bench.com/v1",
                         True, raw["models"])
-        # 用户指定编队（09-30）：写码 glm-5.3-flash / 测试 qwen3.8-max /
-        # 主帅 deepseek-v4-pro；三腿在官方测试端点逐一验证在线
+        # 用户定稿编队（10-01）：写码腿 glm-5.3-flash 彩排实测吞吐慢 2 倍
+        # （21.5 分钟/模块 vs deepseek-flash 8-12），换回 deepseek-v4-flash；
+        # 测试 qwen3.8-max / 主帅 deepseek-v4-pro 不变
         assert set(_model_triplet(s.models)) == {
-            "openai/deepseek-v4-pro", "openai/glm-5.3-flash",
+            "openai/deepseek-v4-pro", "openai/deepseek-v4-flash",
             "openai/qwen3.8-max"}
         assert s.models[0] == "openai/deepseek-v4-pro"
     def test_official_relay_single_model_autocompletes(self, monkeypatch):
