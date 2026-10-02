@@ -99,7 +99,10 @@ def test_main_source_guards_before_force_stage3():
     src = (ROOT / "main.py").read_text(encoding="utf-8")
     assert "probe_fast_guard_issues" in src
     assert "守卫红 → 退出快车道" in src
-    assert "探针已绿且守卫通过" in src
+    # 可执行路径不得再强制跳过自测交卷
+    assert 'print("[probe-fast] 入口修补超时，强制交' not in src
+    assert "完整验收" in src
+    assert "自测不跳过" in src
 
 
 def test_surface_sidecar_writes_under_code(tmp_path):

@@ -1123,6 +1123,15 @@ def selftest_gate(project_dir: Path, requirement: str, settings,
                           *(["--requirements-dir", str(requirements_dir)]
                             if requirements_dir else [])],
                 extra_issue=issue)
+        except LLMAccountError as exc:
+            notes.append(
+                f"[selftest][R{rnd}] 账户级止损停修: {str(exc)[:120]}")
+            print(
+                f"[selftest] 账户级 LLM 错误…止损停修（修复轮）: "
+                f"{str(exc)[:150]}",
+                flush=True,
+            )
+            break
         except Exception as exc:
             notes.append(f"[selftest][R{rnd}] 修复异常 {exc!r}"[:160])
             break

@@ -747,9 +747,8 @@ def main(argv: list[str] | None = None) -> int:
                 verify_delivery,
             )
 
-            # 探针已绿：入口修补有 8 分钟墙钟——但仅当工厂/表单/语言守卫
-            # 也绿。v55 双题：语言红只在 verify 内 demote，外层仍 8 分钟
-            # 强制交 → 0/100。
+            # 探针已绿：入口修补后仍走完整验收（冷库/[schema]/自测）。
+            # 旧 8 分钟强制交卷会在 verify 未跑自测时交卷 → 96a4 假绿。
             early = _export_official_layout(workdir, result.project_dir,
                                            note="抢先交付（验收前）",
                                            requirement=requirement)
@@ -759,45 +758,39 @@ def main(argv: list[str] | None = None) -> int:
                     Path(result.project_dir) / "code", requirement or "")
             if _probe_green(early) and not guards:
                 used_probe_fast = True
-                # ed77881：整段跳过验收能交卷，但首页不是真入口时官方 0/100。
-                # 守卫已绿才留一轮入口修补；墙钟 8 分钟到点强制交。
-                print("[probe-fast] 探针已绿且守卫通过 → 入口修补上限 8 分钟，"
-                      "到点强制交 Stage3", flush=True)
-                # 顶层已 import threading；此处再 import 会让整函数把
-                # threading 当局部名 → 前面看门狗 Thread(...) UnboundLocalError
-                # （57e3 题面 vision 后立刻崩，只交骨架，0/100）。
-                box: dict = {}
+                print(
+                    "[probe-fast] 探针已绿且守卫通过 → 入口修补后完整验收"
+                    "（冷库/[schema]/自测不跳过，无强制 Stage3）",
+                    flush=True,
+                )
+                try:
+                    ok, report = verify_delivery(
+                        result.project_dir, requirement, settings,
+                        requirements_dir=_ring_requirements_dir(req_dir),
+                        probe_green=True,
+                        repair_budget_s=8 * 60,
+                    )
+                except Exception as exc:
+                    import traceback
 
-                def _bounded():
-                    try:
-                        box["r"] = verify_delivery(
-                            result.project_dir, requirement, settings,
-                            requirements_dir=_ring_requirements_dir(req_dir),
-                            probe_green=True,
-                            repair_budget_s=8 * 60,
-                        )
-                    except Exception as exc:
-                        box["e"] = exc
-
-                worker = threading.Thread(target=_bounded, daemon=True)
-                worker.start()
-                worker.join(8 * 60 + 20)
-                if worker.is_alive():
-                    print("[probe-fast] 入口修补超时，强制交 Stage3", flush=True)
-                    report = "入口修补超时"
+                    traceback.print_exc()
                     ok = False
-                elif box.get("e"):
-                    # v56：异常不得当成功——仍交卷（平台 exit1=不评分），
-                    # 但摘要标明验收异常，避免监控把摔教练当绿。
-                    ok = False
-                    report = f"入口修补异常（照常交付）: {box['e']!r}"
-                else:
-                    ok, report = box.get("r") or (False, "verify 无返回")
+                    report = (
+                        f"验收器内部故障（照常交付）: {exc!r}\n"
+                        + traceback.format_exc()[-300:]
+                    )
+                print(f"[verify] {'PASS' if ok else 'FAIL'}", flush=True)
+                print(f"[verify] {report[-600:]}", flush=True)
                 result.deliverable_summary = (
                     (result.deliverable_summary or "交付完成")
-                    + "（probe-fast：探针已绿，入口修补后交 Stage3）"
+                    + "（probe-fast：入口修补后完整验收）"
                     + ("" if ok else " " + str(report)[-160:])
                 )
+                if not ok:
+                    result.deliverable_summary = (
+                        "交付完成（内部验收未通过，已尽力修复——详情见 verify "
+                        "报告尾部）: " + report[-200:]
+                    )
             else:
                 if guards:
                     print(

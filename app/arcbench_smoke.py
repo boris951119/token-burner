@@ -1770,9 +1770,13 @@ def _parse_mem_peak(report: str) -> float:
 def _llm_from(settings):
     """平台侧验收 LLM。模型级备胎链（平台首单取证：验收修复阶段
     pro 超时×3 全灭且无备胎，RuntimeError 崩穿 main → 平台 exit 1）
-    ——主模型失败后依 settings.models 逐备胎，全灭上抛由调用方容错。"""
+    ——主模型失败后依 settings.models 逐备胎，全灭上抛由调用方容错。
+
+    账户级错误（402/余额/鉴权）不换腿：与自测批止损同口径。
+    """
     from app.utils.budget import BudgetExceededError, TaskCancelledError
     from app.utils.model_client import ModelClient
+    from app.utils.selftest_gate import LLMAccountError, _ACCOUNT_FATAL_RE
 
     mc = ModelClient(settings)
     chain = tuple(settings.models[:3]) or ("openai/gpt-4o",)
@@ -1789,7 +1793,19 @@ def _llm_from(settings):
             except (BudgetExceededError, TaskCancelledError):
                 # 总闸不是「这条腿废了」：换腿续跑＝把中止指令改成多烧几腿
                 raise
-            except RuntimeError as exc:
+            except LLMAccountError:
+                raise
+            except Exception as exc:
+                if _ACCOUNT_FATAL_RE.search(str(exc)):
+                    print(
+                        f"[verify] 账户级 LLM 错误，止损停修: "
+                        f"{str(exc)[:150]}",
+                        flush=True,
+                    )
+                    raise LLMAccountError(str(exc)) from exc
+                if isinstance(exc, RuntimeError):
+                    last_exc = exc
+                    continue
                 last_exc = exc
                 continue
             if not content.strip():
@@ -2260,11 +2276,14 @@ def _beat(project_dir: Path, stage: str, detail: str = "") -> None:
 def probe_fast_guard_issues(
     code_dir: Path, requirement: str = "",
 ) -> list[str]:
-    """快车道守卫：工厂 / 表单×路由 / UI 语言。非空 = 不得走 8 分钟强制交。
+    """快车道守卫：工厂 / 表单×路由 / UI 语言 / schema。非空 = 不得走快车道。
 
     v55 双题尸检：语言红只在 verify_delivery 内把 probe_green 翻 False，
-    main 外层仍按 early export-probe 绿开 8 分钟 join → 强制 Stage3。
+    main 外层仍按 early export-probe 绿开强制 Stage3。
     守卫必须可被 main 在选路前单独调用（与 verify 内复用同一实现）。
+
+    96a4 / 深审：health+home 绿不能跳过 INSERT×DDL 漂移——schema 红必须
+    打回完整验收（冷库终检挂在 run_selftests，快车道不得绕过）。
     """
     code_dir = Path(code_dir)
     form_issues: list[str] = []
@@ -2290,8 +2309,16 @@ def probe_fast_guard_issues(
         auth_issues = check_auth_form_routes(code_dir)
     except Exception as exc:
         auth_issues = [f"入门表单×路由闸基础设施失败: {exc!r}"[:200]]
+    schema_issues: list[str] = []
+    try:
+        from app.utils.schema_audit import audit_schema
+        schema_issues = [f"[schema] {f}" for f in audit_schema(code_dir)]
+    except Exception as exc:
+        # 失败关闭：审计器挂了不能当绿灯放行快车道
+        schema_issues = [f"[schema] 审计基础设施失败: {exc!r}"[:200]]
     return (list(factory_issues) + list(form_issues)
-            + list(language_issues) + list(auth_issues))
+            + list(language_issues) + list(auth_issues)
+            + list(schema_issues))
 
 
 def verify_delivery(
@@ -2311,9 +2338,10 @@ def verify_delivery(
     新版将冒烟+旅程作为统一自检循环：每轮修复后从头验证，
     全部通过才交付——「验收是教练，不是评判者」。
 
-    probe_green（532193）：抢先导出起服探针已 health+home 全绿时，
-    再烧 LLM 修环只会推迟 Stage3。快车道：至多 1 轮冒烟+机械修复，
-    跳过 LLM auto_repair / 旅程 LLM 环，尽快交评分。
+    probe_green（532193 / 96a4 修订）：抢先导出 health+home 全绿时，
+    先做至多 1 轮入口修补，然后**必须**落入完整验收（冷库终检 /
+    [schema] / 自测）。旧快车道在守卫全绿时直接 return True，会跳过
+    run_selftests——正是 96a4 温库假绿 → 官方冷启动 0 分的路径。
     """
     project_dir = Path(project_dir).resolve()
     code_dir = project_dir / "code"
@@ -2340,9 +2368,11 @@ def verify_delivery(
                                or "界面文案" in x]
             auth_issues = [x for x in guard_issues if "入门表单" in x
                            or "POST" in x and "登录" in x]
+            schema_issues = [x for x in guard_issues if "[schema]" in x]
             other = [x for x in guard_issues
                      if x not in (factory_issues + form_issues
-                                  + language_issues + auth_issues)]
+                                  + language_issues + auth_issues
+                                  + schema_issues)]
             why = []
             if factory_issues:
                 why.append(f"作者create_app失败{len(factory_issues)}处")
@@ -2372,6 +2402,13 @@ def verify_delivery(
                     + "; ".join(auth_issues[:2]),
                     flush=True,
                 )
+            if schema_issues:
+                why.append(f"schema漂移{len(schema_issues)}处")
+                print(
+                    "[probe-fast] [schema] 审计红: "
+                    + "; ".join(schema_issues[:2]),
+                    flush=True,
+                )
             if other:
                 why.append(f"其他守卫红{len(other)}处")
                 print(
@@ -2389,8 +2426,8 @@ def verify_delivery(
             deadline = _time.monotonic() + max(
                 30.0, float(repair_budget_s or 8 * 60))
             msg = (
-                "[probe-fast] 探针已绿且作者工厂/表单×路由对齐，"
-                "仅修入口控件后交 Stage3"
+                "[probe-fast] 探针已绿且守卫通过，先修入口控件，"
+                "再转入完整验收（冷库/[schema]/自测不跳过）"
             )
             print(msg, flush=True)
             # v54 P1-5：修补放子线程 + join 超时置停止旗，避免超时后仍写盘
@@ -2450,7 +2487,16 @@ def verify_delivery(
                         msg += (
                             f"（修补降级: {result_box['exc']!r}"[:120] + "）"
                         )
-            return True, msg
+            # 96a4：禁止在此 return True——必须落入下方完整验收。
+            notes.append(
+                "[probe-fast→full] 入口修补后强制完整验收（冷库/[schema]/自测）"
+            )
+            print(
+                "[probe-fast] 入口修补结束 → 完整验收"
+                "（冷库终检/[schema]/自测不得跳过）",
+                flush=True,
+            )
+            probe_green = False
     _beat(project_dir, "验收-启动")
 
     # --- Phase 0: 体检前移（v42-3，零 LLM、秒级）---
@@ -2941,6 +2987,8 @@ def auto_repair(
         # keep7 取证:此处曾有外层包装函数遮蔽同名内层且漏 return,
         # RepoFixer 拿到 None→空文本→rounds=0,修复通道整体静默失效。
         # 现扁平化:唯一 llm 即备胎链本体。
+        from app.utils.selftest_gate import LLMAccountError, _ACCOUNT_FATAL_RE
+
         models = tuple(settings.models[:3]) or ("openai/gpt-4o",)
         # 修复从开发模型起步(省主帅额度);主帅压轴
         chain = (models[1:] + models[:1]) if len(models) > 1 else models
@@ -2958,7 +3006,16 @@ def auto_repair(
                 content = mc.chat(m, messages).content or ""
             except (BudgetExceededError, TaskCancelledError):
                 raise  # 总闸不换腿（见 _llm_from 同款守卫）
-            except RuntimeError as exc:
+            except LLMAccountError:
+                raise
+            except Exception as exc:
+                if _ACCOUNT_FATAL_RE.search(str(exc)):
+                    print(
+                        f"[selftest] 账户级 LLM 错误…止损停修: "
+                        f"{str(exc)[:150]}",
+                        flush=True,
+                    )
+                    raise LLMAccountError(str(exc)) from exc
                 last_exc = exc
                 continue
             if not content.strip():

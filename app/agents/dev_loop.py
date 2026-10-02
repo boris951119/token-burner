@@ -258,6 +258,18 @@ class DevLoopEngine:
             )
         return base
 
+    def _single_roster(self) -> bool:
+        """登记表只有一条腿：升级链无备胎可换。"""
+        models = list(getattr(self.settings, "models", None) or [])
+        return len({m for m in models if m}) <= 1
+
+    def _fix_cap(self) -> int:
+        """修复轮上限。single 编队同错早冻（≤2），避免 flash 空烧 max_fix_rounds。"""
+        cap = int(getattr(self.settings, "max_fix_rounds", 5) or 5)
+        if self._single_roster():
+            return min(cap, 2)
+        return cap
+
     # ------------------------------------------------------------------
 
     def run_module(
@@ -310,7 +322,7 @@ class DevLoopEngine:
                 module, project_id, ModuleStatus.SUCCESS, prev.fix_attempts,
                 "用户反馈运行成功", prev.code, prev.tests, True,
             )
-        if prev.fix_attempts >= self.settings.max_fix_rounds:
+        if prev.fix_attempts >= self._fix_cap():
             return self._finish(
                 module, project_id, ModuleStatus.FROZEN, prev.fix_attempts,
                 _frozen_message(prev.fix_attempts, f"用户手动运行反馈: {feedback}"),
@@ -675,8 +687,8 @@ class DevLoopEngine:
                         f"stdout={result.stdout} timeout={self.settings.sandbox_timeout_seconds}s"
                     )
 
-            # 11.4：修复上限
-            if fix_attempts >= self.settings.max_fix_rounds:
+            # 11.4：修复上限（single 编队用 _fix_cap 早冻）
+            if fix_attempts >= self._fix_cap():
                 return self._finish(
                     module, project_id, ModuleStatus.FROZEN, fix_attempts,
                     _frozen_message(fix_attempts, failure_report),
@@ -864,40 +876,62 @@ class DevLoopEngine:
         # A 件升级钩子（2026-09-20 v8 模型联动）：同模块修复 2 连败后，
         # 换台账推荐次优模型（无台账数据回退主帅）——flash 卡住循环
         # 不再只靠同模型硬扛。每模块至多升级一次（≥2 即锁定）。
+        # single 编队 / 备胎耗尽：禁止打印假「修复升级 → 同一模型」空转。
         repair_model = self.dev_model
         if fix_attempts >= 2:
-            try:
-                from app.utils.model_ledger import recommend
+            if self._single_roster():
+                print(
+                    f"[ledger] single 编队跳过修复升级"
+                    f"（fix_attempts={fix_attempts}，仅 "
+                    f"{(self.settings.models or ['?'])[0]}）",
+                    flush=True,
+                )
+                repair_model = self.dev_model
+            else:
+                try:
+                    from app.utils.model_ledger import recommend
 
-                # 批次#68（run 9ac543c41514）：原先只排除 dev_model，但 UI/组装
-                # 模块本来就是主模型写的（_model_for_module），而台账第一名恰是
-                # 主模型 ⇒ 连打 7 次「修复升级 → 同一个刚失败的模型」＝让它把同
-                # 一份代码再想一遍。升级的判据是「换个没失败过的脑子」：排除的
-                # 必须是**真正写过这份代码的那个模型**。
-                #
-                # run 735dc60369fd：只排除作者还不够——备胎 qwen 修挂后
-                # 下一轮仍升回 qwen（作者还是 deepseek，排除集没进 qwen）。
-                # 本模块已经试过的修复模型也必须累计排除。
-                failed = {self.dev_model,
-                          getattr(self, "_last_code_model", "") or self.dev_model}
-                failed |= set(getattr(self, "_repair_failed_models", set()) or ())
-                failed.discard("")
-                # 台账只按历史战绩排序，不认识当前登记表——9/21 取证：
-                # 旧坏跑记下的角色名（dev-model/dev/d）上榜后被
-                # ModelClient 拒绝崩穿管线。只准升级到已登记模型。
-                allowed = set(self.settings.models)
-                ranked = [m for m in recommend("codegen", exclude=tuple(failed))
-                          if m in allowed]
-                if not ranked:
-                    # 台账没货也要真的换人：从登记表里挑一个不是失败者的
-                    ranked = [m for m in self.settings.models if m not in failed]
-                repair_model = (ranked[0] if ranked
-                                else self.main_model)
-                print(f"[ledger] 修复升级 → {repair_model} "
-                      f"（fix_attempts={fix_attempts}，已排除 {'/'.join(sorted(failed))}）",
-                      flush=True)
-            except Exception:
-                repair_model = self.main_model
+                    # 批次#68（run 9ac543c41514）：原先只排除 dev_model，但 UI/组装
+                    # 模块本来就是主模型写的（_model_for_module），而台账第一名恰是
+                    # 主模型 ⇒ 连打 7 次「修复升级 → 同一个刚失败的模型」＝让它把同
+                    # 一份代码再想一遍。升级的判据是「换个没失败过的脑子」：排除的
+                    # 必须是**真正写过这份代码的那个模型**。
+                    #
+                    # run 735dc60369fd：只排除作者还不够——备胎 qwen 修挂后
+                    # 下一轮仍升回 qwen（作者还是 deepseek，排除集没进 qwen）。
+                    # 本模块已经试过的修复模型也必须累计排除。
+                    failed = {self.dev_model,
+                              getattr(self, "_last_code_model", "") or self.dev_model}
+                    failed |= set(getattr(self, "_repair_failed_models", set()) or ())
+                    failed.discard("")
+                    # 台账只按历史战绩排序，不认识当前登记表——9/21 取证：
+                    # 旧坏跑记下的角色名（dev-model/dev/d）上榜后被
+                    # ModelClient 拒绝崩穿管线。只准升级到已登记模型。
+                    allowed = set(self.settings.models)
+                    ranked = [m for m in recommend("codegen", exclude=tuple(failed))
+                              if m in allowed]
+                    if not ranked:
+                        # 台账没货也要真的换人：从登记表里挑一个不是失败者的
+                        ranked = [m for m in self.settings.models if m not in failed]
+                    candidate = ranked[0] if ranked else self.main_model
+                    if not ranked or candidate in failed:
+                        print(
+                            f"[ledger] 修复备胎耗尽，跳过升级空转"
+                            f"（fix_attempts={fix_attempts}，已排除 "
+                            f"{'/'.join(sorted(failed))}）",
+                            flush=True,
+                        )
+                        repair_model = self.dev_model
+                    else:
+                        repair_model = candidate
+                        print(
+                            f"[ledger] 修复升级 → {repair_model} "
+                            f"（fix_attempts={fix_attempts}，已排除 "
+                            f"{'/'.join(sorted(failed))}）",
+                            flush=True,
+                        )
+                except Exception:
+                    repair_model = self.main_model
         response = self._chat_resilient(
             repair_model,
             FIX_CODE_SYSTEM + self._platform_prompt + self._danger_prompt + self._style_prompt,
@@ -913,7 +947,7 @@ class DevLoopEngine:
         )
         # 无论成败，这轮用过的修复模型下一轮都不再选——成败要等门禁/
         # 执行才知道，但「同一脑子再想一遍」已被 735dc 实证无效。
-        if fix_attempts >= 2 and repair_model:
+        if fix_attempts >= 2 and repair_model and not self._single_roster():
             failed_so_far = set(getattr(self, "_repair_failed_models", set()) or ())
             failed_so_far.add(repair_model)
             self._repair_failed_models = failed_so_far
