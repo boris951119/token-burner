@@ -357,8 +357,11 @@ class TestRunnerModelAutocomplete:
         # 用户定稿编队（10-01）：写码腿 glm-5.3-flash 彩排实测吞吐慢 2 倍
         # （21.5 分钟/模块 vs deepseek-flash 8-12），换回 deepseek-v4-flash；
         # 测试 qwen3.8-max / 主帅 deepseek-v4-pro 不变
+        # 10-01 编队 v2：写码腿=glm-5.3-flash（官方端点实测吃图+质量合格，
+        # 吞吐慢是单 run 时长问题；keep 彩排后由用户在 deepseek-flash 与
+        # glm-flash 间定夺——config 为当前决策）
         assert set(_model_triplet(s.models)) == {
-            "openai/deepseek-v4-pro", "openai/deepseek-v4-flash",
+            "openai/deepseek-v4-pro", "openai/glm-5.3-flash",
             "openai/qwen3.8-max"}
         assert s.models[0] == "openai/deepseek-v4-pro"
     def test_official_relay_single_model_autocompletes(self, monkeypatch):

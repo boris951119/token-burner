@@ -29,7 +29,9 @@ import httpx
 # 实测 roster（2026-09-13，1x1 + 真实 UI 图双探测）：
 # kimi-k3 完整描述布局/文案/按钮；minimax-m3 可用（带思考前缀）；
 # deepseek flash/pro 大图报"截断"；glm-5.3 与 qwen 全家 HTTP 400。
-VISION_MODELS = ("openai/kimi-k3", "openai/minimax-m3")
+VISION_MODELS = ("openai/glm-5.3-flash",  # 10-01 官方测试端点实测吃图
+                 "openai/kimi-k3", "openai/minimax-m3",
+                 "openai/deepseek-v4-flash-vision-exp")
 
 # 需求描述里的内嵌图片引用（Markdown 图语法）
 _IMG_REF_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")

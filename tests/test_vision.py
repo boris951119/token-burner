@@ -65,8 +65,10 @@ class TestVisionEndpoints:
         eps = vision._vision_endpoints("key", "https://relay.example/v1")
         assert eps[0][0] == "gpt-5.5"
         assert eps[0][1] == "https://api.key7qi.com/v1"
-        assert [e[0] for e in eps][1:] == ["kimi-k3", "minimax-m3"], (
-            "中转站兜底链必须跟在官方通道后")
+        assert [e[0] for e in eps][1:] == [
+            "glm-5.3-flash", "kimi-k3", "minimax-m3",
+            "deepseek-v4-flash-vision-exp"], (
+            "兜底链必须跟在官方通道后（10-01 glm-5.3-flash 实测吃图）")
 
     def test_no_env_falls_back_to_relay_chain(self, monkeypatch):
         from app.utils import vision
@@ -74,7 +76,8 @@ class TestVisionEndpoints:
         monkeypatch.delenv("VISUAL_BASE_URL", raising=False)
         monkeypatch.delenv("VISUAL_MODEL", raising=False)
         eps = vision._vision_endpoints("key", "https://relay.example/v1")
-        assert [e[0] for e in eps][:2] == ["kimi-k3", "minimax-m3"]
+        assert [e[0] for e in eps][:2] == [
+            "glm-5.3-flash", "kimi-k3"]
 
 
 class TestDescribeImagesParallel:
