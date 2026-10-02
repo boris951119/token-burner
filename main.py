@@ -394,6 +394,12 @@ def main(argv: list[str] | None = None) -> int:
     req_dir = Path(args.requirement_path)
     fixture_warning = ""
     requirement_brief = None
+    # requirements.yaml 单文件输入与目录输入同权（10-01 stage-1 实证：
+    # 官方渐进式赛题包 yaml 直在题根，目录误传 → tree=None → LLM 路由
+    # 误判 direct_answer 静默 rc=0）。单文件时构造合成目录视图。
+    if not req_dir.is_dir() and req_dir.is_file() and req_dir.name in (
+            "requirements.yaml", "requirements.yml"):
+        req_dir = req_dir.parent
     if req_dir.is_dir():
         tree, _ = load_requirement_tree(req_dir)
         fixture_hint = load_fixture_hint(req_dir)
@@ -489,7 +495,7 @@ def main(argv: list[str] | None = None) -> int:
     task_budget = None
     if tree is not None:
         from app.arcbench_ingest import count_requirements
-        from app.utils.budget import size_aware_budget, task_envelope
+        from app.utils.budget import REPAIR_HEADROOM, size_aware_budget, task_envelope
 
         n_atomic = count_requirements(tree)
         # 字数项与条数项并列：正式赛题面「条少字多」（github 每条 3,120 字符，
@@ -508,7 +514,7 @@ def main(argv: list[str] | None = None) -> int:
         task_budget = task_envelope(n_atomic, req_chars, _floor, _cap)
         print(f"[task] 原子需求={n_atomic} 条 题面={req_chars:,} 字符 → "
               f"折算={size_aware_budget(n_atomic, req_chars):,}"
-              f"×修复余量1.5={int(size_aware_budget(n_atomic, req_chars) * 1.5):,}"
+              f"×修复余量{REPAIR_HEADROOM}={int(size_aware_budget(n_atomic, req_chars) * REPAIR_HEADROOM):,}"
               f"，托底={int(_floor or 0):,}"
               f"，硬帽={int(_cap or 0):,}（0=不砍）"
               f"→ 任务信封={task_budget:,} token",
