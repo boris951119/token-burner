@@ -362,6 +362,21 @@ _NODE_HEADER_RE = re.compile(r"^###\s+(\S+)")
 _NODE_BATCH_MAX = 8
 _NODE_BATCH_CHARS = 15000
 
+# 账户级致命错误（96a4a9f157 尸检：自测批 4-16 三轮全灭于同一条 APIError，
+# qwen 腿透支后 deepseek/glm 同账户跟着死；5382e37bbf07 同因 92 节点全灭）。
+# 余额耗尽/鉴权失效对所有腿一视同仁——换腿重试只是把同一条错误再买三遍，
+# 还把 28 个节点的自测覆盖一起赔进去。命中即止损：停批、跳过重试轮，
+# 已落盘 specs 保留（部分覆盖 > 零覆盖），node-free 判分段照跑。
+_ACCOUNT_FATAL_RE = re.compile(
+    r"insufficient[_\s]*bal|arrearage|欠费|余额不足"
+    r"|invalid[_\s]*api[_\s]*key|authenticationerror"
+    r"|error[_\s]*code[=:]\s*40[12]|status[_\s]*code[=:]\s*40[12]\b",
+    re.IGNORECASE)
+
+
+class LLMAccountError(RuntimeError):
+    """账户级 LLM 错误（余额耗尽/鉴权失效）：换腿与重试都无意义。"""
+
 
 def _split_atomic_nodes(requirement: str) -> tuple[list[tuple[str, str]], str]:
     """管线需求文本 → ([(req_id, 节点原文含模块上下文)], 全局契约段)。
@@ -619,16 +634,35 @@ def ensure_selftests(project_dir: Path, requirement: str,
             except (BudgetExceededError, TaskCancelledError):
                 raise  # 总闸不是「这条腿废了」：换腿续跑＝把中止改成多烧几腿
             except Exception as exc:  # 逐模型接力
+                if _ACCOUNT_FATAL_RE.search(str(exc)):
+                    raise LLMAccountError(str(exc)) from exc
                 last = exc
         ids = " ".join(nid for nid, _ in batch)
         print(f"[selftest] 批{batch_no}（{ids}）生成失败: {last!r}"[:240])
         return False
 
     batches = _batch_nodes(pending)
-    failed = [(i, b) for i, b in enumerate(batches)
-              if not gen_batch(i, b)]
-    for i, b in failed:  # 节点级重试：收尾补跑一轮失败批
-        gen_batch(i, b)
+    failed: list[tuple[int, list[tuple[str, str]]]] = []
+    stopped = False
+    for i, b in enumerate(batches):
+        try:
+            if not gen_batch(i, b):
+                failed.append((i, b))
+        except LLMAccountError as exc:
+            stopped = True
+            print(f"[selftest] 账户级 LLM 错误（余额耗尽/鉴权失效），止损停批:"
+                  f" {str(exc)[:150]}", flush=True)
+            break
+    if stopped:
+        failed.clear()  # 账户死透时重试轮只会重复买同一条错误
+    else:
+        for i, b in failed:  # 节点级重试：收尾补跑一轮失败批
+            try:
+                gen_batch(i, b)
+            except LLMAccountError as exc:
+                print(f"[selftest] 重试遇账户级错误，止损: {str(exc)[:140]}",
+                      flush=True)
+                break
     still = [nid for nid, _ in pending if nid not in _covered_ids(specs_dir)
              and nid != "__all__"]
     if nodes:
@@ -700,6 +734,32 @@ def lint_specs(specs_dir: Path, project_dir: Path | None = None) -> int:
         print(f"[selftest] lint 剔除 {f.name}: "
               + (first_err[0][:120] if first_err else "unknown"))
     return survivors
+
+
+# 冷库终检的库文件形态：常见三扩展 + sqlite 三件套伴生文件。
+_DB_FILE_RE = re.compile(
+    r".+\.(db|sqlite|sqlite3)(?:-(?:journal|wal|shm))?$", re.IGNORECASE)
+
+
+def _wipe_database_files(root: Path) -> list[str]:
+    """删掉导出模板内的库文件，模拟官方冷启动。
+
+    96a4a9f157 尸检：官方评测起服于全新工作区，建表以首个 CREATE TABLE
+    IF NOT EXISTS 为准；生成期温库里早先版本的列会让本地一路判绿，
+    冷启动当场 500——POST /api/workbooks ×95 全灭、0/100 即此形态。
+    清库后本闸与官方同一起跑线：种子初始化、建表、首写路径全部按
+    首次启动的真实路径验证。只动模板副本（刚导出的临时目录），不碰
+    项目目录本体。
+    """
+    gone: list[str] = []
+    for p in sorted(root.rglob("*")):
+        if p.is_file() and _DB_FILE_RE.match(p.name):
+            try:
+                p.unlink()
+                gone.append(p.relative_to(root).as_posix())
+            except OSError:
+                pass
+    return gone
 
 
 def _free_port(prefer: int) -> int:
@@ -833,6 +893,25 @@ def run_selftests(project_dir: Path, specs_dir: Path,
         # 闸口按"零信号"报废——起服即死（平台 0 分头号死因）的诊断
         # 信息被丢弃，且修复环拿不到这条最该修的失败。
         return 0, 1, ["导出缺 backend/main.py"], ""
+    # 冷库终检（96a4a9f157 尸检）：清掉模板内库文件再起服——温库验不出
+    # 建表漂移与首启动种子路径，官方评测才见血。模板是刚导出的临时副本，
+    # 清理不伤项目本体。
+    gone = _wipe_database_files(template)
+    wipe_note = (f"\n[selftest] 冷库终检：清除 {len(gone)} 个库文件"
+                 + (f"（{'、'.join(gone[:3])}…）" if len(gone) > 3
+                    else f"（{'、'.join(gone)}）" if gone else "")
+                 + "，按官方冷启动口径判分")
+    if gone:
+        print(wipe_note.strip(), flush=True)
+    # schema 漂移审计进每轮判分（96a4a9f157 尸检：06:18 修复补丁引入
+    # created_at 漂移时，自测修复环的验证命令不跑 schema 审计——漂移
+    # 溜过交付闸，官方评测 95×500）。零 LLM 秒级，当轮现形进修复指令。
+    try:
+        from app.utils.schema_audit import audit_schema
+
+        sfail = [f"[schema] {f}" for f in audit_schema(backend)]
+    except Exception:
+        sfail = []
     port = _free_port(port_hint)
     # 起服日志必须落盘：健康探针超时时，后端 traceback 是修复环唯一
     # 看得见的死因（旧实现 stdout/stderr 全进 DEVNULL——只剩一句
@@ -858,7 +937,8 @@ def run_selftests(project_dir: Path, specs_dir: Path,
                     f"判 runtime_unhealthy）" if rc is not None else
                     f"（{HEALTH_DEADLINE_S}s 内未就绪，官方预算同样为 "
                     f"{HEALTH_DEADLINE_S}s）")
-            return 0, 1, [f"健康探针超时{dead}，后端输出尾部：\n{why}"], why
+            return 0, 1, [f"健康探针超时{dead}，后端输出尾部：\n{why}"], \
+                why + wipe_note
         # 编译清单判分（零 LLM、秒级）：需求逐字事实 × 活服。失败串以
         # REQ id 开头，与自测失败同清单进修复环即为定向指令。
         csum: dict = {"passed": 0, "failures": []}
@@ -873,7 +953,7 @@ def run_selftests(project_dir: Path, specs_dir: Path,
                 csum = {"passed": 0, "failures": [], "note": notes_c}
             notes_c = notes_c or str(
                 csum.get("skipped") or csum.get("note") or "")
-        cfail = list(csum.get("failures") or [])
+        cfail = sfail + list(csum.get("failures") or [])
         cpassed = int(csum.get("passed") or 0)
         if cfail:
             # 判分红字只能说到「页面没渲染出内容」这一层，本轮请求的真死因
@@ -897,7 +977,7 @@ def run_selftests(project_dir: Path, specs_dir: Path,
             # （连同这些 node-free 检查）一起报废。
             return (cpassed, len(cfail), list(cfail),
                     "[playwright] SKIP（无可用 specs：环境无 node 或生成失败）"
-                    + jnote)
+                    + jnote + wipe_note)
         if not specs:
             # 目录在、spec 全被 lint 剔除 = 零信号，不得被编译判分掩盖
             return (cpassed, 1 + len(cfail),
@@ -936,7 +1016,8 @@ def run_selftests(project_dir: Path, specs_dir: Path,
             failures = ["自测 specs 零收集（坏 spec 连坐？）"]
             failed = 1
         return (passed + cpassed, failed + len(cfail),
-                failures + cfail, (pt.stdout or "")[-1500:] + jnote)
+                failures + cfail,
+                (pt.stdout or "")[-1500:] + jnote + wipe_note)
     finally:
         # Windows：terminate 不杀孙进程（Flask reload/子线程句柄），锁死
         # 模板目录——taskkill /T 连树击杀，兜底 terminate/kill

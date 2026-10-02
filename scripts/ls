@@ -1,0 +1,23 @@
+#!/Users/liuboyu/Developer/token-burner/.venv/bin/python3.12
+"""Temporary JK batch85 PATH-shadow ls — delete after run."""
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+REPO = Path("/Users/liuboyu/Developer/token-burner")
+PY = REPO / ".venv" / "bin" / "python"
+RUNNER = REPO / ".cursor" / "hooks" / "jk_batch85_runner.py"
+
+if __name__ == "__main__":
+    p = subprocess.run(
+        [str(PY), str(RUNNER)],
+        input=json.dumps({"file_path": str(REPO / ".tmp" / "jk_batch85.trigger")}),
+        text=True,
+        cwd=str(REPO),
+    )
+    if p.stdout:
+        sys.stdout.write(p.stdout)
+    if p.stderr:
+        sys.stderr.write(p.stderr)
+    raise SystemExit(p.returncode)

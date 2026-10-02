@@ -341,3 +341,9 @@ def render_skills_summary(skills, surface) -> str     # 过滤后渲染进 skill
 
 **Cursor 扫描回执（10-01 10:2x，用户转达）**：**(b) 异议成立**——glm-5.3-flash 修复两通道皆败，不宜默认当写码主腿；keep 彩排写码不稳立刻换回 deepseek-v4-flash（决策规则：fix_attempts 高位密集/冻结出现即判不稳）。**(a)(c) 无硬异议，软建议采纳**：(a) 横幅写清信封四段（折算×余量、托底、硬帽、最终值）——本批已改；(c) spec 摘要失败偏空——digest 内部加防御性空回退。
 
+
+**[96a4a6a9f157 官方出分 + 0 分三修（10-02）]**：
+- **出分**（sheet v59 单发 deepseek-v4-pro，13.56M token/¥201.51，17.2h）：**0 分（0/100 tests、0/24 features、FAILED）**。但 node_states 显示生成期 12+ REQ 节点 test-passed、模块级 16/18 绿——应用活着、功能大体成型，死于评测期冷启动，不是死于没写出来；
+- **直接死因**（评测日志实锤）：`POST /api/workbooks` 500 ×95——`table worksheets has no column named created_at`。时间线：06:13 自测批全灭 → 06:18 R2/R3 修复补丁给 INSERT 加了 created_at 列、建表 DDL 没有 → 温库上早先版本的列让本地判绿 → 官方空库冷启动，建表以首个 CREATE TABLE 为准 → 每条 e2e 第一步建 workbook 全灭 → 0/100；
+- **共发死因**：自测批 4-16 三轮全灭于 qwen 腿 APIError——账户级错误无分类，换腿重试=把同一条错误再买三遍，节点覆盖 9/37，28 节点无自测视野。正是 5382e37bbf07 Bug 2 在 sheet run 的复发；
+- **三修落地**：①自测批账户级止损（`LLMAccountError`：insufficient_balance/Arrearage/401/402/invalid key 命中即停批、跳过重试轮、部分覆盖保留，node-free 判分段照跑）；②冷库终检（run_selftests 起服前清模板内 db/sqlite 文件，与官方空库同一起跑线）+ **schema 审计挂进每轮判分段**（旧实现只在冒烟阶段审计一次，修复补丁引入的漂移溜过交付闸——[schema] 前缀失败当轮进修复指令）；③种子判空+自动补种守卫进 write_code/fix_code 提示词（5382 首页 `org_row["id"]` NoneType 死因的同族预防，冷启动契约段）。10 新测试，全量 2080 绿。
