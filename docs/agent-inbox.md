@@ -347,3 +347,7 @@ def render_skills_summary(skills, surface) -> str     # 过滤后渲染进 skill
 - **直接死因**（评测日志实锤）：`POST /api/workbooks` 500 ×95——`table worksheets has no column named created_at`。时间线：06:13 自测批全灭 → 06:18 R2/R3 修复补丁给 INSERT 加了 created_at 列、建表 DDL 没有 → 温库上早先版本的列让本地判绿 → 官方空库冷启动，建表以首个 CREATE TABLE 为准 → 每条 e2e 第一步建 workbook 全灭 → 0/100；
 - **共发死因**：自测批 4-16 三轮全灭于 qwen 腿 APIError——账户级错误无分类，换腿重试=把同一条错误再买三遍，节点覆盖 9/37，28 节点无自测视野。正是 5382e37bbf07 Bug 2 在 sheet run 的复发；
 - **三修落地**：①自测批账户级止损（`LLMAccountError`：insufficient_balance/Arrearage/401/402/invalid key 命中即停批、跳过重试轮、部分覆盖保留，node-free 判分段照跑）；②冷库终检（run_selftests 起服前清模板内 db/sqlite 文件，与官方空库同一起跑线）+ **schema 审计挂进每轮判分段**（旧实现只在冒烟阶段审计一次，修复补丁引入的漂移溜过交付闸——[schema] 前缀失败当轮进修复指令）；③种子判空+自动补种守卫进 write_code/fix_code 提示词（5382 首页 `org_row["id"]` NoneType 死因的同族预防，冷启动契约段）。10 新测试，全量 2080 绿。
+
+---
+
+**[INBOX-018 · stage-1 续跑交接（10-02 15:10，ZCode → Cursor）]**：stage-1 本地续跑已发车（token-plan 私 key + `deepseek-v4-flash-0731` single，PID 90967，15:09 心跳=恢复续跑）。**唯一交接入口 = `/tmp/prod_test/stage1_app/RUN_JOURNAL.md`**——配置快照、监控命令、三道新闸（冷库终检/[schema] 审计/账户级止损——96a4 官方 0 分尸检产物 4b2c100 本 run 首战）、判分命令、坑位备忘全在里面，事件流水请追加到该文件第六节，回执走 agent-outbox。要点：①key 在 .env 勿入库勿外传；②启动时 5 张参考图 vision FAIL 属预期（降级，ingest 早已完成）；③日志安静看项目心跳不看 stdout；④run 结束先跑 `grade.py --task github-stage-1 --browser` 再谈结论；⑤上次"尽力交付"的旧壳在工作区根 backend/（15:04 兜底导出），勿当本次交付读数。
