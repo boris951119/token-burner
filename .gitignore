@@ -120,3 +120,4 @@ scripts/official_grade/scripts/
 
 # 根目录历史提交包（以 .tmp/submission-pack + 桌面交付为准）
 token-burner-submission*.zip
+.DS_Store
