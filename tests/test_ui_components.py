@@ -102,3 +102,31 @@ def test_integration_fixture_route_renders_contract_copy(landed):
               "Worksheet name cannot be empty",
               "Invalid CSV file format. Import failed."):
         assert s in html  # 静态判分种子/控件/行为通道的事实全部命中
+
+
+def test_tablist_aria_semantics(landed):
+    """REQ-1-1 ARIA tab 语义：role=tab + aria-selected。"""
+    html = landed.tablist(
+        [{"name": "Sheet1", "url": "/editor/q3?sheet=Sheet1"},
+         {"name": "Sheet2", "url": "/editor/q3?sheet=Sheet2"}],
+        active_index=0)
+    assert 'role="tablist"' in html
+    assert html.count('role="tab"') == 2
+    assert 'aria-selected="true"' in html and 'aria-selected="false"' in html
+    assert 'href="/editor/q3?sheet=Sheet1"' in html
+
+
+def test_grid_aria_semantics(landed):
+    """REQ-1-1 ARIA grid 语义：role=grid + gridcell + multiselectable。"""
+    html = landed.grid(
+        [["Region", "East"], ["Sales", "1200"]],
+        col_names=["A", "B"], grid_label="Worksheet grid", selectable=True)
+    assert 'role="grid"' in html and 'aria-label="Worksheet grid"' in html
+    assert 'aria-multiselectable="true"' in html
+    assert html.count('role="gridcell"') == 4
+    assert 'role="columnheader"' in html
+
+
+def test_dialog_role_wrapper(landed):
+    html = landed.dialog("Import CSV", "<p>选择文件</p>")
+    assert 'role="dialog"' in html and 'aria-label="Import CSV"' in html

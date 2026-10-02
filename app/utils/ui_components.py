@@ -68,6 +68,28 @@ def component_styles() -> str:
         ".uc-panel{border:1px solid #cbd5e1;border-radius:8px;margin:8px 0}"
         ".uc-panel>summary{cursor:pointer;padding:8px 12px;font-weight:600}"
         ".uc-panel>.uc-panel-body{padding:10px 12px;border-top:1px solid #e2e8f0}"
+        ".uc-tablist{display:flex;gap:4px;border-bottom:2px solid #e2e8f0;padding:4px 8px 0}"
+        ".uc-tab{padding:6px 16px;border:1px solid #cbd5e1;border-bottom:none;"
+        "border-radius:6px 6px 0 0;background:#f8fafc;color:#334155;"
+        "text-decoration:none;font:inherit}"
+        ".uc-tab.active{background:#fff;border-color:#2563eb;color:#2563eb;"
+        "font-weight:600}"
+        ".uc-grid{border:1px solid #cbd5e1;border-radius:6px;overflow:hidden;"
+        "font:inherit}"
+        ".uc-grid-head{display:flex;background:#f1f5f9;font-weight:600}"
+        ".uc-grid-row{display:flex;border-top:1px solid #e2e8f0}"
+        ".uc-cell,.uc-grid-head>div{min-width:80px;padding:6px 10px;}"
+        ".uc-tablist{display:flex;gap:4px;border-bottom:2px solid #e2e8f0;padding:4px 8px 0}"
+        ".uc-tab{padding:6px 16px;border:1px solid #cbd5e1;border-bottom:none;"
+        "border-radius:6px 6px 0 0;background:#f8fafc;color:#334155;"
+        "text-decoration:none;font:inherit}"
+        ".uc-tab.active{background:#fff;border-color:#2563eb;color:#2563eb;"
+        "font-weight:600}"
+        ".uc-grid{border:1px solid #cbd5e1;border-radius:6px;overflow:hidden;"
+        "font:inherit}"
+        ".uc-grid-head{display:flex;background:#f1f5f9;font-weight:600}"
+        ".uc-grid-row{display:flex;border-top:1px solid #e2e8f0}"
+        ".uc-cell,.uc-grid-head>div{min-width:80px;padding:6px 10px;}"
         "</style>"
     )
 
@@ -137,6 +159,130 @@ def panel(title, body_html, open_=False):
     return (f'<details class="uc-panel"{open_attr}>'
             f"<summary>{_e(title)}</summary>"
             f'<div class="uc-panel-body">{body_html}</div></details>')
+
+
+def tablist(tabs, active_index=0, base_url="", url_builder=None):
+    """工作表标签组（ARIA tablist 语义——题面 REQ-1-1 明文要求）。
+
+    tabs: [{"name": "Sheet1", "url": "/editor/x?sheet=Sheet1"}, ...]
+    active_index: 当前激活项（aria-selected="true"）。
+    评测断言：getByRole('tab', {name}) + aria-selected 属性。
+    """
+    items = []
+    for i, t in enumerate(tabs):
+        name = t.get("name") or t
+        url = t.get("url") or (url_builder(name) if url_builder else "#")
+        sel = "true" if i == active_index else "false"
+        cls = "uc-tab active" if i == active_index else "uc-tab"
+        items.append(
+            f'<a role="tab" class="{cls}" id="uc-tab-{_e(name)}" '
+            f'aria-selected="{sel}" tabindex="0" href="{_e(url)}">'
+            f"{_e(name)}</a>")
+    return (f'<div role="tablist" class="uc-tablist">'
+            + "".join(items) + "</div>")
+
+
+def grid(rows, col_names=None, grid_label="Worksheet grid",
+         selectable=False):
+    """数据网格（ARIA grid 语义——题面 REQ-1-1 明文要求）。
+
+    rows: [[单元格...], ...]；col_names: 列头名（可空）。
+    断言：getByRole('grid', {name: 'Worksheet grid'}) +
+    aria-multiselectable + gridcell 角色与坐标名（如 A1）。
+    """
+    def colname(i):
+        s, n = "", i
+        while True:
+            s = chr(65 + n % 26) + s
+            n = n // 26 - 1
+            if n < 0:
+                return s
+    head = ""
+    if col_names:
+        head = ('<div role="row" class="uc-grid-head">'
+                + "".join(f'<div role="columnheader">{_e(c)}</div>'
+                          for c in col_names) + "</div>")
+    body_rows = []
+    for r, row in enumerate(rows):
+        cells = []
+        for c, val in enumerate(row):
+            cells.append(
+                f'<div role="gridcell" aria-selected="false" '
+                f'class="uc-cell">{_e(val)}</div>')
+        body_rows.append(
+            f'<div role="row" class="uc-grid-row">' + "".join(cells) + "</div>")
+    multi = ' aria-multiselectable="true"' if selectable else ""
+    return (f'<div role="grid" aria-label="{_e(grid_label)}"{multi} '
+            f'class="uc-grid">{head}{"".join(body_rows)}</div>')
+
+
+def dialog(title, body_html, role_label=None):
+    """对话框容器（ARIA dialog 语义——导入/重命名等确认流的标准壳）。"""
+    label = role_label or title
+    return (f'<div role="dialog" aria-label="{_e(label)}" '
+            f'class="uc-dialog-body">{body_html}</div>')
+
+
+def tablist(tabs, active_index=0, base_url="", url_builder=None):
+    """工作表标签组（ARIA tablist 语义——题面 REQ-1-1 明文要求）。
+
+    tabs: [{"name": "Sheet1", "url": "/editor/x?sheet=Sheet1"}, ...]
+    active_index: 当前激活项（aria-selected="true"）。
+    评测断言：getByRole('tab', {name}) + aria-selected 属性。
+    """
+    items = []
+    for i, t in enumerate(tabs):
+        name = t.get("name") or t
+        url = t.get("url") or (url_builder(name) if url_builder else "#")
+        sel = "true" if i == active_index else "false"
+        cls = "uc-tab active" if i == active_index else "uc-tab"
+        items.append(
+            f'<a role="tab" class="{cls}" id="uc-tab-{_e(name)}" '
+            f'aria-selected="{sel}" tabindex="0" href="{_e(url)}">'
+            f"{_e(name)}</a>")
+    return (f'<div role="tablist" class="uc-tablist">'
+            + "".join(items) + "</div>")
+
+
+def grid(rows, col_names=None, grid_label="Worksheet grid",
+         selectable=False):
+    """数据网格（ARIA grid 语义——题面 REQ-1-1 明文要求）。
+
+    rows: [[单元格...], ...]；col_names: 列头名（可空）。
+    断言：getByRole('grid', {name: 'Worksheet grid'}) +
+    aria-multiselectable + gridcell 角色与坐标名（如 A1）。
+    """
+    def colname(i):
+        s, n = "", i
+        while True:
+            s = chr(65 + n % 26) + s
+            n = n // 26 - 1
+            if n < 0:
+                return s
+    head = ""
+    if col_names:
+        head = ('<div role="row" class="uc-grid-head">'
+                + "".join(f'<div role="columnheader">{_e(c)}</div>'
+                          for c in col_names) + "</div>")
+    body_rows = []
+    for r, row in enumerate(rows):
+        cells = []
+        for c, val in enumerate(row):
+            cells.append(
+                f'<div role="gridcell" aria-selected="false" '
+                f'class="uc-cell">{_e(val)}</div>')
+        body_rows.append(
+            f'<div role="row" class="uc-grid-row">' + "".join(cells) + "</div>")
+    multi = ' aria-multiselectable="true"' if selectable else ""
+    return (f'<div role="grid" aria-label="{_e(grid_label)}"{multi} '
+            f'class="uc-grid">{head}{"".join(body_rows)}</div>')
+
+
+def dialog(title, body_html, role_label=None):
+    """对话框容器（ARIA dialog 语义——导入/重命名等确认流的标准壳）。"""
+    label = role_label or title
+    return (f'<div role="dialog" aria-label="{_e(label)}" '
+            f'class="uc-dialog-body">{body_html}</div>')
 '''
 
 
