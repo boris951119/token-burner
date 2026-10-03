@@ -359,19 +359,36 @@ def test_stop_check_blocks_writes_after_join_timeout(repo):
 
 
 def test_stop_flag_set_on_probe_fast_join_timeout(tmp_path, monkeypatch):
-    """probe-fast join 超时分支必须置停止旗，且修复不再写盘。"""
+    """probe-fast join 超时分支必须置停止旗，且修复不再写盘。
+
+    时序设计（11-03 重写：原版恒定 monotonic 让 patched auto_repair 的
+    5s deadline 永不到 → 主线程死循环挂死全量）：
+    - monkeypatch 只喂 verify_delivery 自己的两次 monotonic()（deadline
+      与 remaining）→ join 预算 0.01s 立即超时 → 置停止旗；
+    - fake auto_repair 用 perf_counter 计时（不受 patch 影响），首次调用
+      在旗置位后立即返回 stopped；验收主循环的后续调用快速返回——
+      断言组：停止旗传递/flag_true/writes==0/强制完整验收（b4343e6
+      禁止快车道放行：空树完整验收必 FAIL）。"""
     import time
 
     from app import arcbench_smoke as sm
 
     (tmp_path / "code").mkdir()
-    seen = {"stop_passed": False, "flag_true": False, "writes": 0}
+    seen = {"stop_passed": False, "flag_true": False, "writes": 0,
+            "slow_done": False}
 
     def _slow_repair(*_a, **kw):
         stop_check = kw.get("stop_check")
-        seen["stop_passed"] = stop_check is not None
-        deadline = time.monotonic() + 5.0
-        while time.monotonic() < deadline:
+        if stop_check is not None:
+            seen["stop_passed"] = True
+        if seen["slow_done"]:
+            # 验收主循环的后续调用（不带 stop_check）：立即返回不写盘
+            if stop_check and stop_check():
+                seen["flag_true"] = True
+            return False, "stopped"
+        seen["slow_done"] = True
+        deadline = time.perf_counter() + 5.0
+        while time.perf_counter() < deadline:
             if stop_check and stop_check():
                 seen["flag_true"] = True
                 return False, "stopped"
@@ -400,7 +417,8 @@ def test_stop_flag_set_on_probe_fast_join_timeout(tmp_path, monkeypatch):
         max_app_rounds=1,
         repair_budget_s=30,
     )
-    assert ok is True
+    # b4343e6 新语义：探针绿也禁止快车道放行——空树走完整验收必 FAIL
+    assert ok is False, report
     assert seen["stop_passed"] is True
     # join 超时置旗后，子线程需再轮询一次才置 flag_true
     wait_until = time.time() + 2.0
@@ -408,4 +426,4 @@ def test_stop_flag_set_on_probe_fast_join_timeout(tmp_path, monkeypatch):
         time.sleep(0.05)
     assert seen["flag_true"] is True
     assert seen["writes"] == 0
-    assert "停止旗" in report or "超时" in report
+    assert "完整验收" in report

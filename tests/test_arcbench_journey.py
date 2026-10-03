@@ -41,6 +41,14 @@ def create_app() -> Flask:
     def health():
         return jsonify(status="ok")
 
+    @app.route("/login")
+    def login_page():
+        return "login page"
+
+    @app.route("/register")
+    def register_page():
+        return "register page"
+
     @app.route("/")
     def home():
         return "<a href='/login'>Login</a><a href='/register'>Register</a>"

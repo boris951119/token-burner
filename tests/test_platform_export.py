@@ -629,9 +629,10 @@ def test_home_backfilled_when_author_omits_it(tmp_path, capsys):
 
 
 def test_weak_home_gains_requirement_anchors(tmp_path):
-    """v50 尸检改策：注入只作用于合成兜底页；真实作者页（哪怕是 JSON 空壳）
-    一律不动——v50 实证注入把真应用洗成占位页=0/100。锚点 enrich 只发生在
-    _ensure_home 的合成页上。"""
+    """v61 语义（5d05 尸检修订）：JSON 空壳作者页**不被整页替换**（v50
+    「洗成占位页=0/100」红线不破），但缺题面入口金丝雀时**追加**可见
+    <nav data-arcbench-entry-canary>——官方首断言（Sign in 入口）必须有
+    落点。作者内容原文保留。"""
     import json
 
     be = _plain_backend(tmp_path, (
@@ -647,8 +648,13 @@ def test_weak_home_gains_requirement_anchors(tmp_path):
         json.dumps({"anchors": ["New sheet"]}), encoding="utf-8")
     mod = _exec_entry(be, "runner_entry_wrap")
     body = mod.app.test_client().get("/").get_data(as_text=True)
-    # 作者页必须原样活着（不替换、不洗白）
-    assert '"ok"' in body and "New sheet" not in body
+    # 作者页内容原样活着（不替换、不洗白：无合成兜底页标记）
+    assert '"ok"' in body
+    assert "data-arcbench-fallback" not in body
+    assert "Application<h1>" not in body
+    # 缺失金丝雀以追加 nav 落地（不覆盖作者内容）
+    assert "New sheet" in body
+    assert 'data-arcbench-entry-canary="1"' in body
     assert mod.app.test_client().get("/sheets").get_data(as_text=True) == "grid"
 
 

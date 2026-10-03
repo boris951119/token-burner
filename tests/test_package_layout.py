@@ -72,6 +72,8 @@ class TestMemSentinel:
             "    app = Flask(__name__)\n"
             "    @app.route('/api/health')\n"
             "    def h(): return {'ok': True}\n"
+            "    @app.route('/x')\n"
+            "    def x(): return 'x'\n"
             "    @app.route('/')\n"
             "    def idx(): return '<a href=\"/x\">x</a>'\n"
             "    return app\n",
