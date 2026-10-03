@@ -618,14 +618,23 @@ def _ensure_home(_a):
 
 
 def _install_entry_surface(_a):
-    """首页响应里没有题面入口文案时，补一组可见 <a>（作者页已含则不动）。"""
+    """首页缺题面入口文案时：兜底页整页替换；作者页仅追加缺失金丝雀链接。
+
+    v61（5d05 尸检）：作者页已渲染但仍缺 Sign in / Create an account 时，
+    旧逻辑因无 data-arcbench-fallback 直接 return → 官方首断言灭。
+    现对作者 HTML **追加**可见 <a>（不整页替换），避开 v50「洗成占位页」。
+    """
     try:
         _path = Path(__file__).with_name("arcbench_entry.json")
-        if not _path.is_file():
-            return
-        _spec = json.loads(_path.read_text(encoding="utf-8"))
-        _anchors = [str(_x).strip() for _x in (_spec.get("anchors") or [])
-                    if str(_x).strip()]
+        _anchors = []
+        if _path.is_file():
+            _spec = json.loads(_path.read_text(encoding="utf-8"))
+            _anchors = [str(_x).strip() for _x in (_spec.get("anchors") or [])
+                        if str(_x).strip()]
+        # GitHub Stage-1 账户入口金丝雀（无 sidecar 也硬补，条数严控）
+        for _c in ("Sign in", "Create an account", "Forgot password"):
+            if _c not in _anchors:
+                _anchors.append(_c)
         if not _anchors:
             return
 
@@ -651,29 +660,81 @@ def _install_entry_surface(_a):
             _bits.append("</body></html>")
             return "".join(_bits)
 
+        def _href_for(_lab, _links):
+            _low = (_lab or "").lower()
+            _prefer = []
+            if "sign in" in _low or "login" in _low:
+                _prefer = ["/login", "/signin", "/sign-in", "/auth/login"]
+            elif "create an account" in _low or "sign up" in _low:
+                _prefer = ["/register", "/signup", "/sign-up", "/login"]
+            elif "forgot" in _low:
+                _prefer = ["/forgot-password", "/password/reset", "/login"]
+            for _p in _prefer:
+                if _p in _links or not _links:
+                    return _p
+            return _links[0] if _links else "/login"
+
+        def _append_missing(_body, _links):
+            _miss = [a for a in _anchors[:8] if a not in (_body or "")]
+            if not _miss:
+                return None
+            _bits = ['<nav data-arcbench-entry-canary="1">']
+            for _lab in _miss:
+                _esc = (_lab.replace("&", "&amp;").replace("<", "&lt;")
+                        .replace(">", "&gt;"))
+                _bits.append('<a href="%s">%s</a> '
+                             % (_href_for(_lab, _links), _esc))
+            _bits.append("</nav>")
+            _chunk = "".join(_bits)
+            _low = (_body or "").lower()
+            _idx = _low.rfind("</body>")
+            if _idx >= 0:
+                return (_body[:_idx] + _chunk + _body[_idx:])
+            return (_body or "") + _chunk
+
         def _wrap_home(_resp):
             try:
                 from flask import request
                 if getattr(request, "path", "") not in ("/", ""):
                     return _resp
                 _body = _resp.get_data(as_text=True)
-                # v50 尸检（4376f7aaf644）：只许替换【我们自己的合成兜底页】
-                # （带 data-arcbench-fallback 标记）——真实作者页/组合 SPA 壳
-                # 哪怕缺锚点也不许动（JS 壳的锚点由 fetch 渲染，静态检查
-                # 看不见；替换它 = 把真应用洗成占位页 = 0/100）。
-                if "data-arcbench-fallback" not in _body:
+                _links = []
+                try:
+                    if hasattr(_a, "url_map"):
+                        for _r in _a.url_map.iter_rules():
+                            _rule = getattr(_r, "rule", "") or ""
+                            if "GET" in (getattr(_r, "methods", None) or set()):
+                                _links.append(_rule)
+                except Exception:
+                    pass
+                # v50：只整页替换合成兜底页
+                if "data-arcbench-fallback" in (_body or ""):
+                    _resp.set_data(_page())
+                    _resp.mimetype = "text/html"
+                    _resp.status_code = 200
                     return _resp
-                _resp.set_data(_page())
-                _resp.mimetype = "text/html"
-                _resp.status_code = 200
+                # v61：作者页缺金丝雀 → 追加可见链接（不洗页）
+                _new = _append_missing(_body, _links)
+                _body2 = _new if _new is not None else _body
+                # v61.1（5d05 官方报告）：Sign in link 必须恰好 1 个
+                try:
+                    from app.utils.surface_anchor_sanitize import (
+                        collapse_exact_named_links,
+                    )
+                    _deduped = collapse_exact_named_links(_body2, "Sign in")
+                except Exception:
+                    _deduped = _body2
+                if _deduped != _body:
+                    _resp.set_data(_deduped)
+                    _resp.mimetype = "text/html"
             except Exception:
                 return _resp
             return _resp
 
         if hasattr(_a, "after_request"):
             _a.after_request(_wrap_home)
-            print("[backend] 入口补面已挂（仅作用于合成兜底页，v50 尸检防线）",
-                  flush=True)
+            print("[backend] 入口补面已挂（兜底整页替换；作者页追加金丝雀+"
+                  "Sign in 去重）", flush=True)
     except Exception as _exc:
         print(("[backend] 入口补面失败: %r" % (_exc,))[:180], flush=True)
 

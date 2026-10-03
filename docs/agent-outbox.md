@@ -5,6 +5,7 @@
 
 | 日期时间 | 对应条目 | 回执摘要（做了什么/结果/遗留） |
 |---|---|---|
+| **10-03 09:41** | **→ZCode 交接 INBOX-019** | v60 官方 0 分尸检定案（Sign in×2）+ v61.1 闸入库 + 交接文档；本地 agent 在跑。**唯一交接节见下方「INBOX-019」**。 |
 | （示例）09-26 23:50 | INBOX-003 | 已 commit `abc1234`，19 文件落库；v48.zip 已复制为 v48_85f404a69443.zip |
 | 09-27 12:55 | ZCode 通气四刀 + 用户「能力优先」 | **v52 通气落地（未发车）**：①写码提示接上 peer 模块清单/导出；②static_check 幽灵兄弟模块阻断；③schema 权威进写码提示；④probe-fast 前表单×路由对账。 |
 | 09-27 17:50 | **INBOX-009 独立判读** sheet `045fe8578302` | 见下方专节；认领刀A+刀B 开工。 |
@@ -33,7 +34,95 @@
 
 ---
 
-## INBOX-018 回执（stage-1 续跑终报 · 10-02 16:45）
+## INBOX-019 · Cursor→ZCode 全量交接（2026-10-03 09:41）
+
+> **用户指令**：把 Cursor 手里的工作交 ZCode。Cursor 本会话停手监控/施工；ZCode 接棒。  
+> **红线（用户已拍板）**：**不上平台**，除非本地 `grade.py --browser` 明显 >0 且有把握；正式交分才用比赛额度。
+
+### 1. 平台上一发（已出分，不是卡住）
+
+| 项 | 值 |
+|---|---|
+| Run | [`5d05a462ce84`](https://arc-bench.com/runs/5d05a462ce84) |
+| 包 | token-burner-**v60** · GitHub Stage 1 · `glm-5.3-flash` |
+| 终态 | **FAILED · 0.0 · 0/30 · feature 0/12** · ~267m · ~2.94M token |
+| 用户下载的交付树 | `/Users/liuboyu/Documents/5d05a462ce84-template.zip`（已解压 `/tmp/v60_delivered_5d05/template`） |
+
+**官方真凶（playwright-report 实锤，30/30 unexpected）**  
+首页同时有 **两个** exact `Sign in` link（`nav[aria-label=Auth]` + `nav[aria-label=Modules]`）→  
+`getByRole('link', { name: 'Sign in', exact: true })` Expected **1** Received **2** → 首点即炸 → 全灭。
+
+证据源码：`/tmp/v60_delivered_5d05/template/backend/webui/webui.py` 约 L81–105。  
+另：`_force_webui_index` before_request 强行 `/`→`index()`；home 塞满校验串；`/signup` 404；模块绿≠场景绿；verify FAIL 仍交卷。
+
+**系统根因一句话**：闸/修复逼模型往首页堆锚点 → 重复 CTA → 官方 Playwright strict mode 一枪灭。  
+不是骨架、不是起不来服。
+
+### 2. 本仓库已入库改动（v61 / v61.1）— 请 ZCode 接手盯跑/打分
+
+| 路径 | 作用 |
+|---|---|
+| `app/utils/surface_anchor_sanitize.py` **(新)** | 首页锚点消毒；`count/collapse_exact_named_links`（Sign in 去重） |
+| `app/utils/manifest_landing.py` | 编译锚点走 sanitize |
+| `app/acceptance_compile.py` | surface bucket 消毒 |
+| `app/arcbench_smoke.py` | 入口修复指令改向 webui/login；**home Sign in 链接数≠1 硬红** |
+| `app/platform_export.py` | 作者页缺入口则追加金丝雀；**导出 after_request 去重 Sign in** |
+| `tests/test_v61_auth_entrance_sanitize.py` **(新)** | 相关单测（本地已 **6 passed**） |
+| `scripts/run_local_v61_tokenplan.sh` **(新)** | 本地 token-plan 发车脚本（key 由环境变量注入，脚本内无 secret） |
+| `docs/overnight-2026-10-03.md` **(新)** | 过夜/巡检记录 |
+
+**注意**：`config.json` **未**改入库（仍保持仓内编队）；本地试跑用进程环境 `MODEL=openai/deepseek-v4-flash-0731` + token-plan。正式打比赛包前确认 `models[0]=openai/glm-5.3-flash`（或用户指定）+ single；勿把 token-plan / arc-bench key 写入仓库或 zip。`logs/model_ledger.json` 脏账本未进本提交。
+
+### 3. 本地 agent 现况（ZCode 接着盯）
+
+| 项 | 值 |
+|---|---|
+| OUT | `/tmp/prod_test/stage1_v61` |
+| PID 文件 | `$OUT/run.pid` → 现 **34684**（`start_new_session`，ppid=1） |
+| 题面 | `~/Developer/sheet-grader/requirements/hackathon--github-stage-1` |
+| 主日志 | `$OUT/run_v61_flash.log`（stdout 可能安静；**以项目心跳为准**） |
+| 现行项目 | `.../projects/arcbench-app_20261003_092425/` |
+| 心跳 | `.../sessions/heartbeat.json`（09:39 已到「模块拆分与接口契约」） |
+| 网关 | token-plan + `deepseek-v4-flash-0731`（用户私 key，在进程环境里；**勿入库**） |
+
+**监控**：
+```bash
+ps -p $(cat /tmp/prod_test/stage1_v61/run.pid) -o pid,etime,command
+cat /tmp/prod_test/stage1_v61/projects/arcbench-app_20261003_092425/sessions/heartbeat.json
+tail -f /tmp/prod_test/stage1_v61/projects/arcbench-app_20261003_092425/logs/session_001.log
+```
+
+**跑完后（先 grade 再谈交包）**：
+```bash
+# 交付树一般在 OUT 根 backend/ 或 export 后的官方布局；以终局 export 为准
+cd ~/Developer/sheet-grader
+python3 grade.py /tmp/prod_test/stage1_v61 --task github-stage-1 --browser
+# 入口冒烟可选：
+cd e2e && GITHUB_URL=http://127.0.0.1:<port> ./run.sh tests/github-entry.spec.js
+```
+
+**坑**：Cursor Agent 沙箱/壳结束会杀子进程；必须用 `start_new_session=True` 或系统终端。`/tmp/launch_v61_terminal.sh` 仍可用但含 key——勿 commit、勿扩散。
+
+### 4. ZCode 接棒清单（按序）
+
+1. **认领**本节；在 `docs/agent-inbox.md` 把 INBOX-019 标 in-progress / 自管。  
+2. **盯** PID 34684 至结束（或异常死亡则按同样 env 重启，勿上平台）。  
+3. **grade** → 写分数到 overnight 或 outbox。  
+4. 仅当 grade 明显非 0（建议再看「Sign in link 恰好 1」）→ 改回 glm-flash config → `build_submission` 打 **v61** → 桌面 `~/Desktop/token-burner-v61.zip` → **比赛额度**上 Stage1。  
+5. 代码已由 Cursor 入库（本提交）；ZCode 可续改可选加固，**不要**把 ledger/key 打进包。  
+6. 可选加固（未做）：首页 `Create an account` 也强制唯一；禁 `_force_webui_index` 双 `/`；注册只认 `/register` 勿 `/signup`。
+
+### 5. 判分资产（已有，别重造）
+
+`~/Developer/sheet-grader/grade.py`（`--task github-stage-1 --browser`）= 官方同口径本地闸。  
+手修满分对照树（非平台产物）：`/tmp/prod_test/stage1_app`（曾 59/59·100/100）。
+
+### 6. Cursor 本会话停什么
+
+- 小时 overnight loop 可留着只记状态，但**施工/发车/交平台交给 ZCode**。  
+- 未 push、未打 v61 比赛包、未用比赛额度。
+
+---
 
 **唯一日志**：`/tmp/prod_test/stage1_app/RUN_JOURNAL.md`  
 **判分命令**：`grade.py /tmp/prod_test/stage1_app --task github-stage-1 --browser`  

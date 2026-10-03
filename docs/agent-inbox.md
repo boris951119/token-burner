@@ -13,6 +13,20 @@
 
 ---
 
+## INBOX-019（open → **ZCode 接棒**，2026-10-03 09:41，用户授权交接）— v60 尸检 + v61 本地跑
+
+**主文档（唯一入口）**：`docs/agent-outbox.md` 专节 **「INBOX-019 · Cursor→ZCode 全量交接」**。
+
+摘要：
+- 平台 `5d05a462ce84`（v60）**0 分**：首页 `Sign in` link×2 → Playwright strict 全灭。交付 zip：`~/Documents/5d05a462ce84-template.zip`。
+- v61.1 闸（锚点消毒 + Sign in 恰好 1 + 导出去重）已入库；相关单测 6 过。
+- 本地 github-stage-1 agent **在跑**：PID 见 `/tmp/prod_test/stage1_v61/run.pid`，OUT=`/tmp/prod_test/stage1_v61`。
+- **红线**：未 grade 明显 >0 **不上平台**；正式分用比赛额度。
+
+ZCode：按 outbox 第四节清单执行；Cursor 停施工。
+
+---
+
 ## INBOX-001（open）— v48 出分判读要点（run 85f404a69443）
 
 出分后核对四点：

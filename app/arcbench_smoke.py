@@ -317,12 +317,19 @@ if home.status_code == 200:
         _ROUTE_CANDS = {
             "home": ("/",),
             "login": ("/login", "/signin", "/sign-in", "/sign_in",
-                      "/auth/login", "/session/new"),
+                      "/auth/login", "/session/new", "/register",
+                      "/signup", "/sign-up"),
         }
         _FIX = {
             "home": "请在 index 卡片模板补字段（外科补丁，禁止整文件重写）",
-            "login": "请在登录页模板渲染该链接/控件（接到路由，禁止只写入死常量字典）",
+            "login": "请在登录/注册页模板（webui/auth 路由 HTML）渲染该链接/控件"
+                     "（接到路由，禁止只写入死常量字典，禁止改无关 repos 模块）",
         }
+        try:
+            from app.utils.surface_anchor_sanitize import sanitize_surface_anchors
+            _surf = sanitize_surface_anchors(_surf)
+        except Exception:
+            pass
         for _surface, _anchors in _surf.items():
             if _surface not in _ROUTE_CANDS or not _anchors:
                 continue
@@ -362,6 +369,25 @@ if home.status_code == 200:
                     f"可见 HTML 缺 {_fields}——"
                     + _FIX.get(_surface, "请在对应路由模板补字段"))
                 ok = False
+            # v61.1 / 5d05：官方 getByRole('link',{{name:'Sign in'}}) 要求恰好 1
+            if _surface == "home" and _html:
+                try:
+                    from app.utils.surface_anchor_sanitize import (
+                        count_exact_named_links as _cnt_sign_in,
+                    )
+                    _n_si = _cnt_sign_in(_html, "Sign in")
+                except Exception:
+                    import re as _re_si
+                    _n_si = len(_re_si.findall(
+                        r"<a\\b[^>]*>\\s*Sign in\\s*</a>", _html, _re_si.I))
+                if _n_si != 1:
+                    failures.append(
+                        f"路由 HTML 闸（surface=home）：GET / 上 "
+                        f"「Sign in」链接数为 {_n_si}（官方要求恰好 1；"
+                        "Auth 导航与 Modules 磁贴勿重复挂同一 link——"
+                        "请只保留一处 <a href=\"/login\">Sign in</a>，"
+                        "禁止在 index 再堆第二份）")
+                    ok = False
 if hasattr(app, "wsgi_app") and getattr(app, "secret_key", None) is None:
     _has_login = any(
         "login" in str(getattr(_r, "rule", ""))
@@ -2457,8 +2483,11 @@ def verify_delivery(
                         baseline_test_cmd=gate,
                         requirement=requirement,
                         priority_note=(
-                            "【入口优先】官方评测从首页进。先让首页出现需求里的"
-                            "入口控件（可点击的链接或按钮，文案逐字），再谈其它。\n"
+                            "【入口优先】官方评测从首页进。先让首页出现"
+                            "「Sign in」「Create an account」等可点击链接；"
+                            "登录表单控件（Username or email / Password）落在"
+                            "/login·/register 的 webui/auth 路由 HTML——"
+                            "禁止改 index 卡片凑串，禁止动无关 repos。\n"
                             + note
                         ),
                         stop_check=_stop_check,
@@ -2669,6 +2698,7 @@ def verify_delivery(
                         baseline_test_cmd=smoke_gate,
                         requirement=requirement,
                         priority_note=_home_route_priority_note(report)
+                        + _auth_entrance_priority_note(report)
                         + cov_note
                         + checklist_priority_note(
                             requirement, prefer_ids=prefer_ids)
@@ -2954,6 +2984,41 @@ def _home_route_priority_note(report: str) -> str:
         "失败。请把真实首页接上（渲染需求描述的功能 UI 与入口控件），并让需求"
         "点名的每个页面都有一条真路由、且从首页有可点入口可达；禁止用占位页或"
         "隐藏文本塞串充数。\n\n"
+    )
+
+
+def _auth_entrance_priority_note(report: str) -> str:
+    """账户入口串缺失时，禁止再误导去 index 卡片外科补丁（5d05 尸检）。
+
+    平台 0 分跑：冒烟把 Username or email / Invalid credentials 等塞进
+    『首页卡片须含』，修复指令写「index 卡片模板补字段」→ 模型改错文件还
+    修出 repos.environ AttributeError。入口控件落在 /login /register 的
+    webui/auth 路由 HTML。
+    """
+    text = report or ""
+    markers = (
+        "Username or email",
+        "Create an account",
+        "Sign in",
+        "Account menu",
+        "Invalid credentials",
+        "Agree to the terms",
+    )
+    if not any(m in text for m in markers):
+        return ""
+    if "index 卡片" not in text and "surface=home" not in text \
+            and "路由 HTML 闸" not in text and "smoke FAIL" not in text \
+            and "可见 HTML 缺" not in text:
+        # 无首页误导痕迹时仍给短指令（selftest/旅程红也常见）
+        pass
+    return (
+        "【本轮优先：账户入口面，禁止改 index 卡片 / repos】"
+        "官方从首页点「Sign in」/「Create an account」进登录注册。"
+        "请在 webui 或 auth 模块的 /login、/register（或等价）路由 HTML 渲染："
+        "「Sign in」「Create an account」「Username or email」「Password」"
+        "「Agree to the terms」「Create account」「Account menu」；"
+        "报错文案仅在提交失败后出现，不要塞进未登录 GET /。"
+        "禁止整文件重写无关模块；禁止为凑串改 repos/issues。\n\n"
     )
 
 

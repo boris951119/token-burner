@@ -472,7 +472,7 @@ def collect_home_anchors_from_texts(texts: Iterable[str]) -> list[str]:
 def collect_surface_anchors_from_texts(
     texts: Iterable[str],
 ) -> dict[str, list[str]]:
-    """合并多段职责 → {surface: [anchors…]}（保序去重）。"""
+    """合并多段职责 → {surface: [anchors…]}（保序去重；v61 消毒）。"""
     out: dict[str, list[str]] = {"home": [], "login": [], "editor": []}
     seen: dict[str, set[str]] = {k: set() for k in out}
     for t in texts:
@@ -483,7 +483,11 @@ def collect_surface_anchors_from_texts(
                 if a not in sset:
                     sset.add(a)
                     bucket.append(a)
-    return {k: v for k, v in out.items() if v}
+    try:
+        from app.utils.surface_anchor_sanitize import sanitize_surface_anchors
+        return sanitize_surface_anchors(out)
+    except Exception:
+        return {k: v for k, v in out.items() if v}
 
 
 def write_home_anchors_sidecar(code_dir, texts: Iterable[str]) -> list[str]:

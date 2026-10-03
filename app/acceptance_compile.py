@@ -917,11 +917,30 @@ def render_ux_checklist(checklists: list[NodeChecklist],
 
     def _bucket_by_surface(facts: list[str], ck: NodeChecklist
                            ) -> dict[str, list[str]]:
+        # v61：提交后才出现的报错/口令值不得因 home_visible 回落到首页卡片
+        try:
+            from app.utils.surface_anchor_sanitize import (
+                is_login_form_label,
+                is_never_static_anchor,
+            )
+        except Exception:
+            def is_never_static_anchor(_s: str) -> bool:  # type: ignore
+                return False
+
+            def is_login_form_label(_s: str) -> bool:  # type: ignore
+                return False
+
         buckets: dict[str, list[str]] = {}
         for f in facts:
+            if is_never_static_anchor(f):
+                # 动作后提示：进 unknown，不写『首页卡片须含』
+                buckets.setdefault("unknown", []).append(f)
+                continue
             for surf in ck.surfaces_of(f):
                 s = surf if surf != "unknown" else (
                     "home" if ck.home_visible else "unknown")
+                if s == "home" and is_login_form_label(f):
+                    s = "login"
                 buckets.setdefault(s, []).append(f)
         # 去重保序
         for s, lst in list(buckets.items()):
