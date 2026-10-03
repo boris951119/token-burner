@@ -107,6 +107,10 @@ class Settings:
     # single=单模型档（全角色同模 + spec 单发 + 修复不跨模型——完赛队伍
     # 单 flash 99% 的档位，无编排税）；multi=显式三腿编队（不足明报错）。
     workflow_mode: str = "auto"
+    # 模块拆分模式：modular（缺省=现状多模块拆分）/ monolith（实验臂：
+    # 全模块合并单块生成——接缝消除假设的对照实验，见
+    # docs/architecture-analysis-1004.md）
+    module_mode: str = "modular"
     budget_throttle_threshold: float = 0.9     # 11.0：≥90% 进入省 token 模式
     # 11.0 修复保留额：总预算里划给「验收后的 LLM 修复」那一段的比例。省 token
     # 模式据此提前触发（越过 预算-保留额 就地收敛，不再加讨论轮），使总闸之前

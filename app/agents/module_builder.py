@@ -77,6 +77,70 @@ _UI_TARGET_KEYS = ("view", "web", "ui", "页面", "前端", "界面", "视图",
                    "组装", "托管", "静态")
 
 
+def merge_plans_monolith(plans: list[ModulePlan]) -> list[ModulePlan]:
+    """module_mode=monolith 实验开关：全部模块合并为单模块（接缝消除假设
+    的对照实验臂——历届 0 分全部死在模块间接缝，单块生成结构上无接缝）。
+
+    仅实验用，默认关（config module_mode 缺省 "modular" 零行为）。
+    合并职责按依赖序拼接，保留全部模块的职责文本与 UI 清单；单模块
+    依赖自指剔除。
+    """
+    if len(plans) <= 1:
+        return plans
+    ordered = sorted(plans, key=lambda p: p.priority)
+    parts = [f"[{p.name}] {p.responsibility.strip()}" for p in ordered]
+    merged = ModulePlan(
+        name="app",
+        responsibility=(
+            "单模块承载全部职责（monolith 实验模式——模块间无接缝，"
+            "共享符号/建表/种子/导航全部同文件可见）：\n\n"
+            + "\n\n".join(parts)),
+        dependencies=[],
+        priority=0,
+    )
+    return [merged]
+
+
+def ensure_ui_module(plans: list[ModulePlan], requirement: str) -> str | None:
+    """UI 模块保证（v61 尸检 50d1f62e8860 同族：spec 拆出的模块全 API
+    化、无任何 UI 承载模块 → inject_ui_manifest 无目标可注 → 整树
+    零 HTML 页面，交付=保底壳）。
+
+    需求明显含 UI 形态（点击/链接/页面锚点）而所有模块的名称+职责
+    都不含 UI 关键词时，**确定性补挂** webui_pages 模块：职责=承载
+    全部页面渲染与导航 + 引用 seed kernel；依赖=其余全部模块（渲染
+    层最后开发）。返回补挂模块名，未触发返回 None。
+    """
+    if not requirement.strip() or not plans:
+        return None
+    def _ui_score(p: ModulePlan) -> int:
+        text = (p.name + " " + p.responsibility).lower()
+        return sum(k in text for k in _UI_TARGET_KEYS)
+    if any(_ui_score(p) > 0 for p in plans):
+        return None  # 已有 UI 承载模块
+    # 需求确有 UI 形态才补挂（CLI/纯 API 题零行为）
+    low = requirement.lower()
+    ui_markers = ("sign in", "click", "clicks", "link", "button", "page",
+                  "页面", "点击", "链接", "按钮")
+    if not any(m in low for m in ui_markers):
+        return None
+    if any(p.name == "webui_pages" for p in plans):
+        return None
+    others = [p.name for p in plans]
+    plans.append(ModulePlan(
+        name="webui_pages",
+        responsibility=(
+            "承载应用全部 HTML 页面渲染与导航（首页/登录/注册/各业务页），"
+            "从其余模块的接口取数；登录/认证页的首请求引导必须执行 "
+            "_shared/seed_accounts.py 的 register_all(STORE)（官方场景用"
+            "题面预置账号直接登录）；所有带引号控件文案逐字实现，"
+            "页面真实可导航（链接指向已注册路由）。"),
+        dependencies=others,
+        priority=max(p.priority for p in plans) + 1,
+    ))
+    return "webui_pages"
+
+
 def inject_ui_manifest(plans: list[ModulePlan], requirement: str) -> str | None:
     """UI 页面清单注入（平台 v6-3 取证：占位壳页全盘落空——UI 完整性此前
     无结构化契约）。
@@ -422,6 +486,11 @@ class ModuleBuilder:
                         f"交由 coverage 归一: {last_error}",
                         flush=True,
                     )
+                guard_ui = ensure_ui_module(plans, requirement)
+                if guard_ui:
+                    print(f"[split] UI 守卫补挂模块: {guard_ui}"
+                          f"（拆分结果无 UI 承载模块，依赖 "
+                          f"{len(plans) - 1} 个既有模块）", flush=True)
                 inject_ui_manifest(plans, requirement)
                 from app.utils.seed_contract import inject_seed_contract
                 seed_target = inject_seed_contract(plans, requirement)

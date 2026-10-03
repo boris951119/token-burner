@@ -578,6 +578,14 @@ class Pipeline:
                         final_spec, project_id=team.project_id,
                         requirement=requirement,
                     )
+                    if getattr(self.settings, "module_mode", "modular") == "monolith":
+                        from app.agents.module_builder import (
+                            merge_plans_monolith,
+                        )
+                        before = len(plans)
+                        plans = merge_plans_monolith(plans)
+                        print(f"[split] monolith 模式：{before} 模块合并为 1",
+                              flush=True)
                     interfaces = builder.generate_interfaces(
                         plans, project_id=team.project_id
                     )
