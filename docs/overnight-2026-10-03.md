@@ -67,3 +67,7 @@ tail -f /tmp/prod_test/stage1_v61/run_v61_flash.log
 - 12:3x **v61 发车（ZCode，INBOX-019 第 4 步）**：红线三条件全过（grade 33/100 明显>0 / Sign in×1 / 四层闸入库）→ config 回正式赛编队（glm-5.3-flash 首位+single）→ `build_submission --base v60.zip` 打包 186 文件（.env/ledger 零泄漏，包内编队核验 ✓）→ 平台上传（Upload successful）+ 勾「使用比赛额度评测」+ Model=Visual Model=glm-5.3-flash → **run `50d1f62e8860` RUNNING**（billing self_funded=v60 同值常态，勾选框才是池计费开关）；
 - 比赛池余额 **¥130.45**（v60 一发实扣仅 ¥3.67——glm-5.3-flash 计价极廉，v61 预计 ¥3-5，余量充足）；
 - 等待期顺带清掉 5 个孤儿服务进程（自测闸模板残留，锁 /tmp 目录数日）。
+- 19:3x v61 官方出分 **0/30（0/12 features）**：评测期零 500、首页 200×45、冷库/schema/可达闸全生效、作者入口活了——服务侧干净，**唯一死因=登录 401×30**：官方场景用题面 pre-provisioned 账号 `alice-dev` 直接登录，而生成代码把种子分裂在业务模块（alice-dev 只在 orgs 模块的 ensure_seed），登录场景不逛业务页 → 查无此人。本地冷库复现实锤（nora-demo 200 / alice-dev 401）。
+- 20:0x **v63 三层防线落地（d5192a1，全量 2110 绿）**：①`seed_accounts.py` 抽取器（题面 pre-provisioned 反引号三元组，stage-1 实证抽中 alice-dev）②`auth_seed_kernel` 确定性落盘 `_shared/seed_accounts.py`（register_all 幂等；sheet 零行为；管线两处挂载）③**[seed] 运行时探测闸**进 judge_requirements（起服后 POST 常见登录端点，401 判红进修复指令）④注册入口契约（提示词+smoke login 面 Create an account 闸——v61 树 e2e G2/G3/G7 三红实锤）。
+- 20:1x 用户停掉全部 run 后授权重做：**v63 打包（188 文件，零泄漏）→ 上传（official_evaluation ✓）→ 四任务全部发车 RUNNING**：stage-1/stage-2/stage-3/sheet 全 v63（glm-5.3-flash+比赛额度）。四发预计 ~¥15。
+- **今晚判读锚点**：登录门若过（[seed] 闸本地已验证链路），官方场景首次能进到"登录后的世界"——分数是否非零就看种子修复的成色；注册入口链路是下一个已知雷（已加闸）。
