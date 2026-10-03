@@ -759,4 +759,72 @@ def judge_requirements(requirements_dir, base_url: str,
         Path(requirements_dir) / "requirements.yaml")
     out = judge_checklists(checklists, base_url, max_pages, timeout)
     out["nodes"] = len(checklists)
+    _seed_login_probe(Path(requirements_dir), base_url, timeout, out)
     return out
+
+
+_SEED_LOGIN_PATHS = ("/api/auth/login", "/api/login", "/auth/login",
+                     "/api/session", "/api/signin")
+
+
+def _seed_login_probe(req_dir: Path, base_url: str, timeout: float,
+                      out: dict) -> None:
+    """[seed] 预置账号登录探测（50d1f62e8860 官方 0/30 尸检）。
+
+    官方场景用题面 pre-provisioned 账号**直接**登录（不先注册、不逛业务
+    页）——登录入口没装载齐种子 = 401 = 全部场景连带 0 分。零 LLM：
+    判分时顺手 POST 常见登录端点。端点全 404 视为射程外（登录机制未知），
+    任一端点 401/403 判红进修复指令。题面无预置账号（如 sheet）零行为。
+    """
+    try:
+        import json as _json
+        import urllib.error
+        import urllib.request
+
+        from app.utils.seed_accounts import extract_seed_accounts
+
+        yaml_path = req_dir / "requirements.yaml"
+        if not yaml_path.is_file():
+            return
+        accounts = extract_seed_accounts(
+            yaml_path.read_text(encoding="utf-8"))[:4]
+        if not accounts:
+            return
+        base = base_url.rstrip("/")
+        red: list[str] = []
+        seen_endpoint = False
+        for username, _email, password in accounts:
+            ok = False
+            hit = False
+            for path in _SEED_LOGIN_PATHS:
+                req = urllib.request.Request(
+                    base + path,
+                    data=_json.dumps({"username": username,
+                                      "password": password}).encode(),
+                    headers={"Content-Type": "application/json"})
+                try:
+                    with urllib.request.urlopen(req, timeout=timeout) as resp:
+                        hit = True
+                        ok = resp.status == 200
+                except urllib.error.HTTPError as exc:
+                    if exc.code != 404:
+                        hit = True
+                        ok = False
+                except Exception:
+                    continue
+                if ok:
+                    break
+            seen_endpoint = seen_endpoint or hit
+            if hit and not ok:
+                red.append(username)
+        if seen_endpoint and red:
+            out["failures"] = list(out.get("failures") or []) + [
+                "[seed] 官方预置账号登录失败: " + ", ".join(red) +
+                "——官方场景用这些账号直接登录（不先注册不逛业务页），"
+                "预置账号必须在登录/认证模块的首请求引导统一装载"
+                "（_shared/seed_accounts.py 的 register_all）；"
+                "任一 401 = 全部场景连带 0 分"]
+            out["failed"] = int(out.get("failed") or 0) + 1
+            out["total"] = int(out.get("total") or 0) + 1
+    except Exception:
+        pass

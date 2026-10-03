@@ -390,6 +390,24 @@ if home.status_code == 200:
                             ok = False
                 except Exception:
                     pass
+            # v63（v61 树 e2e 实测 G2/G3/G7 三红）：登录页必须有
+            # Create an account 链接且指向可用路由——官方考完登录考注册，
+            # 注册入口缺失 = 整批场景 0 分。
+            if _surface == "login" and _html:
+                try:
+                    from app.utils.surface_anchor_sanitize import (
+                        count_exact_named_links as _cnt_login,
+                    )
+                    if _cnt_login(_html, "Create an account") < 1:
+                        failures.append(
+                            "路由 HTML 闸（surface=login）：GET "
+                            + (_hit or "/login")
+                            + " 上没有可点击的「Create an account」链接——"
+                              "官方登录后立即考注册，登录页必须放该链接并"
+                              "指向真实注册路由（/register 等）")
+                        ok = False
+                except Exception:
+                    pass
                 # v61.2 入口 CTA 去重段止于此；链接可达探测见下方
                 # 入口可达闸（不依赖锚点数据，无条件探测 GET / 页内链接）。
 
