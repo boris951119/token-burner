@@ -367,3 +367,45 @@ def render_skills_summary(skills, surface) -> str     # 过滤后渲染进 skill
 **[INBOX-018 · stage-1 续跑交接（10-02 15:10，ZCode → Cursor）]**：stage-1 本地续跑已发车（token-plan 私 key + `deepseek-v4-flash-0731` single，PID 90967，15:09 心跳=恢复续跑）。**唯一交接入口 = `/tmp/prod_test/stage1_app/RUN_JOURNAL.md`**——配置快照、监控命令、三道新闸（冷库终检/[schema] 审计/账户级止损——96a4 官方 0 分尸检产物 4b2c100 本 run 首战）、判分命令、坑位备忘全在里面，事件流水请追加到该文件第六节，回执走 agent-outbox。要点：①key 在 .env 勿入库勿外传；②启动时 5 张参考图 vision FAIL 属预期（降级，ingest 早已完成）；③日志安静看项目心跳不看 stdout；④run 结束先跑 `grade.py --task github-stage-1 --browser` 再谈结论；⑤上次"尽力交付"的旧壳在工作区根 backend/（15:04 兜底导出），勿当本次交付读数。
 
 **[ZCode 认领 09:47]**：现场核实——v61 闸已入库（25a5130）；v61 run PID 34684 健康（09:41 心跳=模块开发，骨架就绪）；d042699 终报已读（昨日 flash 续跑 grade 4/59·0/100，b4343e6 闸修生效于本 run）。接棒序：盯跑 → grade → 非零才打 v61 包（glm-flash+比赛额度）；等待期做 outbox 第 6 节可选加固（Create an account 唯一/禁 _force_webui_index 双 / /signup→register）。
+
+---
+
+## INBOX-020（open，2026-10-03 21:1x，用户指派）— 用你可用的最强模型做一次独立架构分析
+
+**用户指令**：本周期线上始终 0 分，ZCode 已做多轮尸检。请你（Cursor）切换到可用模型列表里**最强的模型**（用户确认 Auto 下拉里有 Sonnet 系列，型号以你界面实际显示为准）做一次**独立**分析——不要复述 ZCode 结论，要给出你自己的判断。
+
+### 背景一句话
+
+token-burner 是"LLM agent 自动生成 Web 应用"的产品，在 ARC-Bench 上跑 13+ run 全部 0 分。判分=隐藏 Playwright 场景通过率（官方从首页进，按 GIVEN/WHEN/THEN 交互）。今晚 23:59 截止，四任务已用 v63 发车（stage-1/2/3/sheet），跑完出分——但**产品级问题不随今晚结束**，这是为下一阶段请的分析。
+
+### 历届 0 分死因链（全部有实锤证据，非猜测）
+
+| run | 任务 | 死因 | 证据 |
+|---|---|---|---|
+| 81bc | sheet | 触发式文案 vs 静态判分口径错位 | 官方 0/100，本地同口径修复后回升 |
+| sheet_p0 | sheet 本地 | 39 模块死磕 _shared 缺 get_db，154 次升级烧光 2M | 修复史统计 |
+| 96a4a6a9f157 | sheet | 修复补丁给 INSERT 加 created_at 而 DDL 没有 → 官方空库冷启动 95×500 | 评测日志每 11s 一条 OperationalError |
+| 5d05a462ce84 | stage-1 | 首页两个 exact "Sign in" link → Playwright strict mode 全灭 | 官方报告 30/30 unexpected |
+| 50d1f62e8860 | stage-1 | **种子账号分裂**：官方场景用题面 pre-provisioned 的 alice-dev 直接登录，但生成代码把种子注册放在业务模块各自的 ensure_seed 里，登录场景不逛业务页 → POST /api/auth/login 401×30 → 全部场景连带 0 分 | 评测日志 + 本地冷库复现（nora-demo 200/alice-dev 401）|
+
+### 分层诊断（已量化）
+
+- **机械层**：v63 已全绿（起服 200/零 500/冷库终检/schema 审计/CTA 唯一/入口可达闸/[seed] 登录探测闸）——提示词+闸在这一层有效；
+- **结构层**：**打地鼠**——每修一洞换一洞冒出（created_at→Sign in×2→种子分裂），全部是**跨模块缝隙**：拆分器（ModuleBuilder）把需求拆成多模块并行开发，模块间契约靠提示词约束，约束追不上生成空间；
+- **交互语义层**：**从未验证过**——65 个 GWT 场景模拟（sheet 交付树）0/65，64 项失败全在页内交互（点击超时 21/表格语义 26/菜单对话框 8）。官方判分主体恰是这一层。
+
+### 已落地资产（勿重复建议）
+
+1. **kernel 化模式**：db_kernel（DB 三件套确定性落盘）→ auth_seed_kernel（题面 pre-provisioned 账号机械抽取落盘 _shared/seed_accounts.py，登录模块只被要求引用）——教训沉淀：**提示词约束管不住跨模块结构缺陷，kernel 化才是终解**；
+2. 判分体系：sheet-grader（官方同口径三层判分）+ 65 GWT 场景模拟器 + acceptance_judge 零 LLM 判分 + 修复环（RepoFixer 整文件 JSON 通道）；
+3. workflow_mode=single（单模型单发 spec，平台实测最优）；REPAIR_HEADROOM=2.0 预算公式。
+
+### 请你回答的三个问题（架构级）
+
+1. **模块化拆分是否应该放弃**？single 模式下 spec 仍被拆成多模块（v61 把 13 原子全拆成 API 模块连 webui 都没有）。单块生成（全部代码一个模块/单文件）在 13-47 原子规模是否更稳？token 上限与质量如何权衡？
+2. **交互语义层怎么在本地闭环**？官方场景从首页点进来走 GIVEN/WHEN/THEN——我们的管线从未在交付前验证"点按钮有反应"。用 LLM 从题面生成场景 specs 对交付树真浏览器跑（65 场景模拟器已就绪但只用于事后分析），把它接进验收修复环的代价与收益？
+3. **下一阶段产品路线**：官方快评通道（vercel.app 免费评场景分）应该怎么用？还有哪些"结构性保证"（kernel 化候选清单）值得做？
+
+参考材料：docs/agent-inbox.md 全部 INBOX、docs/agent-outbox.md INBOX-019 交接节、docs/overnight-2026-10-03.md（今晚全记录）、记忆文件（含全部死因链与发车状态）。四任务 v63 正在平台跑，出分判读勿动平台。
+
+**回执**：写入 docs/agent-outbox.md 新节「INBOX-020 · 独立架构分析」。
