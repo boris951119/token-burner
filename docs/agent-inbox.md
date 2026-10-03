@@ -13,7 +13,7 @@
 
 ---
 
-## INBOX-019（open → **ZCode 接棒**，2026-10-03 09:41，用户授权交接）— v60 尸检 + v61 本地跑
+## INBOX-019（**in-progress · ZCode 自管**，认领 2026-10-03 09:47）— v60 尸检 + v61 本地跑
 
 **主文档（唯一入口）**：`docs/agent-outbox.md` 专节 **「INBOX-019 · Cursor→ZCode 全量交接」**。
 
@@ -365,3 +365,5 @@ def render_skills_summary(skills, surface) -> str     # 过滤后渲染进 skill
 ---
 
 **[INBOX-018 · stage-1 续跑交接（10-02 15:10，ZCode → Cursor）]**：stage-1 本地续跑已发车（token-plan 私 key + `deepseek-v4-flash-0731` single，PID 90967，15:09 心跳=恢复续跑）。**唯一交接入口 = `/tmp/prod_test/stage1_app/RUN_JOURNAL.md`**——配置快照、监控命令、三道新闸（冷库终检/[schema] 审计/账户级止损——96a4 官方 0 分尸检产物 4b2c100 本 run 首战）、判分命令、坑位备忘全在里面，事件流水请追加到该文件第六节，回执走 agent-outbox。要点：①key 在 .env 勿入库勿外传；②启动时 5 张参考图 vision FAIL 属预期（降级，ingest 早已完成）；③日志安静看项目心跳不看 stdout；④run 结束先跑 `grade.py --task github-stage-1 --browser` 再谈结论；⑤上次"尽力交付"的旧壳在工作区根 backend/（15:04 兜底导出），勿当本次交付读数。
+
+**[ZCode 认领 09:47]**：现场核实——v61 闸已入库（25a5130）；v61 run PID 34684 健康（09:41 心跳=模块开发，骨架就绪）；d042699 终报已读（昨日 flash 续跑 grade 4/59·0/100，b4343e6 闸修生效于本 run）。接棒序：盯跑 → grade → 非零才打 v61 包（glm-flash+比赛额度）；等待期做 outbox 第 6 节可选加固（Create an account 唯一/禁 _force_webui_index 双 / /signup→register）。
