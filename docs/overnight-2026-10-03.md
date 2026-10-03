@@ -64,3 +64,6 @@ tail -f /tmp/prod_test/stage1_v61/run_v61_flash.log
   - **验收段死因（本 run 特有）**：flash-0731 推理模型在修复环大 prompt 下 reasoning 吃满 max_response_tokens=12000 → content 空 → R1/R2 auto_repair 双双"返回空内容"异常，修复环空转；浏览器探针亦死于 Cursor 沙箱无 chromium（specs 生成 SKIP）；
   - **对正式赛的推断**：glm-5.3-flash 无此病史（v60 修复环全程工作）——flash 空响应是 token-plan 端点+推理模型的组合风险，不阻塞 v61 上平台。
 - 10:5x ZCode 加固入库（9b53e32）：CTA 去重扩展/_force_webui_index 清除/入口可达闸。
+- 12:3x **v61 发车（ZCode，INBOX-019 第 4 步）**：红线三条件全过（grade 33/100 明显>0 / Sign in×1 / 四层闸入库）→ config 回正式赛编队（glm-5.3-flash 首位+single）→ `build_submission --base v60.zip` 打包 186 文件（.env/ledger 零泄漏，包内编队核验 ✓）→ 平台上传（Upload successful）+ 勾「使用比赛额度评测」+ Model=Visual Model=glm-5.3-flash → **run `50d1f62e8860` RUNNING**（billing self_funded=v60 同值常态，勾选框才是池计费开关）；
+- 比赛池余额 **¥130.45**（v60 一发实扣仅 ¥3.67——glm-5.3-flash 计价极廉，v61 预计 ¥3-5，余量充足）；
+- 等待期顺带清掉 5 个孤儿服务进程（自测闸模板残留，锁 /tmp 目录数日）。
