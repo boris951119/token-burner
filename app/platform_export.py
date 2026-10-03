@@ -716,12 +716,15 @@ def _install_entry_surface(_a):
                 # v61：作者页缺金丝雀 → 追加可见链接（不洗页）
                 _new = _append_missing(_body, _links)
                 _body2 = _new if _new is not None else _body
-                # v61.1（5d05 官方报告）：Sign in link 必须恰好 1 个
+                # v61.1（5d05 官方报告）：入口 CTA link 必须恰好 1 个——
+                # Sign in 与 Create an account 同族（strict mode 全灭）
                 try:
                     from app.utils.surface_anchor_sanitize import (
                         collapse_exact_named_links,
                     )
-                    _deduped = collapse_exact_named_links(_body2, "Sign in")
+                    _deduped = _body2
+                    for _cta in ("Sign in", "Create an account"):
+                        _deduped = collapse_exact_named_links(_deduped, _cta)
                 except Exception:
                     _deduped = _body2
                 if _deduped != _body:
@@ -734,7 +737,7 @@ def _install_entry_surface(_a):
         if hasattr(_a, "after_request"):
             _a.after_request(_wrap_home)
             print("[backend] 入口补面已挂（兜底整页替换；作者页追加金丝雀+"
-                  "Sign in 去重）", flush=True)
+                  "入口 CTA 去重）", flush=True)
     except Exception as _exc:
         print(("[backend] 入口补面失败: %r" % (_exc,))[:180], flush=True)
 
@@ -893,6 +896,57 @@ def _is_runtime_data(p: Path) -> bool:
     return name.endswith(_DB_DATA_EXT)
 
 
+def _strip_force_index_hijack(backend: Path) -> list[str]:
+    """v61.2（5d05 尸检）：删除作者代码里 before_request 拦 '/' 强转
+    index() 的 _force_webui_index 劫持（窄形态：仅限该函数名）。
+
+    危害：绕过路由装饰器语义与 after_request 入口清洗链（去重/兜底
+    全部失效），且是 home 塞满校验串的帮凶——路由本身必须注册在 /
+    上。缩进块扫描，形态对不齐不动刀（宁漏不误）。"""
+    import re as _re
+
+    def_re = _re.compile(r"^[ \t]*def _force_webui_index\s*\(", _re.M)
+    deco_re = _re.compile(r"^[ \t]*@[\w.]+\.before_request\s*$")
+    changed: list[str] = []
+    for py in sorted(backend.rglob("*.py")):
+        try:
+            src = py.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue
+        m = def_re.search(src)
+        if not m:
+            continue
+        lines = src.splitlines(keepends=True)
+        i = src[:m.start()].count("\n")
+        def_line = lines[i]
+        indent = len(def_line) - len(def_line.lstrip())
+        start = i
+        if i > 0 and deco_re.match(lines[i - 1]):
+            start = i - 1
+        end = i + 1
+        while end < len(lines):
+            ln = lines[end]
+            if not ln.strip():
+                end += 1
+                continue
+            if len(ln) - len(ln.lstrip()) > indent:
+                end += 1
+                continue
+            break
+        new = "".join(lines[:start] + lines[end:])
+        if new != src:
+            try:
+                compile(new, str(py), "exec")
+            except SyntaxError:
+                continue  # 切坏了不如不切
+            py.write_text(new, encoding="utf-8")
+            changed.append(py.relative_to(backend).as_posix())
+    if changed:
+        print("[export] 已删除 before_request 强转 index() 劫持"
+              f"（_force_webui_index）：{', '.join(changed)}", flush=True)
+    return changed
+
+
 def export_platform_layout(output_dir: Path, project_dir: Path,
                            entry_anchors: list[str] | None = None) -> dict:
     """把生成项目适配导出为官方 runner 布局，返回导出摘要。
@@ -948,6 +1002,12 @@ def export_platform_layout(output_dir: Path, project_dir: Path,
     # = 活代码被 export 弄死；两遍探测的第二遍会扫到它）
     if (code_dir / "main.py").is_file():
         shutil.copy2(code_dir / "main.py", backend / "project_main.py")
+    # v61.2：入口面清洗在装配前——先删 before_request 拦 '/' 劫持，
+    # 再让 ensure_entry/入口补面按正常路由语义工作
+    try:
+        _strip_force_index_hijack(backend)
+    except Exception:
+        pass
     # 入口保底（9/23 keep r0 产物取证）：整棵树查不到可导入入口时，通用
     # 启动器 raise SystemExit → 容器 exit 1 = 不评分 = 整跑 0 分，UI 写得
     # 再好也一样。机械装配一个 create_app（注册全部扫到的 Blueprint）至

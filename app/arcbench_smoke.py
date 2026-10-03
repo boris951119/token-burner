@@ -371,23 +371,85 @@ if home.status_code == 200:
                 ok = False
             # v61.1 / 5d05：官方 getByRole('link',{{name:'Sign in'}}) 要求恰好 1
             if _surface == "home" and _html:
+                # v61.1 / 5d05：官方 getByRole('link', {name, exact}) 要求
+                # 恰好 1——Sign in 与 Create an account 同族，首页重复
+                # 入口 CTA 一枪 strict 灭（5d05 30/30 unexpected 死因）。
                 try:
                     from app.utils.surface_anchor_sanitize import (
-                        count_exact_named_links as _cnt_sign_in,
+                        count_exact_named_links as _cnt_link,
                     )
-                    _n_si = _cnt_sign_in(_html, "Sign in")
+                    for _cta in ("Sign in", "Create an account"):
+                        _n_cta = _cnt_link(_html, _cta)
+                        if _n_cta != 1:
+                            failures.append(
+                                f"路由 HTML 闸（surface=home）：GET / 上 "
+                                f"「{_cta}」链接数为 {_n_cta}（官方要求恰好 1；"
+                                "Auth 导航与 Modules 磁贴勿重复挂同一 link——"
+                                f"请只保留一处指向登录/注册路由的 "
+                                f"<a>{_cta}</a>）")
+                            ok = False
                 except Exception:
-                    import re as _re_si
-                    _n_si = len(_re_si.findall(
-                        r"<a\\b[^>]*>\\s*Sign in\\s*</a>", _html, _re_si.I))
-                if _n_si != 1:
-                    failures.append(
-                        f"路由 HTML 闸（surface=home）：GET / 上 "
-                        f"「Sign in」链接数为 {_n_si}（官方要求恰好 1；"
-                        "Auth 导航与 Modules 磁贴勿重复挂同一 link——"
-                        "请只保留一处 <a href=\"/login\">Sign in</a>，"
-                        "禁止在 index 再堆第二份）")
-                    ok = False
+                    pass
+                # v61.2 入口 CTA 去重段止于此；链接可达探测见下方
+                # 入口可达闸（不依赖锚点数据，无条件探测 GET / 页内链接）。
+
+# v61.2 / 5d05（/signup 404 教训）：首页入口链接必须真实可达——官方
+# Playwright 从首页进并真实点击，指向不存在路由的 <a> 一点就 404，
+# 该场景连同其后步骤全灭。挂在锚点循环之外（无锚点数据也探测）。
+# 注意：本段活在 _VERIFY_TEMPLATE 字符串里，禁用正则字面量（反斜杠会被
+# 模板二次解释吃掉）——纯字符串扫描。
+try:
+    _bad_links = []
+    _seen_hrefs = set()
+    _low = (_body or "").lower()
+    _pos = 0
+    while len(_bad_links) < 8:
+        _j = _low.find("href=", _pos)
+        if _j < 0:
+            break
+        _q = _body[_j + 5:_j + 6]
+        if _q in ("'", '"'):
+            _k = _body.find(_q, _j + 6)
+            if _k < 0:
+                break
+            _href = _body[_j + 6:_k]
+            _pos = _k + 1
+        else:
+            _k = _j + 5
+            while (_k < len(_body)
+                   and not _body[_k].isspace()
+                   and _body[_k] != ">"):
+                _k += 1
+            _href = _body[_j + 5:_k]
+            _pos = _k
+        _href = _href.strip()
+        if (not _href or _href in _seen_hrefs
+                or _href.startswith(
+                    ("#", "mailto:", "javascript:",
+                     "http://", "https://", "//"))):
+            continue
+        _seen_hrefs.add(_href)
+        _probe = _href.split("?", 1)[0]
+        if not _probe.startswith("/"):
+            _probe = "/" + _probe
+        try:
+            _rr2 = client.get(_probe)
+            _st = getattr(_rr2, "status_code", 500)
+        except Exception:
+            _st = 500
+        if _st >= 400:
+            _bad_links.append(_probe + " → HTTP " + str(_st))
+    if _bad_links:
+        failures.append(
+            "入口可达闸（GET / 页内链接）："
+            + "；".join(_bad_links[:6])
+            + "——官方会从首页真实点击这些链接，必须指向已注册且可用的"
+              "路由；注册入口请落 /register 或已有注册路由，禁止渲染指向"
+              "不存在路由的 <a>")
+        ok = False
+except Exception:
+    pass
+
 if hasattr(app, "wsgi_app") and getattr(app, "secret_key", None) is None:
     _has_login = any(
         "login" in str(getattr(_r, "rule", ""))

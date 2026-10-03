@@ -39,6 +39,10 @@ def create_app():
     def health():
         return jsonify(status="ok")
 
+    @app.route("/list")
+    def list_page():
+        return "list"
+
     @app.route("/")
     def home():
         return "<a href='/list'>List</a> ok"
@@ -65,6 +69,10 @@ def create_app():
     @app.route("/api/health")
     def health():
         return jsonify(status="ok")
+
+    @app.route("/list")
+    def list_page():
+        return "list"
 
     @app.route("/")
     def home():
@@ -112,6 +120,10 @@ class TestSchemaWiringSmoke:
 
 def _flask_app(home_body: str, login_route: bool = False,
                secret_key: bool = False) -> str:
+    x_part = (
+        "    @app.route('/x')\n"
+        "    def x():\n        return 'x'\n"
+    )
     login_part = ""
     if login_route:
         login_part = '''
@@ -127,6 +139,8 @@ def _flask_app(home_body: str, login_route: bool = False,
         + key_part
         + "    @app.route('/api/health')\n"
         "    def h():\n        return jsonify(status='ok')\n"
+        "    @app.route('/x')\n"
+        "    def x():\n        return 'x'\n"
         "    @app.route('/')\n"
         f"    def home():\n        return {home_body!r}\n"
         + login_part
@@ -147,13 +161,13 @@ class TestNightForensics:
 
     def test_missing_secret_key_with_login_route(self, tmp_path):
         ok, report = _run(tmp_path, _flask_app(
-            "<a href='/l'>L</a>", login_route=True, secret_key=False))
+            "<a href='/login'>L</a>", login_route=True, secret_key=False))
         assert not ok
         assert "secret_key" in report
 
     def test_secret_key_present_passes(self, tmp_path):
         ok, report = _run(tmp_path, _flask_app(
-            "<a href='/l'>L</a>", login_route=True, secret_key=True))
+            "<a href='/login'>L</a>", login_route=True, secret_key=True))
         assert ok, report
 
     def test_double_escaped_home(self, tmp_path):
@@ -230,6 +244,8 @@ def _fastapi_app(home_body: str) -> str:
         f"    def home():\n        return HTMLResponse({home_body!r})\n"
         "    @app.post('/')\n"
         "    def make():\n        return {'ok': True}\n"
+        "    @app.get('/x')\n"
+        "    def x():\n        return {'x': True}\n"
         "    @app.get('/notes/{note_id}')\n"
         "    def note(note_id: int):\n        return {'id': note_id}\n"
         "    return app\n"
@@ -302,6 +318,8 @@ def _app_src(extra_routes: str) -> str:
         "    def h():\n        return jsonify(status='ok')\n"
         "    @app.route('/')\n"
         "    def home():\n        return \"<a href='/x'>X</a>\"\n"
+        "    @app.route('/x')\n"
+        "    def x():\n        return 'x'\n"
         + extra_routes
         + "    return app\n"
     )
