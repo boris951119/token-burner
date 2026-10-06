@@ -149,3 +149,68 @@ class TestEntryReachability:
                       '<a href="https://x.example">Ext</a>'
                       '<a href="mailto:a@b.c">Mail</a>')
         assert "入口可达闸" not in report, report
+
+
+_STEAL = '''\
+def _register_home(app):
+    for _rule in list(app.url_map.iter_rules()):
+        if _rule.rule == "/" and _rule.endpoint != "_assembled_home":
+            try:
+                app.url_map.remove(_rule)
+            except Exception:
+                app.url_map._rules.remove(_rule)
+                app.url_map._remap = True
+                app.url_map.update()
+
+
+def create_app():
+    return None
+'''
+
+
+def test_strip_home_steal_loop_keeps_author_route():
+    from app.utils.surface_anchor_sanitize import strip_shell_home_steal_src
+
+    out = strip_shell_home_steal_src(_STEAL)
+    assert "url_map.remove" not in out
+    assert "_rules.remove" not in out
+    assert "def create_app" in out
+    assert strip_shell_home_steal_src(out) == out
+
+
+def test_entry_contract_one_real_href_each():
+    """8553：Log in 页没有 exact Sign in；入口 json 再满也要补上，并指向 /signup。"""
+    from app.utils.surface_anchor_sanitize import (
+        apply_entry_contract,
+        count_exact_named_links,
+    )
+
+    html = (
+        "<html><body><h1>author home</h1>"
+        "<a href='/repos/alice/acme-docs'>alice/acme-docs</a>"
+        "<a href='/login'>Log in</a>"
+        "<a href='/health'>Sign in</a>"
+        "<a href='/login'>Sign in</a>"
+        "<button>Sign in</button>"
+        "</body></html>"
+    )
+    routes = ["/", "/login", "/signup", "/api/health"]
+    fixed = apply_entry_contract(html, routes)
+    assert count_exact_named_links(fixed, "Sign in") == 1
+    assert count_exact_named_links(fixed, "Create an account") == 1
+    assert 'href="/login">Sign in</a>' in fixed or "href='/login'>Sign in</a>" in fixed
+    assert "Create an account</a>" in fixed
+    assert "/signup" in fixed
+    assert "author home" in fixed
+    assert "<button>Sign in</button>" in fixed
+
+
+def test_entry_contract_skips_auth_ctas_when_not_named():
+    from app.utils.surface_anchor_sanitize import (
+        apply_entry_contract,
+        count_exact_named_links,
+    )
+    html = "<html><body><a href='/wb'>Workbooks</a></body></html>"
+    out = apply_entry_contract(html, ["/wb"], names=[])
+    assert count_exact_named_links(out, "Sign in") == 0
+    assert "Workbooks" in out

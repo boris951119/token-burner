@@ -329,6 +329,11 @@ class BudgetGuard:
         return self.remaining > self.repair_reserve
 
     @property
+    def hold_for_repair(self) -> bool:
+        """写码阶段该停了：再写模块或整文件重写会吃掉装配和主旅程的保留额。"""
+        return self.repair_reserve_ratio > 0 and not self.repair_fund_intact
+
+    @property
     def throttling(self) -> bool:
         """省 token 模式（11.0：≥90% 压缩讨论轮数等）。
 

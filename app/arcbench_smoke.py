@@ -369,16 +369,16 @@ if home.status_code == 200:
                     f"可见 HTML 缺 {_fields}——"
                     + _FIX.get(_surface, "请在对应路由模板补字段"))
                 ok = False
-            # v61.1 / 5d05：官方 getByRole('link',{{name:'Sign in'}}) 要求恰好 1
+            # v61.1：题面点名的入口 CTA 才要求恰好 1。表格题没有
+            # Sign in 时不把这两条套上去。
             if _surface == "home" and _html:
-                # v61.1 / 5d05：官方 getByRole('link', {name, exact}) 要求
-                # 恰好 1——Sign in 与 Create an account 同族，首页重复
-                # 入口 CTA 一枪 strict 灭（5d05 30/30 unexpected 死因）。
                 try:
                     from app.utils.surface_anchor_sanitize import (
                         count_exact_named_links as _cnt_link,
                     )
                     for _cta in ("Sign in", "Create an account"):
+                        if _cta not in _anchors:
+                            continue
                         _n_cta = _cnt_link(_html, _cta)
                         if _n_cta != 1:
                             failures.append(
@@ -390,15 +390,14 @@ if home.status_code == 200:
                             ok = False
                 except Exception:
                     pass
-            # v63（v61 树 e2e 实测 G2/G3/G7 三红）：登录页必须有
-            # Create an account 链接且指向可用路由——官方考完登录考注册，
-            # 注册入口缺失 = 整批场景 0 分。
+            # 登录页注册入口：仅当本面锚点点名 Create an account
             if _surface == "login" and _html:
                 try:
                     from app.utils.surface_anchor_sanitize import (
                         count_exact_named_links as _cnt_login,
                     )
-                    if _cnt_login(_html, "Create an account") < 1:
+                    if ("Create an account" in _anchors
+                            and _cnt_login(_html, "Create an account") < 1):
                         failures.append(
                             "路由 HTML 闸（surface=login）：GET "
                             + (_hit or "/login")
@@ -1814,6 +1813,12 @@ def run_smoke(code_dir: Path, python: str | None = None) -> tuple[bool, str]:
         return False, f"code 目录不存在: {code_dir}"
 
     try:
+        from app.utils.surface_anchor_sanitize import strip_shell_home_steals
+        strip_shell_home_steals(code_dir)
+    except Exception:
+        pass
+
+    try:
         shims = auto_shim_imports(code_dir)
     except Exception:
         shims = []
@@ -2314,6 +2319,60 @@ def _journey_gate(
     return True, ""
 
 
+def _apply_main_journeys(code_dir, project_dir, requirement,
+                          requirements_dir, settings, max_app_rounds,
+                          notes: list[str]) -> tuple[str, str]:
+    """从当次需求编译点击旅程并走一遍。失败时最多修一轮。
+
+    返回 (pass|fail|skip, 报告)。抽不出步骤或应用没装配起来 = skip。
+    """
+    try:
+        from app.utils.mechanical_journey import run_compiled_journeys
+    except Exception as exc:
+        notes.append(f"[journey-main] 跳过: {exc!r}"[:160])
+        return "skip", ""
+    try:
+        status, report = run_compiled_journeys(
+            code_dir, requirement or "", requirements_dir)
+    except Exception as exc:
+        notes.append(f"[journey-main] 跳过: {exc!r}"[:160])
+        return "skip", ""
+    notes.append(f"[journey-main] {status}"
+                 + (f": {report[:180]}" if status != "pass" else ""))
+    if status != "fail":
+        return status, report
+    blocked = _repair_blocked()
+    if blocked or max_app_rounds <= 0:
+        notes.append("[journey-main] 未再修"
+                     + (f"（{blocked}）" if blocked else ""))
+        return "fail", report
+    try:
+        auto_repair(
+            project_dir, settings, max_rounds=1,
+            requirement=requirement,
+            extra_issue=(
+                "主旅程未走通。下面每条都来自需求原文里的点击/可见文案，"
+                "不是某一道赛题的专用清单。从 GET / 出发：同名链接或按钮"
+                "必须恰好 1 个，点开必须是本站 2xx，下一页必须看得见"
+                "要求的原文。\n" + report
+            ),
+        )
+    except Exception as exc:
+        notes.append(f"[journey-main] 修复异常: {exc!r}"[:160])
+        return "fail", report
+    try:
+        status2, report2 = run_compiled_journeys(
+            code_dir, requirement or "", requirements_dir)
+    except Exception as exc:
+        notes.append(f"[journey-main] 复测跳过: {exc!r}"[:160])
+        return "fail", report
+    notes.append(f"[journey-main] 复测 {status2}"
+                 + (f": {report2[:180]}" if status2 != "pass" else ""))
+    if status2 == "skip":
+        return "fail", report
+    return status2, report2
+
+
 def _repair_blocked() -> str:
     """LLM 修复通道开工前的预算体检：返不可开工的原因，可修则返空串。
 
@@ -2455,6 +2514,7 @@ def verify_delivery(
     all_reports: list[str] = []
     all_passed = False
     prev_sig = ""
+    main_journey_status = "skip"
     if probe_green:
         # 探针已绿 ≠ 作者工厂可起 / 表单写路径通。
         # v53 刀B：create_app 池试装；v52：表单×路由对账。任一红 → 退快车道。
@@ -2809,12 +2869,19 @@ def verify_delivery(
                 continue  # smoke 还没过，不进旅程，直接下一轮
 
         if probe_green:
-            # 532193：探针全绿后仍进锚点/旅程/自测 LLM 环 → Stage3 永不启动。
-            # 起服契约已满足，快车道到此收束。
+            # 探针绿只说明 health 和首页能开。主旅程不花钱，从需求编译，
+            # 走不通就记失败；不再把「起得来」写成验收通过。
+            main_journey_status, mj_report = _apply_main_journeys(
+                code_dir, project_dir, requirement, requirements_dir,
+                settings, max_app_rounds, notes)
             notes.append(
-                f"[probe-fast] 冒烟{'过' if ok else '未过'}；导出探针已绿 → "
-                "跳过锚点/旅程/自测 LLM，交 Stage3")
-            all_passed = bool(ok)
+                f"[probe-fast] 冒烟{'过' if ok else '未过'}；"
+                f"主旅程 {main_journey_status}；"
+                "跳过 LLM 旅程脚本")
+            all_passed = bool(ok) and main_journey_status != "fail"
+            if main_journey_status == "fail":
+                all_reports.append(
+                    f"[probe-fast] 主旅程 FAIL: {mj_report[-200:]}")
             break
 
         # --- Phase 1.5: 锚点覆盖修复（平台 v6 取证：全盘落空根因）---
@@ -2892,7 +2959,24 @@ def verify_delivery(
                     f": {rep2[-160:]}")
 
         # --- Phase 2: 旅程 ---
+        # 先走从需求编译的点击路径（零 LLM）。失败就不再花一轮模型写脚本。
         notes.append(f"[R{verify_round}][smoke] PASS")
+        main_journey_status, mj_report = _apply_main_journeys(
+            code_dir, project_dir, requirement, requirements_dir,
+            settings, max_app_rounds, notes)
+        if main_journey_status == "fail":
+            notes.append(f"[R{verify_round}][journey-main] FAIL")
+            all_reports.append(
+                f"[R{verify_round}] 主旅程 FAIL: {mj_report[-200:]}")
+            all_passed = False
+            sig = _failure_sig(mj_report)
+            if sig and sig == prev_sig:
+                notes.append(
+                    f"[R{verify_round}] 主旅程失败指纹与上一轮相同"
+                    "→ 停止空转，按现状交付")
+                break
+            prev_sig = sig
+            continue
         _beat(project_dir, f"验收-R{verify_round}-旅程")
         try:
             llm = _llm_from(settings)
@@ -2930,7 +3014,7 @@ def verify_delivery(
         sok, sreport = selftest_gate(project_dir, requirement, settings,
                                      requirements_dir=requirements_dir)
         notes.append(f"[selftest] {'PASS' if sok else 'FAIL'}")
-        if sok:
+        if sok and main_journey_status != "fail":
             _beat(project_dir, "验收-通过")
             return True, "\n".join(notes + [sreport])
     except Exception as exc:

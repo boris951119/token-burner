@@ -887,6 +887,117 @@ def test_home_route_beats_route_count(tmp_path):
     assert "data-arcbench-fallback" not in body
 
 
+def test_real_home_beats_assembled_shell_with_more_routes(tmp_path):
+    """决赛 8553：壳改写后路由更多且自带 /，不得压过作者真首页。"""
+    from app.platform_export import _BACKEND_MAIN
+
+    be = tmp_path / "backend"
+    be.mkdir()
+    (be / "app_main.py").write_text(
+        "from flask import Flask\n"
+        "def _register_home(app):\n"
+        "    @app.route('/')\n"
+        "    def _assembled_home():\n"
+        "        return '<h1>Application ready</h1>'\n"
+        "def create_app():\n"
+        "    a = Flask('shell')\n"
+        "    for i in range(12):\n"
+        "        a.add_url_rule('/p%d' % i, 'p%d' % i, lambda: '')\n"
+        "    _register_home(a)\n"
+        "    return a\n",
+        encoding="utf-8")
+    (be / "webui.py").write_text(
+        "from flask import Flask\n"
+        "def create_app():\n"
+        "    a = Flask('webui')\n"
+        "    a.add_url_rule('/', 'home', lambda: '<h1>author home</h1>')\n"
+        "    a.add_url_rule('/login', 'login', lambda: 'login')\n"
+        "    return a\n",
+        encoding="utf-8")
+    (be / "requirements.txt").write_text("flask\n", encoding="utf-8")
+    (be / "main.py").write_text(_BACKEND_MAIN, encoding="utf-8")
+    mod = _exec_entry(be, "runner_real_over_shell")
+    assert mod.app.name == "webui"
+    body = mod.app.test_client().get("/").get_data(as_text=True)
+    assert "author home" in body
+
+
+def test_shell_cannot_unload_author_home_and_cta_is_one(tmp_path):
+    """8553：同一 create_app 里卸掉作者 / 再挂保活页；官方 Sign in 收到 0。"""
+    import json
+
+    from app.platform_export import _BACKEND_MAIN
+    from app.utils.surface_anchor_sanitize import count_exact_named_links
+
+    be = tmp_path / "backend"
+    be.mkdir()
+    (be / "arcbench_entry.json").write_text(json.dumps({
+        "anchors": ["Private", "Code", "HTTPS", "SSH", "Settings",
+                    "Fork", "Create fork", "Repository name",
+                    "New repository", "Add a README file",
+                    "Create repository", "Change visibility"],
+        "ctas": ["Sign in", "Create an account"],
+    }), encoding="utf-8")
+    (be / "app_main.py").write_text(
+        "from flask import Flask, Blueprint\n"
+        "bp = Blueprint('webui', __name__)\n"
+        "@bp.route('/')\n"
+        "def index():\n"
+        "    return ('<html><body><h1>author home</h1>'\n"
+        "            \"<a href='/repos/alice/acme-docs'>alice/acme-docs</a>\"\n"
+        "            \"<a href='/login'>Log in</a></body></html>\")\n"
+        "@bp.route('/login')\n"
+        "def login():\n"
+        "    return 'login'\n"
+        "@bp.route('/signup')\n"
+        "def signup():\n"
+        "    return 'signup'\n"
+        "def _register_home(app):\n"
+        "    for _rule in list(app.url_map.iter_rules()):\n"
+        "        if _rule.rule == '/' and _rule.endpoint != '_assembled_home':\n"
+        "            try:\n"
+        "                app.url_map.remove(_rule)\n"
+        "            except Exception:\n"
+        "                app.url_map._rules.remove(_rule)\n"
+        "                app.url_map._remap = True\n"
+        "                app.url_map.update()\n"
+        "    @app.route('/')\n"
+        "    def _assembled_home():\n"
+        "        return ('<html><body data-arcbench-fallback=\"1\">'\n"
+        "                '<h2>acme-docs</h2></body></html>', 200)\n"
+        "def create_app():\n"
+        "    a = Flask('shell')\n"
+        "    a.register_blueprint(bp)\n"
+        "    _register_home(a)\n"
+        "    return a\n",
+        encoding="utf-8")
+    (be / "requirements.txt").write_text("flask\n", encoding="utf-8")
+    (be / "main.py").write_text(_BACKEND_MAIN, encoding="utf-8")
+    # 请求必须发生在 _exec_entry 归还 sys.modules 之前：归还后 Flask
+    # 的 request 代理脱离上下文，after_request 进不去。平台进程不会卸模块。
+    import importlib.util
+    path_snap = list(sys.path)
+    mods_snap = set(sys.modules)
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "runner_keep_author_home", be / "main.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        body = mod.app.test_client().get("/").get_data(as_text=True)
+    finally:
+        sys.path[:] = path_snap
+        for gone in set(sys.modules) - mods_snap:
+            sys.modules.pop(gone, None)
+    src = (be / "app_main.py").read_text(encoding="utf-8")
+    assert "url_map.remove" not in src
+    assert "author home" in body
+    assert "data-arcbench-fallback" not in body
+    assert count_exact_named_links(body, "Sign in") == 1
+    assert count_exact_named_links(body, "Create an account") == 1
+    assert 'href="/login"' in body or "href='/login'" in body
+    assert "/signup" in body
+
+
 def test_fallback_home_is_flagged_and_lists_routes(tmp_path):
     """全员无 / 时的保活页必须带判红标记 + 真实路由清单（探针据此
     判 home-is-fallback-shell，不再假绿放行快车道）。"""

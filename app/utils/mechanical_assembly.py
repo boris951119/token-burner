@@ -158,7 +158,13 @@ def generate_app_main(surfaces: list[ModuleSurface]) -> str:
                                     alias))
             bp_reg.append(
                 f"    if {alias} is not None:\n"
-                f"        app.register_blueprint({alias})")
+                f"        try:\n"
+                f"            app.register_blueprint({alias})\n"
+                f"        except Exception as _e:\n"
+                f"            try:\n"
+                f"                app.register_blueprint({alias}, name={alias!r})\n"
+                f"            except Exception as _e2:\n"
+                f"                print(f'[assemble] skip register {alias}: {{_e2!r}}')")
         for stem, fn in s.bp_factories:
             # 已有顶层 Blueprint 变量时不重复调工厂
             if any(st == stem for st, _ in s.blueprints):
@@ -216,6 +222,7 @@ def create_app() -> Flask:
 {chr(10).join(bp_reg) if bp_reg else "    pass"}
     # 业务蓝图没挂首页时机械补一个可渲染 /——官方评测从首页进，
     # 只有 health 绿而 / 404 = 可评分但全红；两端都没有 = 起服契约残缺。
+    # 已有作者 GET / 时禁止 remove 再挂保活页（决赛 8553 壳抢走首页）。
     if not any(getattr(r, "rule", None) == "/" for r in app.url_map.iter_rules()):
         @app.route("/")
         def _assembled_home():

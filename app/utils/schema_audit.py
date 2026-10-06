@@ -35,6 +35,16 @@ _SQL_LITERAL_RE = re.compile(
     r"DELETE\s+FROM\b)[^'\"\n]*?)['\"]",
     re.IGNORECASE,
 )
+# 三引号 SQL（conn.execute(\"\"\"SELECT created_at ...\"\"\"））。
+# 单行正则看不见换行，8568 首页 500 就是这条漏网。
+_SQL_TRIPLE_RE = re.compile(
+    r'"""(.*?)"""|\'\'\'(.*?)\'\'\'',
+    re.DOTALL,
+)
+_SQL_HEAD_RE = re.compile(
+    r"\b(?:SELECT\b|INSERT\s+INTO\b|UPDATE\s+\w+|DELETE\s+FROM\b)",
+    re.IGNORECASE,
+)
 _TABLE_RE = re.compile(
     r"\b(?:FROM|INTO|UPDATE|JOIN)\s+[\"'\[`]?(\w+)[\"'\]]?", re.IGNORECASE)
 _QUALIFIED_RE = re.compile(r"\b(\w+)\.(\w+)\b")
@@ -157,6 +167,16 @@ def _select_list_columns(select_list: str) -> list[str]:
     return cols
 
 
+def _iter_sql(src: str):
+    """源码里的 SQL 片段：(起始下标, sql)。单行字面量 + 含语句的三引号。"""
+    for m in _SQL_LITERAL_RE.finditer(src):
+        yield m.start(), m.group(1)
+    for m in _SQL_TRIPLE_RE.finditer(src):
+        body = m.group(1) if m.group(1) is not None else m.group(2)
+        if body and _SQL_HEAD_RE.search(body):
+            yield m.start(), body
+
+
 def audit_schema(code_dir: Path) -> list[str]:
     """审计目录内 SQL 引用与 DDL 的列名漂移。
 
@@ -179,9 +199,8 @@ def audit_schema(code_dir: Path) -> list[str]:
         except OSError:
             continue
         rel = py.relative_to(code_dir).as_posix()
-        for m in _SQL_LITERAL_RE.finditer(src):
-            sql = m.group(1)
-            line = src.count("\n", 0, m.start()) + 1
+        for start, sql in _iter_sql(src):
+            line = src.count("\n", 0, start) + 1
             where = f"{rel}:{line}"
 
             # 1) INSERT INTO 表 (col, ...) —— 清单里 DDL 不存在的列

@@ -13,6 +13,19 @@ class _NoChatLLM:
         raise AssertionError("超尺寸路径不得再调 LLM 整文件重写")
 
 
+class _WindowLLM:
+    """只接受一段替换请求，不接受整文件。"""
+
+    def __init__(self):
+        self.systems: list[str] = []
+        self.users: list[str] = []
+
+    def chat(self, model, messages):
+        self.systems.append(messages[0]["content"])
+        self.users.append(messages[-1]["content"])
+        return type("R", (), {"content": "无法给出唯一一段"})()
+
+
 class _FailExec:
     def run(self, code, tests, timeout, expected_output="", module=""):
         from app.execution.executor import ExecutionResult, ExecutionStatus
@@ -32,8 +45,9 @@ def test_oversized_skips_whole_file_llm_repair(tmp_path, capsys):
     handle = fm.create_project("oversized")
     pid = handle.project_id
     settings = Settings(models=["m1", "m2", "m3"], max_fix_rounds=5)
+    llm = _WindowLLM()
     eng = DevLoopEngine(
-        llm=_NoChatLLM(), dev_model="m1", test_model="m2", main_model="m3",
+        llm=llm, dev_model="m1", test_model="m2", main_model="m3",
         executor=_FailExec(), settings=settings, file_manager=fm,
     )
     big = "def f():\n    return 1\n" * 310
@@ -45,7 +59,46 @@ def test_oversized_skips_whole_file_llm_repair(tmp_path, capsys):
     assert result.status is ModuleStatus.FROZEN
     out = capsys.readouterr().out
     assert "超尺寸" in result.message or "超尺寸" in out
+    assert llm.systems and "整个文件" in llm.systems[0]
+    assert llm.users and llm.users[0].count("return 1") < 100
     assert (handle.root / "code" / "webui_pages" / "webui_pages.py").is_file()
+
+
+def test_surgical_snippet_replaces_one_span_only():
+    from app.agents.dev_loop import apply_surgical_snippet
+
+    code = "def keep():\n    return 0\n\ndef fixme():\n    return 1\n"
+    reply = "<<<OLD\ndef fixme():\n    return 1\n<<<NEW\ndef fixme():\n    return 2\n<<<END\n"
+    updated = apply_surgical_snippet(code, reply)
+    assert updated is not None
+    assert "return 0" in updated
+    assert "return 2" in updated
+    assert apply_surgical_snippet(code + code, reply) is None
+
+
+def test_reserve_line_stops_module_fix_without_rewrite(tmp_path):
+    from app.utils.budget import BudgetGuard
+
+    fm = FileManager(projects_root=tmp_path / "projects")
+    handle = fm.create_project("reserve")
+    pid = handle.project_id
+    settings = Settings(models=["m1", "m2", "m3"], max_fix_rounds=5)
+    guard = BudgetGuard(1000, repair_reserve_ratio=0.25)
+    guard.record(800)
+    assert guard.hold_for_repair
+    eng = DevLoopEngine(
+        llm=_NoChatLLM(), dev_model="m1", test_model="m2", main_model="m3",
+        executor=_FailExec(), settings=settings, file_manager=fm,
+        budget_guard=guard,
+    )
+    result = eng._drive(
+        "notes", pid, "def f():\n    return 1\n",
+        "def test_x():\n    assert True\n",
+        fix_attempts=0, user_feedback="", contract=None,
+        project_modules=None, feedback_pending=False,
+    )
+    assert result.status is ModuleStatus.FROZEN
+    assert "保留额" in result.message
 
 
 def test_annotate_no_full_req_dump():
@@ -207,3 +260,27 @@ def test_main_skips_verify_when_probe_green(monkeypatch):
     monkeypatch.setattr(m, "_probe_green", lambda s: True)
     early = _fake_export()
     assert m._probe_green(early) is True
+
+
+def test_delivery_gate_rolls_back_when_final_probe_red(tmp_path):
+    """2f0b/8568：终局 home 500 / 无 health 不得覆盖抢先绿灯树。"""
+    import importlib
+
+    m = importlib.import_module("main")
+    backend = tmp_path / "backend"
+    backend.mkdir()
+    (backend / "main.py").write_text("dead\n", encoding="utf-8")
+    good = tmp_path / "good"
+    good.mkdir()
+    (good / "main.py").write_text("alive\n", encoding="utf-8")
+    assert m._maybe_rollback_red_probe(
+        backend, good, {"ok": False, "detail": "health-ok home-err=HTTPError"},
+    ) == "rolled"
+    assert (backend / "main.py").read_text(encoding="utf-8") == "alive\n"
+    assert m._maybe_rollback_red_probe(
+        backend, good, {"ok": True, "detail": "ok"}) == "green"
+    assert (backend / "main.py").read_text(encoding="utf-8") == "alive\n"
+    assert m._maybe_rollback_red_probe(backend, None, None) == "skipped"
+    assert m._maybe_rollback_red_probe(
+        backend, None, {"ok": False, "detail": "no-health-in-60s"},
+    ) == "no-backup"

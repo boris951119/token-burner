@@ -285,6 +285,31 @@ class RepoFixer:
 
     def _patch_file(self, issue: str, path: str, change: str,
                     current: str) -> str | None:
+        nlines = current.count("\n") + 1 if current else 0
+        if current and nlines > 600:
+            from app.agents.dev_loop import (
+                apply_surgical_snippet, failure_window,
+            )
+            window = failure_window(current, f"{issue}\n{change}")
+            system = (
+                "这个文件已经很长。不要输出完整新版。"
+                "只输出一段在文件中恰好出现一次的原文，以及它的替换。\n"
+                "格式：\n<<<OLD\n<原文，不含行号>\n<<<NEW\n<替换>\n<<<END\n"
+            )
+            reply = self._chat(
+                system,
+                f"## Issue\n{issue}\n\n## 目标文件\n{path}\n\n"
+                f"## 修改目标\n{change}\n\n"
+                f"失败点附近（行号|代码）：\n{window}",
+            )
+            updated = apply_surgical_snippet(current, reply or "")
+            if updated:
+                print(f"[repo_fix] {path}: {nlines} 行，已替换一段",
+                      flush=True)
+                return updated
+            print(f"[repo_fix] {path}: {nlines} 行，一段对不上，保持原文件",
+                  flush=True)
+            return current
         system = (
             "你是资深工程师。输出指定文件的完整新版内容(最小必要修改:"
             "只改与 issue 相关的部分,保持风格与缩进,禁止重构无关代码,"

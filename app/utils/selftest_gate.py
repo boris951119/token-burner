@@ -1053,6 +1053,14 @@ def selftest_gate(project_dir: Path, requirement: str, settings,
     # Playwright 级发现能力，node-free 判分段（起服+导出布局+编译逐字事实）照跑。
     if not getattr(settings, "selftest_specs_enabled", True):
         reason = reason or "配置关闭（selftest_specs_enabled=false）"
+    if not reason:
+        try:
+            from app.utils.budget import get_active_budget_guard
+            _g = get_active_budget_guard()
+            if _g is not None and _g.hold_for_repair:
+                reason = "修复保留额已到线（跳过自测规格 LLM）"
+        except Exception:
+            pass
     specs_dir: Path | None = None
     if reason:
         # specs 生成要先烧 LLM token，跑它却需要 node——缺 node 时一分钱

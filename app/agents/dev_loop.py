@@ -66,6 +66,40 @@ def _is_oversized(code: str) -> bool:
     return _line_count(code) > _OVERSIZED_LINES
 
 
+def failure_window(code: str, report: str, radius: int = 40) -> str:
+    """失败点附近的一段源码。长文件只给这一窗，不把整文件塞进修复请求。"""
+    lines = (code or "").splitlines()
+    if not lines:
+        return ""
+    match = re.search(r"line (\d+)", report or "")
+    if match:
+        center = int(match.group(1))
+    else:
+        center = 1
+    lo = max(1, center - radius)
+    hi = min(len(lines), center + radius)
+    return "\n".join(f"{i}|{lines[i - 1]}" for i in range(lo, hi + 1))
+
+
+def apply_surgical_snippet(code: str, reply: str) -> str | None:
+    """把模型给出的唯一一段替换进源码。对不上、对上多处、或替换后不能编译则放弃。"""
+    import ast
+
+    match = re.search(
+        r"<<<OLD\n(.*?)<<<NEW\n(.*?)<<<END", reply or "", re.S)
+    if not match:
+        return None
+    old, new = match.group(1), match.group(2)
+    if not old.strip() or code.count(old) != 1:
+        return None
+    updated = code.replace(old, new, 1)
+    try:
+        ast.parse(updated)
+    except SyntaxError:
+        return None
+    return updated
+
+
 # 12.7/14.4：LLM 输出中的公共层代码标记块（解析后落盘 code/_shared/）
 _SHARED_BLOCK = re.compile(
     r"# ==== shared: (\S+?) ====\n(.*?)# ==== end shared ====", re.DOTALL
@@ -158,6 +192,7 @@ class DevLoopEngine:
         self.settings = settings
         self.file_manager = file_manager
         self.budget_guard = budget_guard  # 11.0 总闸（超预算立即中止上抛）
+        self._surgical_done: set[str] = set()
         # M10-3：Researcher 结构化摘要（已含数据边界治理），注入每个
         # 模块的写码/写测/修复提示词——解决 LLM 知识过时（规格 4.3）
         self.research_context = research_context
@@ -695,20 +730,58 @@ class DevLoopEngine:
                     code, tests, gate_passed,
                 )
 
-            # 超尺寸：整文件重写通道结构性失效（532193：webui_pages 820 行
-            # 两次 finish 间隔 ~64min 台账空烧）。有可编译代码就冻结交付，
-            # 不再换模型整文件重写——通用规则，与具体题面无关。
+            # 保留额到线：不再为这个模块花整文件重写。钱留给装配之后的主旅程。
+            if (self.budget_guard is not None
+                    and self.budget_guard.hold_for_repair):
+                print(
+                    f"[repair] {module}: 修复保留额已到线"
+                    f"（{self.budget_guard.summary()}），"
+                    "停止本模块修复，留给装配和主旅程",
+                    flush=True,
+                )
+                return self._finish(
+                    module, project_id, ModuleStatus.FROZEN, fix_attempts,
+                    ("修复保留额已到线，本模块按现状停下，"
+                     "预算留给装配和主旅程。"
+                     f"末次失败: {failure_report[:200]}"),
+                    code, tests, gate_passed,
+                )
+
+            # 超尺寸：整文件重写必截断空烧。只改失败点附近的一段；
+            # 一段没对上或改完仍失败，就按现状冻结，不再整文件重发。
             if (not tests_gate_failed) and _is_oversized(code):
+                if module in self._surgical_done:
+                    print(
+                        f"[repair] {module}: 单文件 {_line_count(code):,} 行"
+                        "，外科一段后仍失败，不再整文件重写",
+                        flush=True,
+                    )
+                    return self._finish(
+                        module, project_id, ModuleStatus.FROZEN, fix_attempts,
+                        (f"超尺寸单文件（{_line_count(code)} 行 > "
+                         f"{_OVERSIZED_LINES}）：已做一段外科修补，"
+                         f"不再整文件重写。末次失败: {failure_report[:200]}"),
+                        code, tests, gate_passed,
+                    )
+                self._surgical_done.add(module)
+                patched = self._surgical_fix(module, code, failure_report)
+                if patched and patched != code:
+                    print(
+                        f"[repair] {module}: 超尺寸文件已替换一段，重新执行",
+                        flush=True,
+                    )
+                    code = patched
+                    continue
                 print(
                     f"[repair] {module}: 单文件 {_line_count(code):,} 行 > "
-                    f"{_OVERSIZED_LINES}，跳过整文件 LLM 重写，按现状冻结",
+                    f"{_OVERSIZED_LINES}，没有可应用的一段替换，按现状冻结",
                     flush=True,
                 )
                 return self._finish(
                     module, project_id, ModuleStatus.FROZEN, fix_attempts,
                     (f"超尺寸单文件（{_line_count(code)} 行 > "
-                     f"{_OVERSIZED_LINES}）：整文件修复通道失效，"
-                     f"按可编译现状冻结。末次失败: {failure_report[:200]}"),
+                     f"{_OVERSIZED_LINES}）：没有可应用的一段替换，"
+                     f"不整文件重写。末次失败: {failure_report[:200]}"),
                     code, tests, gate_passed,
                 )
 
@@ -751,6 +824,33 @@ class DevLoopEngine:
         return results
 
     # ------------------------------------------------------------------
+
+    def _surgical_fix(self, module: str, code: str, failure_report: str) -> str:
+        """长文件只换失败点附近唯一的一段。换不上就原样返回。"""
+        window = failure_window(code, failure_report)
+        system = (
+            "你在修一个已经很长的源文件。不要重写整个文件。"
+            "只输出一段在文件中恰好出现一次的原文，以及它的替换。"
+            "格式必须是：\n<<<OLD\n<原文，不含行号>\n<<<NEW\n<替换>\n<<<END\n"
+            "原文必须从下面的窗口里逐字复制，且在整个文件中唯一。"
+        )
+        user = (
+            f"模块 {module} 执行失败：\n{failure_report[:800]}\n\n"
+            f"失败点附近（行号|代码）：\n{window}"
+        )
+        try:
+            response = self._chat_resilient(
+                self._last_code_model if getattr(self, "_last_code_model", "")
+                else self.dev_model,
+                system, user,
+            )
+            reply = getattr(response, "content", "") or ""
+        except (BudgetExceededError, TaskCancelledError):
+            raise
+        except Exception:
+            return code
+        updated = apply_surgical_snippet(code, reply)
+        return updated if updated is not None else code
 
     def _model_for_module(self, module: str, responsibility: str) -> str:
         """按产物类型路由写码模型（平台 v6-3 取证：UI 是最重产物，

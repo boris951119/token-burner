@@ -394,6 +394,7 @@ class TestRepairReserve:
         g.record(60)
         # 同一条线两副面孔：前置阶段到此收敛，修复通道到此仍开工
         assert g.throttling and not g.repair_fund_intact
+        assert g.hold_for_repair
         assert not g.exceeded            # 总闸口径不动（1000 才算耗尽）
         g.record(240)
         assert g.exceeded and not g.repair_fund_intact

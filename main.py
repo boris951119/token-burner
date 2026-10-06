@@ -190,6 +190,39 @@ def _probe_green(export_summary: dict | None) -> bool:
     return bool(probe.get("ok"))
 
 
+def _maybe_rollback_red_probe(
+    backend: Path, backup: Path | None, probe: dict | None,
+) -> str:
+    """终局探针红时用抢先绿灯 backend 盖回。
+
+    health 超时、GET / 非 200、保活壳都不算绿（probe.ok 已是这个口径）。
+    探针未跑（空 dict）不动树。无绿灯备份则只留痕，仍交付（exit 1 不评分）。
+    返回 rolled / green / no-backup / skipped。
+    """
+    if not probe:
+        return "skipped"
+    if probe.get("ok"):
+        return "green"
+    src = backup if backup is not None and (backup / "main.py").is_file() else None
+    if src is None:
+        print(
+            "[delivery-gate] 终局探针红（home 非 200 或 health 超时），"
+            "无绿灯备份可回滚，交付仍落地但不记探针全绿: "
+            f"detail={probe.get('detail')}",
+            flush=True,
+        )
+        return "no-backup"
+    if backend.is_dir():
+        shutil.rmtree(backend)
+    shutil.copytree(src, backend)
+    print(
+        "[delivery-gate] 终局探针红，已回滚到抢先交付的绿灯版本: "
+        f"detail={probe.get('detail')}",
+        flush=True,
+    )
+    return "rolled"
+
+
 def _has_product_code(project_dir) -> bool:
     """盘上是否真写着模块代码（__init__.py 只是包标记，不算交付物）。
 
@@ -823,13 +856,13 @@ def main(argv: list[str] | None = None) -> int:
                         "交付完成（内部验收未通过，已尽力修复——详情见 verify "
                         "报告尾部）: " + report[-200:]
                     )
-        # v53.1 / v56：入口修补可能把 boot 弄坏。终局先导出到 workdir/backend
-        # （runner main.py 只在这里），再对该树重探针；失败则回滚抢先交付。
-        # v55 尸检：探 project/code → 结构性 no-main → 永远跳过终局导出，
-        # 修过的 code/ 进不了评分包。
+        # 决赛 2f0b/8568：抢先导出 health+home 绿，验收修完把 / 打成 500
+        # 或 60s 无 health，终局导出覆盖绿灯树。回滚不限快车道——
+        # 只要抢先探针绿过，终局探针红就盖回那一版。
         _early_backup: Path | None = None
         _backend = Path(workdir) / "backend"
-        if (used_probe_fast and result.project_dir is not None
+        _early_green = _probe_green(early)
+        if (_early_green and result.project_dir is not None
                 and _backend.is_dir() and (_backend / "main.py").is_file()):
             try:
                 _early_backup = Path(tempfile.mkdtemp(
@@ -837,50 +870,32 @@ def main(argv: list[str] | None = None) -> int:
                 shutil.copytree(_backend, _early_backup / "backend")
             except Exception as _bexc:
                 _early_backup = None
-                print(f"[probe-fast] 抢先交付备份失败（终局仍导出）: "
+                print(f"[delivery-gate] 抢先交付备份失败（终局仍导出）: "
                       f"{_bexc!r}"[:160], flush=True)
         # 官方 runner 布局适配（6 平台提交取证：布局违约是主死因——
         # 内部 verify PASS 也因缺 frontend//backend/ 被判模板不完整）。
         # 次序（9/23 交付路径审计取证）：先换入最终态、后报 run_completed
         # ——平台若在完成事件处取件，先报事件交出去的就是验收前的旧代码。
+        _final: dict = {}
         if result.project_dir is not None:
-            _export_official_layout(workdir, result.project_dir,
-                                    requirement=requirement)
-        if used_probe_fast and result.project_dir is not None:
+            _final = _export_official_layout(
+                workdir, result.project_dir, requirement=requirement) or {}
+        if result.project_dir is not None:
             try:
-                from app.platform_export import probe_exported_backend
-                _re = probe_exported_backend(_backend, window_s=45.0)
-                if not _re.get("ok"):
-                    print(
-                        "[probe-fast] 终局重探针未过——"
-                        f"detail={_re.get('detail')}", flush=True)
-                    if (_early_backup is not None
-                            and (_early_backup / "backend" / "main.py"
-                                 ).is_file()):
-                        try:
-                            if _backend.is_dir():
-                                shutil.rmtree(_backend)
-                            shutil.copytree(
-                                _early_backup / "backend", _backend)
-                            print(
-                                "[probe-fast] 已回滚到抢先交付的绿灯版本",
-                                flush=True)
-                            result.deliverable_summary = (
-                                (result.deliverable_summary or "交付完成")
-                                + "（probe-fast：终局重探针未过，已回滚抢先交付）")
-                        except Exception as _rexc:
-                            print(
-                                "[probe-fast] 回滚失败，保留终局导出: "
-                                f"{_rexc!r}"[:160], flush=True)
-                    else:
-                        print(
-                            "[probe-fast] 无可用抢先备份，保留终局导出",
-                            flush=True)
-                else:
-                    print("[probe-fast] 终局重探针 PASS（修补后仍可起服）",
+                _gate = _maybe_rollback_red_probe(
+                    _backend,
+                    (_early_backup / "backend") if _early_backup else None,
+                    _final.get("export_probe") or None,
+                )
+                if _gate == "rolled":
+                    result.deliverable_summary = (
+                        (result.deliverable_summary or "交付完成")
+                        + "（终局探针红，已回滚抢先绿灯交付）")
+                elif _gate == "green" and used_probe_fast:
+                    print("[probe-fast] 终局探针 PASS（修补后仍可起服）",
                           flush=True)
             except Exception as _rexc:
-                print(f"[probe-fast] 终局重探针异常（保留终局导出）: "
+                print(f"[delivery-gate] 回滚异常，保留终局导出: "
                       f"{_rexc!r}"[:160], flush=True)
             finally:
                 if _early_backup is not None:

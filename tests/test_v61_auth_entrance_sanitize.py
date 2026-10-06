@@ -99,6 +99,13 @@ def test_sign_in_link_count_and_collapse_for_official_strict():
     assert count_exact_named_links(html, "Sign in") == 2
     fixed = collapse_exact_named_links(html, "Sign in")
     assert count_exact_named_links(fixed, "Sign in") == 1
+    nested = (
+        '<a href="/login"><span>Sign in</span></a>'
+        '<a href="/login">Sign in</a>'
+    )
+    assert count_exact_named_links(nested, "Sign in") == 2
+    assert count_exact_named_links(
+        collapse_exact_named_links(nested, "Sign in"), "Sign in") == 1
     assert 'aria-label="Auth"' in fixed
     assert 'href="/login">Sign in</a>' in fixed
     # Modules 里第二份 <a> 被删；Create an account 与 button 保留

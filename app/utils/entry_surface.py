@@ -48,6 +48,9 @@ def write_entry_spec(backend: Path, anchors: list[str]) -> None:
     if not anchors or not backend.is_dir():
         return
     payload = {"anchors": anchors[:12]}
+    known = ("Sign in", "Create an account")
+    payload["ctas"] = [c for c in known
+                       if any(c == a or c in a for a in anchors)]
     (backend / "arcbench_entry.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=1),
         encoding="utf-8",

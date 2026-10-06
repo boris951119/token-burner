@@ -108,6 +108,20 @@ class TestSelectListCoverage:
         assert any("departure" in f for f in findings), findings
         assert any("arrival" in f for f in findings), findings
 
+    def test_triple_quoted_select_drift_detected(self, tmp_path):
+        """8568：首页三引号 SELECT created_at，单行正则看不见，冷启动 500。"""
+        _write(tmp_path, "seed_data/seed_data.py",
+               'DDL = """CREATE TABLE worksheets (id INTEGER, name TEXT)"""\n')
+        _write(tmp_path, "webapp/webapp.py",
+               'def _wb_list(conn):\n'
+               '    return conn.execute(\n'
+               '        """\n'
+               '        SELECT id, name, created_at FROM worksheets\n'
+               '        """\n'
+               '    )\n')
+        findings = audit_schema(tmp_path)
+        assert any("created_at" in f and "worksheets" in f for f in findings), findings
+
     def test_select_clean_and_aggregates_skipped(self, tmp_path):
         _write(tmp_path, "seed_data/seed_data.py", SEED)
         _write(tmp_path, "search/search.py",
