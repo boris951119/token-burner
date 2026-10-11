@@ -1,16 +1,14 @@
-"""ArcBench 参赛入口（factory26）——平台 runner 以固定 CLI 启动本文件。
+"""Headless CLI 入口——供自动化流水线 / 外部 runner 以固定参数启动。
 
-契约对齐官方 Blank Template（2026-09-08 从平台任务页下载核对）：
+契约：
 - 位置参数 requirement_path：需求目录（含 requirements.yaml），
-  缺省取环境变量 ARCBENCH_TASK_DIR；
+  缺省取环境变量 ARCBENCH_TASK_DIR（兼容旧集成名）；
 - --output-dir：输出工作区，缺省取 ARCBENCH_OUTPUT_DIR；
 - --type：任务类型（web/cli/android），缺省取 ARCBENCH_TASK_TYPE；
-- 模型环境由 runner 注入：OPENAI_API_KEY / OPENAI_BASE_URL / MODEL
-  （OpenAI 兼容网关，单模型）。
+- 模型环境变量：OPENAI_API_KEY / OPENAI_BASE_URL / MODEL
+  （OpenAI 兼容网关；可与 config.json 多模型编队配合）。
 
-管线全程 headless，进度经 ArcBenchBridge 上报平台（本地无 SDK 时
-自动 no-op，桥接层已随 requirements.txt 的 ./arcbench-agent-runtime
-路径依赖安装）。
+管线全程 headless；可选通过 bridge 上报进度事件（本地无 SDK 时 no-op）。
 """
 
 from __future__ import annotations
@@ -353,8 +351,7 @@ def _apply_runner_model(settings) -> None:
         settings.models = [litellm_name]
         # TeamBuilder 互异校验放行（三角色同模）；预设列表校验仍生效
         settings.single_model_mode = True
-    # 官方中转站编制补全：仅当注入端点确为 arc-bench 中转站且编制
-    # 不足三模型（config.json 未生效等）时启用
+    # 已知 OpenAI 兼容中转：单模型注入且编制不足三模型时自动补全备胎
     base = (os.environ.get("OPENAI_BASE_URL")
             or os.environ.get("OPENAI_API_BASE") or "")
     if ("arc-bench.com" in base and settings.single_model_mode
@@ -369,13 +366,10 @@ def _apply_runner_model(settings) -> None:
 
 
 def _ring_requirements_dir(req_path: Path) -> Path | None:
-    """编译自评分环的题面来源目录（零 LLM 判分层读的就是这一跳）。
+    """编译自评分环的需求目录（零 LLM 判分层读取）。
 
-    取证（批次#32 同族）：入口只认目录，官方侧若以单文件形态下发题面，
-    requirements_dir 传 None → 整段编译判分静默缺席，本地全绿而判分红叶
-    少一层。文件输入取其父目录即可——编译器按需求树形状自筛，不会被
-    目录里的其它 YAML 带偏。返回绝对路径：验收段会起服/换工作目录，
-    相对题面路径在那之后就不是我们读到的那一份了。
+    入口只认目录；若以单文件形态传入，取父目录。返回绝对路径，避免
+    验收段起服/切换工作目录后相对路径失效。
     """
     if req_path.is_dir():
         return req_path.resolve()
@@ -386,7 +380,7 @@ def _ring_requirements_dir(req_path: Path) -> Path | None:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="token-burner-arcbench",
+        prog="token-burner",
         description="token-burner：requirements.yaml → 可运行 Web 应用",
     )
     parser.add_argument(

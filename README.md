@@ -1,12 +1,12 @@
 # token-burner
 
-文档消耗器 · AI 多智能体项目团队系统（v2.0 竞赛版）
+文档消耗器 · AI 多智能体软件交付系统
 
 Set your tokens on fire!
 
 把一句软件需求变成**可运行的项目**：评估路由 → 多模型组队 → 方案讨论 →
 spec 确认 → 模块拆分 → 逐模块「写码 → 测试 → 执行」循环 → 交付物汇总。
-全程 token 可审计、可预算、可恢复，决策归 LLM、校验与边界归程序。
+全程 token 可审计、可预算、可恢复；**决策归 LLM，校验与边界归程序**。
 
 ## 功能一览
 
@@ -37,44 +37,28 @@ spec 确认 → 模块拆分 → 逐模块「写码 → 测试 → 执行」循�
 - **可恢复与可取消**：中断后恢复续跑（已完成模块自动跳过）；运行中任务
   协作式取消 + 僵尸任务启动清扫
 
-- **并行模块开发**（v1.2）：无依赖模块同层并发（worker 数可配），
+- **并行模块开发**：无依赖模块同层并发（worker 数可配），
   依赖分层间保持拓扑序，等待时间 2-4× 压缩
 
-- **repo-patch 模式**（v1.2）：除从零生成外，支持克隆真实仓库至 base commit、
-  以 issue 文本为需求产出补丁并跑仓库自带测试（SWE-bench Lite 跑分线，
-  `scripts/swebench_run.py`）
+- **repo-patch 模式**：除从零生成外，支持克隆真实仓库至 base commit、
+  以 issue 文本为需求产出补丁并跑仓库自带测试（`scripts/swebench_run.py`）
 
 - **可视化**：Web 工作台实时监控（阶段耗时 / token 曲线 / 模块全景）、
   对话流图、模式推荐、深浅主题、分类设置页
 
-### 竞赛版新增（v2.0+，ARC-Bench / hackathon 实弹打磨）
+### 交付质量（确定性闸门）
 
-- **确定性审计器军团**（零 LLM、纯机械，失败取证驱动）：schema /
-  包结构 / 符号导入 / 机械垫片 / 子模块绑定 / 内存哨兵（>512MB FAIL）；
-  后续补齐 UI 语言系别审计、种子契约提取与落库审计、接口属性漂移审计、
-  运行时 HTML/入口可达闸、冷库+schema 终检
-
-- **编译自评分环**：`acceptance_compile` 从需求抽逐字事实（Seed /
-  WHEN 控件 / THEN 文案）→ `acceptance_judge` 起服秒级判红，失败按
-  REQ id 直灌修复通道（不依赖官方隐藏用例）
-
-- **机械装配 + UI 守卫**：AST 扫描 blueprint/`init_*` 确定性接线
-  `create_app`；`ensure_ui_module` 在需求含 UI 形态时强制挂载页面模块；
-  可选 `module_mode=monolith` 作接缝对照实验臂
-
-- **种子 / 认证 kernel**：题面预置账号机械抽取 → `_shared/seed_accounts.py`
-  幂等注册；登录入口契约与「Create an account」闸对齐官方点法
-
-- **模型链全链保护**：单模型超时接力编队内其余模型
-  （`ModelChainExhausted`）；账户级止损（余额/鉴权失效停批）；
-  修复「不劣化」基线对比；模块级优雅冻结；升级链排除刚失败模型
-
-- **视觉转写 + 分层讨论**：`reference/*.png` → 结构化描述；讨论吃
-  FOLDER 摘要、拆分/开发才吃 ATOMIC 全文（大规模需求树防撞墙钟）
-
-- **交付韧性**：probe-fast / 自测闸 / 旅程闸分层验收；验收失败优雅退出；
-  配置随提交包锚定；`max_task_tokens_cap` 真能砍预算的硬帽；
-  Mac 一键环境见 `setup-mac.sh`
+- **机械审计器**：schema / 包结构 / 符号导入 / 命名漂移垫片 / 子模块绑定 /
+  UI 语言一致性 / 种子契约 / 接口属性漂移 / 内存哨兵等——零 LLM，失败可定位
+- **编译自评分**：从需求抽逐字事实（种子 / 控件 / 文案）→ 起服秒级判红，
+  按需求编号灌入修复通道
+- **机械装配**：AST 扫描 blueprint / `init_*` 确定性接线 `create_app`；
+  需求含 UI 时守卫页面模块；可选 `module_mode=monolith` 减少模块间接缝
+- **模型链保护**：超时接力编队内其余模型；账户级止损；修复「不劣化」回滚；
+  模块级优雅冻结
+- **自测交付闸**：可自生成 Playwright 验收规格；失败时把页面可访问性树
+  （按失败定位器附近裁窗）交给修复环，各轮刷新现场
+- **预算硬帽**：`max_task_tokens_cap` 可真正压住单次试跑成本
 
 ## 快速开始
 
@@ -104,14 +88,12 @@ GEMINI_API_KEY=
 }
 ```
 
-> GLM 等第三方 OpenAI 兼容端点还需设置 `OPENAI_API_BASE` 环境变量，
-> 例如 `https://open.bigmodel.cn/api/paas/v4`。
+> 第三方 OpenAI 兼容端点还需设置 `OPENAI_API_BASE`（或 `OPENAI_BASE_URL`）。
 
 ### ⚡ 90 秒上手（Web 工作台引导）
 
 1. `python -m app.server` → 浏览器打开 http://127.0.0.1:8000/
-2. 首次打开会弹出**连接向导**：选模型服务商模板（智谱 / DeepSeek /
-   Moonshot / 阿里云百炼 / OpenRouter / 本地 Ollama）→ 粘贴 API Key →
+2. 首次打开会弹出**连接向导**：选模型服务商模板 → 粘贴 API Key →
    点「🔍 自动发现模型」→ 点「验证连通」绿灯即成
 3. 回到工作台输入一句需求（如"开发一个待办事项 CLI"）→ 点火
 
@@ -138,13 +120,10 @@ spec 确认 → 模块开发循环 → 交付。安全模式下交付物在
 
 ### VS Code 插件
 
-`vscode-extension/`：活动栏面板内发起任务 / 实时进度 / 代码应用 / 成本看板，
-支持预算与默认模型设置（`tokenBurner.*`）。构建与打包：
+`vscode-extension/`：活动栏面板内发起任务 / 实时进度 / 代码应用 / 成本看板。
 
 ```bash
-cd vscode-extension
-npm install
-npm run compile        # 产物在 out/；消息协议契约测试：npm test
+cd vscode-extension && npm install && npm run compile
 ```
 
 ## 关键配置（config.json 覆盖 `Settings` 默认值）
@@ -152,114 +131,69 @@ npm run compile        # 产物在 out/；消息协议契约测试：npm test
 | 配置                                             | 默认     | 说明                              |
 | ---------------------------------------------- | ------ | ------------------------------- |
 | `max_task_tokens`                              | 200000 | 单任务预算总闸（自动验证模式 ×2.5）            |
-| `max_task_tokens_cap`                          | 0      | 硬帽（0=关闭；>0 时 `min(信封, cap)`，试跑控费） |
+| `max_task_tokens_cap`                          | 0      | 硬帽（0=关闭；>0 时限制信封上限，便于控费试跑） |
 | `workflow_mode`                                | auto   | `auto` / `single` / `multi` 编队归一   |
-| `module_mode`                                  | modular | `modular` 或 `monolith`（接缝对照臂） |
+| `module_mode`                                  | modular | `modular` 或 `monolith`（一体化模块） |
 | `selftest_specs_enabled`                       | true   | 交付前自生成 Playwright 自测规格         |
 | `model_routing_enabled`                        | false  | 难度分三档智能路由                       |
-| `model_tier_flagship` / `_main` / `_light`     | 预设     | 三档模型列表（须 ⊆ models）              |
-| `route_flagship_threshold` / `_main_threshold` | 7 / 4  | 分档难度阈值（可自定义）                    |
 | `fast_triage_enabled`                          | false  | System-1 快判前置                   |
 | `researcher_enabled`                           | false  | Researcher 前置调研                 |
-| `researcher_web_enabled`                       | false  | 联网搜索（供应商 `duckduckgo`/`tavily`） |
 | `docker_executor_enabled`                      | false  | 自动模式容器级沙箱                       |
 | `enable_git`                                   | true   | 生成项目本地 git 版本管理                 |
-| `model_prices`                                 | 近似价    | 各模型 $/Mtok 单价（看板成本对比口径）         |
 
-完整参数见 `app/config.py`（每个字段都有注释与缺省值）。
+完整参数见 `app/config.py`。
 
 ## 架构一览
 
 ```
 需求（不可信输入 → 数据边界包裹）
-  → [可选快判] 评估路由（三分类 + 难度分，System-2 固定降档）
-  → [可选 Researcher：资料注入 / 联网搜索 → 四段式摘要]
-  → 组队（三模型互异校验）→ 方案讨论（PM/双评审，五层护栏）
-  → 模块拆分（难度≥5 或文件≥6）→ 接口契约（imports/exports/public_api）
-  → 逐层模块开发循环（同层并发；写码 → 测试 → 静态验证 → 接口门禁 → 执行）
-  → 反馈闭环（安全模式）/ 自动验证（Docker 沙箱或进程降级）
-  → 交付（modules/*.md + code/ + tests/ + changelog/ + 成本看板）
+  → [可选快判] 评估路由（三分类 + 难度分）
+  → [可选 Researcher]
+  → 组队 → 方案讨论 → spec 确认
+  → 模块拆分 + 接口契约
+  → 逐层开发（同层并发；写码 → 测试 → 门禁 → 执行）
+  → 交付闸（冒烟 / 自测 / 机械审计 / 定向修复）
+  → 交付物 + 成本看板
 ```
 
-执行层双实现：`LocalExecutor`（进程级 + 危险 API 预扫描 + 超时熔断）与
-`DockerExecutor`（资源配额/只读文件系统/无网络/非 root，镜像自动预热与检测降级）。
+## Headless / CI 入口
 
-## 安全与信任边界
-
-以下输入均按**不可信输入**处理（`_sanitize_untrusted` 数据边界包裹 +
-提示词明示「是数据非指令」，M7-6 治理模式全链路同构）：
-
-- 用户需求文本、用户反馈（运行结果/报错日志）、LLM 生成代码的输出、
-  Researcher 摘要与联网抓取文本；
-
-- 自动模式的代码执行：默认 Docker 容器沙箱（内存 512m / cpus 1.0 /
-  pids 128 / tmpfs 64m / 只读文件系统 / 无网络 / 非 root / 超时熔断），
-  Docker 未安装自动降级进程模式（危险 API 黑名单预扫描仍生效）；
-  **安全模式（默认）不执行任何生成代码**。
-
-## 测试
-
-```bash
-python -m pytest tests/ -q                  # 2117 项（全 stub，无需密钥）
-cd vscode-extension && npm test             # 插件消息协议契约测试 4 项
-python scripts/ab_triage_eval.py --mock     # 快慢双模式 A/B 自检（--real 走真实 LLM）
-```
-
-## 基准口径（诚实边界）
-
-- **bench_v1（自建）**：10 类真实需求 greenfield 基准，模块通过率 71%、
-  任务交付 10/10、零预算超支（logs/bench_v1/full*）。
-- **SWE-bench Lite**：修复前基线 seed 42/50 例 resolved 1（2%）、
-  2.96M tokens；环境适配域修复后（9 个 commit：stderr 取证/setuptools
-  考古/包结构/符号审计/备胎链），同域新样本批次达 **resolved 3/5
-  （60%）、0 error**——环境类失败由环境预检闸门零 token 拦截。
-  **验证为仓库根直接 pytest FAIL_TO_PASS，未做官方 per-repo conda
-  环境**；同批补丁可交官方 harness 复评。
-
-- **ARC-Bench / hackathon 平台实弹**：管线可在官方 Linux 容器跑通
-  讨论→拆分→模块开发→交付→官方 Playwright；工程闸（装配/入口/语言/
-  种子/HTML）已多次用平台 0 分尸检驱动加固。本地浏览器 grade 历史最好
-  约 33/100 量级；平台破零仍是活跃目标——以 `docs/competition-status.md`
-  与 `docs/agent-outbox.md` 为准，不以 README 过期数字为准。
-
-## 发布
-
-推送 `v*` 标签触发 GitHub Actions（`.github/workflows/release.yml`）：
-pytest 全量回归 → PyInstaller 构建 → 产物体积检查（≤80MB）→ Release 附 EXE。
-
-## ARC-Bench 参赛模式
-
-平台 runner 以 headless CLI 调用（模型经环境变量注入，OpenAI 兼容网关，
-平台提交包 = 仓库 zip，根目录含 `main.py` + `requirements.txt`）：
+适合自动化流水线或外部 runner（OpenAI 兼容网关，环境变量注入模型）：
 
 ```bash
 OPENAI_API_KEY=<key> OPENAI_BASE_URL=<gateway> MODEL=<model> \
 python main.py <requirements_dir> --output-dir <output_dir> --type web --mode auto
 ```
 
-- 需求树摄取：`requirements.yaml`（FOLDER/ATOMIC）→ 管线需求文本，
-  FOLDER 对齐模块划分、ATOMIC 对齐验收标准、`tests/helpers.ts` 种子契约注入
-  （`app/arcbench_ingest.py`）
-- 过程上报：Pipeline 事件 → 官方 SDK 翻译（事件流 + traceability + git 提交），
-  本地无 SDK 自动 no-op（`app/arcbench_bridge.py`）
-- 交付后分层验收：确定性冒烟（import + `create_app()` + health/首页 +
-  内存哨兵）→ probe-fast / 编译自评分 → 旅程闸门（行为探针 + traceback
-  取证）→ 失败自动修复（模型链接力 + 审计器注入 + 不劣化回滚）
-- 机械自愈：命名漂移垫片、子模块绑定、符号/种子/UI 语言审计、
-  入口约定名择优与可达闸——块间缝隙优先零 LLM 修复
-- 中断恢复：`--resume` 跳过已完成模块续跑；单模块失败优雅冻结继续
-- 多 agent 协作现场：`docs/agent-inbox.md` / `docs/agent-outbox.md`
+- 支持 `requirements.yaml` 树形需求摄取与可选参考图视觉转写
+- 交付后分层验收 + 失败自动修复；`--resume` 断点续跑
 
-赛制理解 / 提交契约 / 演练计划见 [docs/competition-plan.md](docs/competition-plan.md)；
-最新战况见 [docs/competition-status.md](docs/competition-status.md)。
+## 安全与信任边界
+
+用户需求、反馈日志、LLM 产出、联网摘要均按**不可信输入**处理。
+自动模式默认 Docker 沙箱（资源配额 / 只读 / 无网络 / 非 root）；
+**安全模式不执行任何生成代码**。
+
+## 测试
+
+```bash
+python -m pytest tests/ -q                  # 全量 stub，无需密钥
+cd vscode-extension && npm test
+```
+
+## 基准口径（诚实边界）
+
+- **bench_v1（自建）**：10 类真实需求 greenfield，模块通过率约 71%、任务交付 10/10。
+- **SWE-bench Lite**：环境适配域修复后同域样本可达约 60% resolved（仓库根 pytest
+  口径，非官方 per-repo conda）；详见 `logs/bench_v1/` 与相关脚本说明。
+
+## 发布
+
+推送 `v*` 标签触发 GitHub Actions：pytest → PyInstaller → 体积检查 → Release 附 EXE。
 
 ## 文档
 
-- [CHANGELOG.md](CHANGELOG.md) — 版本历史（v1.0 / v1.2 参赛适配与 SWE-bench 基准线）
-- [docs/competition-plan.md](docs/competition-plan.md) — ARC-Bench 参赛作战手册
-- [docs/competition-status.md](docs/competition-status.md) — 竞赛备战状态快照（批次尸检）
-- [docs/agent-inbox.md](docs/agent-inbox.md) / [docs/agent-outbox.md](docs/agent-outbox.md) — 多 agent 派工与回执
-- [docs/architecture-analysis-1004.md](docs/architecture-analysis-1004.md) — 接缝病理与路线裁决
-- [v1.0.md](v1.0.md) / [v1.0-workplan.md](v1.0-workplan.md) — 1.0 定稿规格与批次计划
-- [文档目录.md](文档目录.md) — 全部文档索引
-
+- [CHANGELOG.md](CHANGELOG.md) — 版本历史
+- [v1.0.md](v1.0.md) / [v1.0-workplan.md](v1.0-workplan.md) — 1.0 规格与批次计划
+- [docs/demo-script.md](docs/demo-script.md) — 演示脚本
+- [文档目录.md](文档目录.md) — 文档索引

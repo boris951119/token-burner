@@ -1,3 +1,0 @@
-passed=30 failed=2
-Assign default label when creating note
-Pin note when creating it

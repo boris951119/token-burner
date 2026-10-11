@@ -144,26 +144,16 @@ def _run_grade(project_dir: Path, task: str) -> tuple[int, int, list[str]]:
 
 def _failure_contexts(project_dir: Path, failures: list[str],
                       limit: int = 3) -> list[str]:
-    """从 test-results 抓前 N 个失败的页面真实快照。"""
-    out: list[str] = []
-    results = GRADE_DIR / "test-results"
-    if not results.is_dir():
-        return out
-    import time
+    """从 test-results 抓前 N 个失败的页面真实快照（按失败定位器裁窗）。"""
+    del project_dir, failures  # 接口兼容；现场以 results 目录为准
+    from app.utils.failure_context import collect_failure_snapshots
 
-    cutoff = time.time() - 6 * 3600
-    for ctx in sorted(results.glob("*/error-context.md"),
-                      key=lambda p: p.stat().st_mtime, reverse=True):
-        if ctx.stat().st_mtime < cutoff or len(out) >= limit:
-            continue
-        try:
-            text = ctx.read_text(encoding="utf-8", errors="replace")
-            i = text.find("# Page snapshot")
-            if i > -1:
-                out.append(text[i:i + 900])
-        except Exception:
-            continue
-    return out
+    return collect_failure_snapshots(
+        GRADE_DIR / "test-results",
+        limit=limit,
+        window=4000,
+        max_age_seconds=6 * 3600,
+    )
 
 
 def _req_fragments(failures: list[str], limit: int = 6) -> list[str]:

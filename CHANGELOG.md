@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.2 · factory26 参赛强化 r4-r7c（2026-09-12）：交付验收 v2 + 修复链路复活 + 多模型组队
+## v1.2 · 交付验收 v2 + 修复链路 + 多模型组队（2026-09-12）
 
 > 三轮实弹演练（含用户手动 --resume 取证）驱动的成批强化。全量回归
   **1149 passed / 0 failed**。
@@ -13,7 +13,7 @@
   create_app 阶段崩溃的坏交付。
 - **修复链路复活（r5 实弹 P0）**：RepoFixer 文档承诺「无 .git 跳过
   diff」但实现硬拒绝，而平台入口 enable_git=False → 交付修复安全网
-  在参赛路径恒为 0 轮死路。已修；修后同一坏交付 2 轮修复通过。
+  在 headless 路径恒为 0 轮死路。已修；修后同一坏交付 2 轮修复通过。
 - **交付前 pycache 清除**：等长同秒覆写骗过 pyc 双重校验（mtime 秒级
   + 源大小），验证跑到陈旧模块——29 字符 return↔raise 实证。
 - **夹具链路加固**：helpers.ts 三布局探测 + 缺失显式告警进诊断事件；
@@ -41,10 +41,9 @@
 - 测试 **1120 → 1149 passed / 0 failed**（旅程验收 11、夹具 6、入口
   8、心跳 2、恢复 4、韧性 +6 等新增 29 项）。
 
-## v1.2 · factory26 参赛适配（2026-09-11）：平台单模型模式 + E2E 演练 P0 修复
+## v1.2 · Headless 单模型模式 + E2E 演练 P0 修复（2026-09-11）
 
-> ARC-Bench（arc-bench.com）参赛强化。真实网关（api.arc-bench.com/v1，
-> glm-5.3）端到端演练两连炸取证修复；参赛完整性补提交。
+> Headless / OpenAI 兼容网关端到端演练取证修复；SDK 与入口契约补齐。
 
 - **平台单模型模式**：runner 按 `MODEL` 环境变量单模型下发，而
   `Settings._validate` 禁重复模型（[m,m,m] 在网关预检
@@ -62,7 +61,7 @@
   兜底，事件流不落错目录。
 - **门禁指引**：extra 处置指引明示「测试已引用的符号禁止私有化」
   （演练取证：私有化 → ImportError 与门禁震荡，db_layer 连修 2 轮）。
-- **参赛完整性**：`arcbench-agent-runtime` SDK（requirements.txt 路径
+- **集成完整性**：`arcbench-agent-runtime` SDK（requirements.txt 路径
   依赖）与 `arcbench_ingest`/`arcbench_smoke` 补提交入库——按此前
   状态提交会导致平台侧依赖解析直接失败；构建副产物入 gitignore。
 - **网关实measurement**：glm-5.3 讨论级调用（≈4k in / 8k max out）

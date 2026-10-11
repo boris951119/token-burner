@@ -1093,30 +1093,36 @@ def selftest_gate(project_dir: Path, requirement: str, settings,
     if not failed:
         _beat(project_dir, "自测闸-通过")
         return True, "\n".join(notes)
-    # 定向修复：失败清单 + 页面真实快照（error-context 含 Playwright
-    # 抓的 DOM 形态——修复 LLM 看得见"实际长什么样"才能对齐定位器）
-    snapshots: list[str] = []
-    results_dir = project_dir / "selftest-results"
-    for ctx in sorted(results_dir.glob("*/error-context.md"))[:3]:
-        try:
-            text = ctx.read_text(encoding="utf-8", errors="replace")
-            i = text.find("# Page snapshot")
-            if i > -1:
-                snapshots.append(text[i:i + 900])
-        except Exception:
-            continue
-    issue = (
-        "自生成验收测试失败（交付闸，失败即用户需求未满足）：\n"
-        + "\n".join(f"- {f}" for f in _rotate_fail(failures))
-        + "\n\n测试输出尾部：\n" + tail[-1500:]
-        + "\n\n页面真实快照（前 3 个失败用例，Playwright 实测 DOM）：\n"
-        + "\n---\n".join(snapshots)
-        + "\n\n修复要求：让失败场景按需求语义真实通过——补交互行为/"
+    # 定向修复：失败清单 + 页面真实快照（按失败定位器附近裁窗，各轮刷新）
+    from app.utils.failure_context import (
+        build_repair_issue,
+        collect_failure_snapshots,
+    )
+
+    _REPAIR_GUIDANCE = (
+        "修复要求：让失败场景按需求语义真实通过——补交互行为/"
         "修正导航与表单/对齐可见文案；需求原文引号内的逐字文案（按钮/"
         "占位符/标签/种子名等）必须出现在对应控件上（词面逐字，但大小写"
         "不必强求：评测按大小写不敏感匹配，为凑大小写改文案是白改）；"
         "禁止修改 tests/selftest/ 与 tests/ 目录；禁止删路由；"
         "最小化修改。"
+    )
+    results_dir = project_dir / "selftest-results"
+
+    def _issue_for(fails: list[str], out_tail: str, headline: str) -> str:
+        snaps = collect_failure_snapshots(results_dir, limit=3, window=4000)
+        return build_repair_issue(
+            headline=headline,
+            failures=fails,
+            tail=out_tail[-1500:],
+            snapshots=snaps,
+            guidance=_REPAIR_GUIDANCE,
+            fail_fmt=_rotate_fail,
+        )
+
+    issue = _issue_for(
+        failures, tail,
+        "自生成验收测试失败（交付闸，失败即用户需求未满足）：",
     )
     for rnd in range(1, max_rounds + 1):
         _beat(project_dir, f"自测闸-修复R{rnd}")
@@ -1152,9 +1158,10 @@ def selftest_gate(project_dir: Path, requirement: str, settings,
         if not failed:
             _beat(project_dir, "自测闸-通过")
             return True, "\n".join(notes)
-        issue = ("自生成验收测试仍有失败：\n"
-                 + "\n".join(f"- {f}" for f in _rotate_fail(failures))
-                 + "\n\n输出尾部：\n" + tail[-1200:])
+        issue = _issue_for(
+            failures, tail,
+            "自生成验收测试仍有失败：",
+        )
     _beat(project_dir, "自测闸-尽力交付")
     return False, "\n".join(notes)
 
